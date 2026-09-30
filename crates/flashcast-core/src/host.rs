@@ -231,9 +231,23 @@ impl Host {
         target: &Path,
     ) -> Result<CloneOutcome, WorkspaceError> {
         let control = CloneControl::new();
-        *lock(&self.clone) = control.clone();
         control.start();
-        self.clone_workspace_with(remote_url, target, &control)
+        self.clone_workspace_with_control(remote_url, target, &control)
+    }
+
+    /// 用调用方提供的进度 / 取消信号执行克隆。
+    ///
+    /// 外壳把同一个信号交给后台线程（执行克隆）与 UI（轮询进度、请求取消），
+    /// 调用方也可以在开始前先请求取消。`control` 会登记为「最近一次克隆」，
+    /// 之后 [`Host::clone_progress`] 与 [`Host::cancel_clone`] 都作用于它。
+    pub fn clone_workspace_with_control(
+        &self,
+        remote_url: &str,
+        target: &Path,
+        control: &CloneControl,
+    ) -> Result<CloneOutcome, WorkspaceError> {
+        *lock(&self.clone) = control.clone();
+        self.clone_workspace_with(remote_url, target, control)
     }
 
     fn clone_workspace_with(
@@ -464,6 +478,8 @@ impl Host {
                 let applied = inner.reloads;
                 drop(inner);
                 let _ = applied;
+                // 外部修改的插件启停也要真正生效（已有功能读取其中内容）。
+                self.apply_plugin_choices(&settings.disabled_plugins);
                 WorkspaceReload {
                     path: changed.to_path_buf(),
                     applied: true,
@@ -519,12 +535,28 @@ impl Host {
             inner.workspace = Some(workspace.clone());
             inner.workspace_error = None;
         }
+        // 工作区记录的插件启停立刻生效：克隆 / 切换后已有功能随即按新选择工作。
+        self.apply_plugin_choices(&self.settings().disabled_plugins);
         *lock(&self.watch) = Some(watcher);
         // 记住本机路径，重启后恢复。这是设备本地数据，不写进工作区。
         if let Err(error) = self.device.set_workspace_path(Some(workspace.root())) {
             lock(&self.inner).workspace_error = Some(error.to_string());
         }
         Ok(self.workspace_status())
+    }
+
+    /// 把工作区记录的插件启停选择应用到插件注册表。
+    ///
+    /// `disabledPlugins` 是工作区里的可迁移偏好（ticket 05 的 `settings.toml`），
+    /// 这里是「已有功能读取其中内容」的落点；本机没有对应实现的 id 由
+    /// [`Host::unavailable_plugins`] 如实报告，不会被静默当成已恢复。
+    fn apply_plugin_choices(&self, disabled: &[String]) {
+        for (manifest, enabled) in self.deps.plugins.manifests() {
+            let should_enable = !disabled.iter().any(|id| id == &manifest.id);
+            if enabled != should_enable {
+                self.deps.plugins.set_enabled(&manifest.id, should_enable);
+            }
+        }
     }
 
     /// 启动时恢复上次使用的配置工作区。

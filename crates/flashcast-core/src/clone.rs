@@ -17,7 +17,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -79,6 +78,8 @@ pub struct CloneProgress {
     pub checkout_path: Option<String>,
     /// 已检出文件数。
     pub checkout_completed: usize,
+    /// 已「计划通知」的文件数。libgit2 在改动磁盘前先跑一轮通知，取消在这一轮里生效。
+    pub checkout_notified: usize,
     /// 需要检出的文件总数。
     pub checkout_total: usize,
     /// 回调触发次数。为 0 说明进度不是来自真实回调。
@@ -98,6 +99,7 @@ impl Default for CloneProgress {
             checkout_path: None,
             checkout_completed: 0,
             checkout_total: 0,
+            checkout_notified: 0,
             updates: 0,
             message: None,
         }
@@ -404,16 +406,19 @@ pub fn clone_repository(
 ) -> Result<ClonedTarget, WorkspaceError> {
     let target = target.to_path_buf();
     if target.exists() && !target.is_dir() {
-        return Err(WorkspaceError::NotADirectory(target));
+        return Err(failed(control, WorkspaceError::NotADirectory(target)));
     }
     if target.is_dir() {
         let mut entries = std::fs::read_dir(&target)?;
         if entries.next().is_some() {
-            return Err(WorkspaceError::CloneTargetNotEmpty(target));
+            return Err(failed(
+                control,
+                WorkspaceError::CloneTargetNotEmpty(target),
+            ));
         }
     }
     let created = !target.exists();
-    std::fs::create_dir_all(&target)?;
+    std::fs::create_dir_all(&target).map_err(|error| failed(control, WorkspaceError::from(error)))?;
 
     let result = run_clone(url, &target, control, provider);
     match result {
@@ -432,6 +437,26 @@ pub fn clone_repository(
     }
 }
 
+/// 已取消：记录阶段与中文说明，回滚由 [`clone_repository`] 负责。
+fn cancelled(control: &CloneControl) -> WorkspaceError {
+    control.finish(
+        ClonePhase::Cancelled,
+        Some("克隆已取消，未留下任何目录".to_string()),
+    );
+    WorkspaceError::CloneCancelled
+}
+
+/// 记录失败阶段（取消时不覆盖「已取消」），并把中文原因脱敏后交给 UI。
+fn failed(control: &CloneControl, error: WorkspaceError) -> WorkspaceError {
+    if !control.is_cancelled() {
+        control.finish(
+            ClonePhase::Failed,
+            Some(redact(&error.to_string())),
+        );
+    }
+    error
+}
+
 /// 真正的 `git2` 克隆调用。所有错误都已脱敏并附上中文指引。
 fn run_clone(
     url: &str,
@@ -440,8 +465,7 @@ fn run_clone(
     provider: &CredentialProvider,
 ) -> Result<(), WorkspaceError> {
     if control.is_cancelled() {
-        control.finish(ClonePhase::Cancelled, Some("克隆已取消".to_string()));
-        return Err(WorkspaceError::CloneCancelled);
+        return Err(cancelled(control));
     }
 
     let secrets: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -505,6 +529,19 @@ fn run_clone(
             });
         }
     });
+    // 取消：git2 0.21 的 `CheckoutBuilder::progress` 不返回是否继续（类型是
+    // `FnMut(Option<&Path>, usize, usize)`），能中断检出的钩子是 `notify`——
+    // 它在改动磁盘文件**之前**调用，返回 false 即取消。实测 libgit2 先跑完整一轮
+    // 通知（plan）再逐个写文件，因此取消真正生效的窗口是这一轮通知，
+    // `checkout_notified` 记录它已经通知到第几个文件。
+    checkout.notify_on(git2::CheckoutNotificationType::all());
+    checkout.notify({
+        let control = control.clone();
+        move |_kind, _path, _baseline, _target, _workdir| {
+            control.update(|progress| progress.checkout_notified += 1);
+            !control.is_cancelled()
+        }
+    });
 
     let mut builder = git2::build::RepoBuilder::new();
     builder.fetch_options(fetch).with_checkout(checkout);
@@ -512,8 +549,34 @@ fn run_clone(
 
     match cloned {
         Ok(_repository) => {
-            control.finish(ClonePhase::Done, Some("克隆完成".to_string()));
-            Ok(())
+            // 实测陷阱：检出被 `notify` 取消时，libgit2/git2 仍可能返回「成功」并
+            // 留下一个**空目录**。因此克隆结果必须自己校验，不能相信返回值。
+            if control.is_cancelled() {
+                return Err(cancelled(control));
+            }
+            match git2::Repository::open(target) {
+                Ok(repo)
+                    if repo
+                        .remotes()
+                        .map(|remotes| !remotes.is_empty())
+                        .unwrap_or(false) =>
+                {
+                    control.finish(ClonePhase::Done, Some("克隆完成".to_string()));
+                    Ok(())
+                }
+                Ok(_) => Err(failed(
+                    control,
+                    WorkspaceError::Clone(
+                        "克隆结果不完整：目标目录里的仓库没有远端记录".to_string(),
+                    ),
+                )),
+                Err(_) => Err(failed(
+                    control,
+                    WorkspaceError::Clone(
+                        "克隆结果不完整：目标目录里没有可用的 Git 仓库".to_string(),
+                    ),
+                )),
+            }
         }
         Err(error) => {
             let error = clone_error(&error, control, &lock(&secrets));
@@ -722,20 +785,36 @@ fn strip_url_userinfo(input: &str) -> String {
 
 /// 抹掉常见令牌形状（GitHub / GitLab）与 `key=value` 形式的秘密值。
 fn redact_token_shapes(input: &str) -> String {
-    let mut out = redact_key_values(input);
-    for prefix in ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "glpat-"] {
-        let mut search_from = 0usize;
-        while let Some(found) = out[search_from..].find(prefix) {
-            let start = search_from + found;
-            let end = out[start..]
-                .find(|character: char| !(character.is_ascii_alphanumeric() || "_-".contains(character)))
-                .map(|offset| start + offset)
-                .unwrap_or(out.len());
-            if end - start >= 20 {
-                out.replace_range(start..end, "***");
-                search_from = start + 3;
-            } else {
-                search_from = end;
+    let lowered = redact_key_values(input);
+    const PREFIXES: [&str; 7] = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "glpat-"];
+    let bytes = lowered.as_bytes();
+    let mut out = String::with_capacity(lowered.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let matched = PREFIXES
+            .iter()
+            .find(|prefix| lowered[index..].starts_with(**prefix));
+        match matched {
+            Some(prefix) => {
+                let start = index;
+                let mut end = start + prefix.len();
+                while end < bytes.len()
+                    && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] == b'-')
+                {
+                    end += 1;
+                }
+                if end - start >= 20 {
+                    out.push_str("***");
+                } else {
+                    out.push_str(&lowered[start..end]);
+                }
+                index = end;
+            }
+            None => {
+                // 按字符边界复制，避免把多字节字符拆开。
+                let character = lowered[index..].chars().next().unwrap_or('\u{fffd}');
+                out.push(character);
+                index += character.len_utf8();
             }
         }
     }
@@ -755,48 +834,50 @@ fn redact_key_values(input: &str) -> String {
         "apikey",
         "api_key",
     ];
-    let mut out = input.to_string();
-    let lowered = out.to_ascii_lowercase();
-    let bytes = lowered.as_bytes();
+    let lowered = input.to_ascii_lowercase();
+    let bytes = input.as_bytes();
+    let lowered_bytes = lowered.as_bytes();
+    let mut out = String::with_capacity(input.len());
     let mut index = 0usize;
     while index < bytes.len() {
-        let mut matched: Option<(usize, &str)> = None;
-        for key in KEYS {
-            if lowered[index..].starts_with(key) {
-                matched = Some((key.len(), key));
-                break;
-            }
-        }
-        let Some((key_len, _)) = matched else {
-            index += 1;
+        let matched = KEYS.iter().find(|key| {
+            lowered[index..].starts_with(**key)
+                && (index == 0
+                    || !(lowered_bytes[index - 1].is_ascii_alphanumeric()
+                        || lowered_bytes[index - 1] == b'_'))
+        });
+        let Some(key) = matched else {
+            let character = input[index..].chars().next().unwrap_or('\u{fffd}');
+            out.push(character);
+            index += character.len_utf8();
             continue;
         };
-        let mut cursor = index + key_len;
-        // 允许 `api key`、`api_key` 之后跟分隔符与空白。
-        while cursor < bytes.len() && (bytes[cursor] as char).is_ascii_whitespace() {
+        let mut cursor = index + key.len();
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
             cursor += 1;
         }
-        if cursor >= bytes.len() || !matches!(bytes[cursor] as char, '=' | ':') {
-            index += key_len;
+        if cursor >= bytes.len() || !matches!(bytes[cursor], b'=' | b':') {
+            out.push_str(&input[index..cursor.min(bytes.len())]);
+            index = cursor.min(bytes.len());
             continue;
         }
         cursor += 1;
-        while cursor < bytes.len() && (bytes[cursor] as char).is_ascii_whitespace() {
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
             cursor += 1;
         }
-        let value_end = out[cursor..]
-            .find(|character: char| {
-                character.is_ascii_whitespace() || matches!(character, ',' | ';' | ')' | '"' | '\'')
+        let value_end = bytes[cursor..]
+            .iter()
+            .position(|byte| {
+                byte.is_ascii_whitespace() || matches!(byte, b',' | b';' | b')' | b'"' | b'\'')
             })
             .map(|offset| cursor + offset)
-            .unwrap_or(out.len());
+            .unwrap_or(bytes.len());
+        // 键 + 分隔符 + 空白原样保留，值替换成 `***`。
+        out.push_str(&input[index..cursor]);
         if value_end > cursor {
-            out.replace_range(cursor..value_end, "***");
+            out.push_str("***");
         }
-        index = cursor + 3;
+        index = value_end;
     }
     out
 }
-
-/// 克隆时的连接/传输超时，避免网络不可达时长时间卡住界面。
-pub const CLONE_TIMEOUT: Duration = Duration::from_secs(60);
