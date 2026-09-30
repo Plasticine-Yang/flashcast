@@ -194,6 +194,50 @@ export interface WorkspaceReload {
   error: string | null;
 }
 
+/** 变更列表中的一个文件（对应 flashcast_core::ChangedFile）。 */
+export interface ChangedFile {
+  /** 仓库相对路径，`/` 分隔。 */
+  path: string;
+  /** `git status --short` 风格的两列代码。 */
+  code: string;
+  /** 面向用户的中文状态说明。 */
+  statusLabel: string;
+  /** 索引里已有改动（已暂存）：不会随本次提交自动纳入。 */
+  staged: boolean;
+  /** 工作区里有改动（未暂存）。 */
+  unstaged: boolean;
+  untracked: boolean;
+  conflicted: boolean;
+  /** 真实补丁文本（差异基准见 WorkspaceChanges.diffBase）。 */
+  diff: string;
+  diffTruncated: boolean;
+}
+
+/** 工作区 Git 变更快照（对应 flashcast_core::WorkspaceChanges）。 */
+export interface WorkspaceChanges {
+  repository: boolean;
+  branch: string | null;
+  detached: boolean;
+  hasChanges: boolean;
+  /** 差异基准说明，例如 `HEAD (1a2b3c4) → 工作区（含已暂存改动）`。 */
+  diffBase: string;
+  files: ChangedFile[];
+  /** 工作区异常（合并 / 变基 / 分离 HEAD……）的中文说明。 */
+  state: string | null;
+  error: string | null;
+}
+
+/** 一次成功提交的结果（对应 flashcast_core::CommitOutcome）。 */
+export interface CommitOutcome {
+  oid: string;
+  short: string;
+  message: string;
+  authorName: string;
+  authorEmail: string;
+  paths: string[];
+  changes: WorkspaceChanges;
+}
+
 /** 宿主推送的工作区事件。 */
 export interface WorkspaceEvent {
   status: WorkspaceStatus;

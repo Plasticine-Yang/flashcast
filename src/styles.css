@@ -557,3 +557,100 @@ kbd {
     animation: none !important;
   }
 }
+
+/* 变更与提交区段（ticket 15）：状态列表、真实差异与提交范围。 */
+
+.changes-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-item);
+  overflow: hidden;
+}
+
+.change-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--fc-border);
+  background: var(--fc-surface);
+}
+
+.change-row:last-child {
+  border-bottom: none;
+}
+
+.change-row-selected {
+  background: var(--fc-selection-bg);
+}
+
+.change-check {
+  flex: none;
+  margin: 0;
+}
+
+.change-path {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: none;
+}
+
+.change-path:focus-visible {
+  outline: 2px solid var(--fc-focus-ring);
+  outline-offset: 1px;
+}
+
+.change-code {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+  white-space: pre;
+}
+
+.change-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.change-status {
+  flex: none;
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.change-diff {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-item);
+  background: var(--fc-info-bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fc-font-aux);
+  line-height: 1.4;
+  white-space: pre;
+}
+
+.commit-message {
+  resize: vertical;
+  font-family: inherit;
+}

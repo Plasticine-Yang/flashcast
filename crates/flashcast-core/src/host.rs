@@ -18,6 +18,7 @@ use flashcast_platform::launch_request::LaunchRequest;
 
 use crate::device::DeviceStore;
 use crate::manifest::{ManifestEntry, ManifestError, PluginManifestFile};
+use crate::git::{CommitOutcome, GitError, WorkspaceChanges};
 use crate::model::{
     ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview,
     QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES, COMMAND_PREFIX,
@@ -114,7 +115,9 @@ pub struct Host {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// [`Host::wait_for_workspace_change`] 的轮询间隔。
@@ -217,7 +220,9 @@ impl Host {
     /// 先校验目标目录与它已有的配置；失败时当前工作区与有效设置都保持不变。
     pub fn select_workspace(&self, path: &Path) -> Result<WorkspaceStatus, WorkspaceError> {
         let workspace = Workspace::open(path)?;
-        self.activate_workspace(workspace)
+        // 关联已有工作区时**不写任何文件**：工作区里的 Git 仓库必须保持干净，
+        // 直到用户真的改了插件清单或主题（见 `activate_workspace`）。
+        self.activate_workspace(workspace, false)
     }
 
     /// 在新目录（必须为空或不存在）上初始化工作区**及其 Git 仓库**。
@@ -225,7 +230,9 @@ impl Host {
     /// 非空目录一律拒绝，绝不覆盖已有用户文件。
     pub fn init_workspace(&self, path: &Path) -> Result<WorkspaceStatus, WorkspaceError> {
         let workspace = Workspace::init(path)?;
-        self.activate_workspace(workspace)
+        // 刚初始化的空目录：随设置文件一起写出默认插件清单与主题配置，
+        // 让新工作区一开始就自描述。这里不可能覆盖用户已有文件。
+        self.activate_workspace(workspace, true)
     }
 
     /// Git 操作忙标志：置位期间丢弃工作区文件事件。
@@ -236,6 +243,40 @@ impl Host {
         if let Some(watcher) = lock(&self.watch).as_ref() {
             watcher.set_git_busy(busy);
         }
+    }
+
+    /// 当前工作区的 Git 变更：状态分类、分支与逐文件真实差异（ADR §3 的补充入口）。
+    ///
+    /// 只读，不修改仓库，也不改变宿主状态。未关联工作区时返回
+    /// [`WorkspaceChanges::unlinked`]；工作区不是 Git 仓库或读取失败时，
+    /// 结果里的 `error` 给出中文原因。
+    pub fn workspace_changes(&self) -> WorkspaceChanges {
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return WorkspaceChanges::unlinked(),
+        };
+        crate::git::changes(&workspace)
+    }
+
+    /// 创建一次 Git 提交，范围**只包含** `paths` 里显式给出的路径（ADR §3 的补充入口）。
+    ///
+    /// 提交前把工作区标记为「Git 操作进行中」，期间丢弃文件监听事件；提交后由调用方
+    /// 用返回值里的 `changes`（按真实仓库状态重新读取）刷新界面。提交说明为空、
+    /// 未选择路径、身份未配置、工作区异常或索引被占用时返回中文原因，
+    /// 且不产生提交、不改动工作区文件。
+    pub fn commit_workspace(
+        &self,
+        message: &str,
+        paths: &[String],
+    ) -> Result<CommitOutcome, GitError> {
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return Err(GitError::NoWorkspace),
+        };
+        self.set_git_busy(true);
+        let result = crate::git::commit(&workspace, message, paths);
+        self.set_git_busy(false);
+        result
     }
 
     /// 已应用的外部重载次数。
@@ -283,26 +324,30 @@ impl Host {
             None => return self.unchanged_reload(changed.to_path_buf()),
         };
         let mut messages: Vec<String> = Vec::new();
-        let settings = match workspace.read_settings() {
-            Ok(Some(settings)) => Some(settings),
+
+        // 先读**原始字节**、再解析：宿主这次读在 macOS / Windows 上会被上报成像修改的
+        // 事件（macOS 常是 `EventKind::Any`，按事件类型丢不掉）。因此无论解析结果如何，
+        // 读到的内容都先记进监听层的账本，随后内容字节相同的事件才会被吞掉，而不是形成
+        // 「重载 → 读 → 事件 → 重载」（见 [`crate::watch`] 模块文档）。
+        let bytes = match workspace.read_settings_bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => return self.reload_failed(changed, error.to_string()),
+        };
+        let settings = match &bytes {
+            Some(bytes) => {
+                self.record_own_read(&workspace.settings_path(), bytes);
+                match workspace.parse_settings(bytes) {
+                    Ok(settings) => Some(settings),
+                    Err(error) => return self.reload_failed(changed, error.to_string()),
+                }
+            }
             // 设置文件被删除：保留上一次有效设置，但主题与清单仍按工作区重读。
-            Ok(None) => {
+            None => {
                 messages.push(format!(
                     "设置文件已不存在，继续使用上一次有效设置（{}）",
                     workspace.settings_path().display()
                 ));
                 None
-            }
-            Err(error) => {
-                let message = error.to_string();
-                lock(&self.inner).workspace_error = Some(message.clone());
-                return WorkspaceReload {
-                    path: changed.to_path_buf(),
-                    applied: false,
-                    settings: self.settings(),
-                    theme: self.theme_state(),
-                    error: Some(message),
-                };
             }
         };
 
@@ -334,12 +379,32 @@ impl Host {
             path: changed.to_path_buf(),
             applied,
             settings: self.settings(),
+            theme,
             error: if messages.is_empty() {
                 None
             } else {
                 Some(messages.join("；"))
             },
-            theme,
+        }
+    }
+
+    /// 记录宿主自己读到的文件内容：这次读可能被文件监听当成修改（见
+    /// [`Host::reload_from_workspace`] 与 [`crate::watch`] 的模块文档）。
+    fn record_own_read(&self, path: &Path, bytes: &[u8]) {
+        if let Some(watcher) = lock(&self.watch).as_ref() {
+            watcher.record_own_read(path, bytes);
+        }
+    }
+
+    /// 重载失败：保留上一次有效配置，把中文原因记进工作区状态并返回。
+    fn reload_failed(&self, changed: &Path, message: String) -> WorkspaceReload {
+        lock(&self.inner).workspace_error = Some(message.clone());
+        WorkspaceReload {
+            path: changed.to_path_buf(),
+            applied: false,
+            settings: self.settings(),
+            theme: self.theme_state(),
+            error: Some(message),
         }
     }
 
@@ -483,14 +548,21 @@ impl Host {
     }
 
     /// 让一个已校验的工作区成为当前工作区，并开始监听它的变更。
+    ///
+    /// `bootstrap` 为真时（刚初始化的空目录）顺手写出默认的 `manifest.json` 与
+    /// `theme.json`；为假时**只读不写**——关联一个已有的 Git 仓库不能把仓库改脏。
+    /// 缺少清单 / 主题配置时用内存里的默认值（三个内置主题 + 浅色），
+    /// 用户真正做出选择或启停插件时才会落盘。
     fn activate_workspace(
         &self,
         workspace: Workspace,
+        bootstrap: bool,
     ) -> Result<WorkspaceStatus, WorkspaceError> {
         // 先读设置：无效则整体拒绝，当前工作区与设置原样保留。
         let loaded = workspace.read_settings()?;
-        let watcher = WorkspaceWatcher::start(workspace.root(), workspace.git_dir().map(Path::to_path_buf))
-            .map_err(|error| WorkspaceError::Watch(error.to_string()))?;
+        let watcher =
+            WorkspaceWatcher::start(workspace.root(), workspace.git_dir().map(Path::to_path_buf))
+                .map_err(|error| WorkspaceError::Watch(error.to_string()))?;
         {
             let mut inner = lock(&self.inner);
             if let Some(settings) = loaded {
@@ -504,8 +576,10 @@ impl Host {
             inner.theme_notice = theme_reason;
         }
         *lock(&self.watch) = Some(watcher);
-        // 补齐默认文件（清单与主题选择），让用户可以手写、提交和同步。
-        self.ensure_workspace_files(&workspace);
+        if bootstrap {
+            // 新工作区写出默认文件（清单与主题选择），让用户可以手写、提交和同步。
+            self.bootstrap_workspace_files(&workspace);
+        }
         // 记住本机路径，重启后恢复。这是设备本地数据，不写进工作区。
         if let Err(error) = self.device.set_workspace_path(Some(workspace.root())) {
             lock(&self.inner).workspace_error = Some(error.to_string());
@@ -513,44 +587,23 @@ impl Host {
         Ok(self.workspace_status())
     }
 
-    /// 工作区里缺哪些配置文件就补哪些。已存在的文件一律不改写。
-    fn ensure_workspace_files(&self, workspace: &Workspace) {
-        let existing = workspace
-            .read_config_text(&workspace.manifest_path())
-            .ok()
-            .flatten();
+    /// 为刚初始化的空工作区写出默认清单与主题配置。只在这个入口调用，
+    /// 并且只写不存在的文件（目录是应用自己刚建的，不存在覆盖用户内容的风险）。
+    fn bootstrap_workspace_files(&self, workspace: &Workspace) {
         let manifest_path = workspace.manifest_path();
-        match existing {
-            // 已有清单：只补齐缺失的默认条目（默认主题始终可用）。
-            Some(text) => match PluginManifestFile::from_json(&text) {
-                Ok(file) => {
-                    let extras = self.expected_manifest_extras();
-                    let (merged, changed) = file.merged_with(extras);
-                    if changed {
-                        if let Ok(bytes) = merged.to_json().map(String::into_bytes) {
-                            let _ = self.persist_workspace_file(|_| manifest_path.clone(), &bytes);
-                            lock(&self.inner).manifest = merged;
-                        }
-                    }
-                }
-                // 无效清单不覆盖用户的文件：原因已经在 apply_workspace_config 里记过。
-                Err(_) => {}
-            },
-            None => {
-                let extras = self.expected_manifest_extras();
-                let (merged, _) = PluginManifestFile::defaults().merged_with(extras);
-                if let Ok(bytes) = merged.to_json().map(String::into_bytes) {
-                    if self
-                        .persist_workspace_file(|_| manifest_path.clone(), &bytes)
-                        .is_ok()
-                    {
-                        lock(&self.inner).manifest = merged;
-                    }
+        if let Ok(None) = workspace.read_config_text(&manifest_path) {
+            let (merged, _) = PluginManifestFile::defaults()
+                .merged_with(self.expected_manifest_extras());
+            if let Ok(bytes) = merged.to_json().map(String::into_bytes) {
+                if self
+                    .persist_workspace_file(|_| manifest_path.clone(), &bytes)
+                    .is_ok()
+                {
+                    lock(&self.inner).manifest = merged;
                 }
             }
         }
 
-        // 尚未选择主题时补一份默认主题配置。
         let theme_path = workspace.theme_path();
         if let Ok(None) = workspace.read_config_text(&theme_path) {
             let selected = lock(&self.inner).selected_theme.clone();
@@ -591,7 +644,7 @@ impl Host {
             }
         };
         // 已有设置文件但无效时不切换，保留构造时传入的设置并说明原因。
-        if let Err(error) = self.activate_workspace(workspace) {
+        if let Err(error) = self.activate_workspace(workspace, false) {
             lock(&self.inner).workspace_error =
                 Some(format!("上次使用的配置工作区无法恢复：{error}"));
         }

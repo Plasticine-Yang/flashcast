@@ -10,11 +10,13 @@ use std::fs;
 use std::path::PathBuf;
 
 use flashcast_core::{
-    Appearance, ManifestEntry, PluginKind, PluginManifestFile, PluginOrigin, ThemeAppearance,
-    ThemeSelection, MANIFEST_FILE, THEMES_DIR, THEME_DARK, THEME_FILE, THEME_LIGHT, THEME_SYSTEM,
+    Appearance, ManifestEntry, PluginKind, PluginManifestFile, PluginOrigin, Settings,
+    ThemeAppearance, ThemeSelection, MANIFEST_FILE, SETTINGS_FILE, THEMES_DIR, THEME_DARK,
+    THEME_FILE, THEME_LIGHT, THEME_SYSTEM,
 };
 use support::{
-    cleanup, fast_settings, host_restarted, host_with_device, real_git_repo, unique_dir,
+    cleanup, fast_settings, files_under, host_restarted, host_with_device, real_git_repo,
+    unique_dir,
 };
 
 /// 一个完整的自定义主题文档（深色外观，可安装）。
@@ -78,11 +80,14 @@ fn the_default_manifest_carries_the_three_default_themes() {
 /// 清单与主题配置写进工作区，重启后启用状态与选中主题都能恢复。
 #[test]
 fn manifest_and_theme_selection_round_trip_across_a_restart() {
-    let repo = real_git_repo("theme-round-trip");
+    let parent = unique_dir("theme-round-trip");
+    let target = parent.join("config");
     let (host, _launcher, device) = host_with_device(vec![], fast_settings());
-    host.select_workspace(&repo).expect("关联工作区");
+    // 初始化新工作区：默认清单与主题配置随初始化一起写出（可读、可提交）。
+    host.init_workspace(&target).expect("初始化工作区");
+    let repo = target.canonicalize().expect("规范化工作区路径");
 
-    // 关联工作区后就应写出人类可读的清单与主题配置。
+    // 初始化后就有写出的默认清单与主题配置。
     let text = fs::read_to_string(repo.join(MANIFEST_FILE)).expect("必须写出插件清单");
     let file = PluginManifestFile::from_json(&text).expect("清单必须是合法 JSON");
     assert_eq!(file.entries().len(), 3);
@@ -123,6 +128,50 @@ fn manifest_and_theme_selection_round_trip_across_a_restart() {
             .enabled,
         "停用状态必须在重启后保留"
     );
+
+    cleanup(&parent);
+    cleanup(&device);
+}
+
+/// 关联一个已有的工作区**不写任何文件**：Git 仓库必须保持干净，直到用户真的改了配置。
+///
+/// 默认主题与默认清单在没有 `manifest.json` / `theme.json` 时由内存里的默认值驱动，
+/// 因此「默认主题经清单加载」不依赖启动时往仓库里塞文件。
+#[test]
+fn linking_an_existing_workspace_writes_nothing() {
+    let repo = real_git_repo("theme-no-writes");
+    fs::write(
+        repo.join(SETTINGS_FILE),
+        Settings::default().to_toml().expect("序列化设置"),
+    )
+    .expect("写出设置文件");
+    let before = files_under(&repo);
+
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    assert_eq!(
+        files_under(&repo),
+        before,
+        "关联已有工作区不得创建或改写任何文件"
+    );
+    // 默认主题与默认清单仍然生效（来自内存默认值）。
+    let state = host.theme_state();
+    assert_eq!(state.themes.len(), 3);
+    assert_eq!(state.selected, THEME_LIGHT);
+    assert_eq!(state.error, None);
+    assert_eq!(host.manifest_entries().len(), 3);
+
+    // 用户真的做出选择时才落盘，并且是可读 JSON。
+    host.select_theme(THEME_DARK).expect("选择深色");
+    assert!(repo.join(THEME_FILE).exists(), "选择主题后必须写出主题配置");
+    assert!(
+        !repo.join(MANIFEST_FILE).exists(),
+        "只是选择主题不应写出插件清单"
+    );
+    host.set_plugin_enabled(THEME_SYSTEM, false)
+        .expect("停用跟随系统");
+    assert!(repo.join(MANIFEST_FILE).exists(), "启停插件后必须写出清单");
 
     cleanup(&repo);
     cleanup(&device);
@@ -732,8 +781,7 @@ fn theme_availability_follows_the_manifest() {
 
     // 手工往清单里加一个指向不存在主题包的条目（模拟用户/同步带来的配置）。
     let path = repo.join(MANIFEST_FILE);
-    let mut file =
-        PluginManifestFile::from_json(&fs::read_to_string(&path).unwrap()).expect("读取清单");
+    let mut file = PluginManifestFile::defaults();
     file.upsert(ManifestEntry {
         id: "example.missing".to_string(),
         name: "缺失的主题包".to_string(),

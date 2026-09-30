@@ -1,9 +1,13 @@
-//! `global-hotkey` 后端的共享部分，供 Linux 与 macOS 两个平台实现复用。
+//! `global-hotkey` 后端的共享部分，供 Linux、Windows 与 macOS 三个平台实现复用。
 //!
-//! 后端的进程级回调表、按键映射与错误分类与平台无关，只有「当前环境是否允许
-//! 注册」这一判断因平台而异（Linux 看 X11/Wayland/Mirror 会话，macOS 看是否存在
-//! 可交互的桌面会话）。把共享部分集中在这里，可以保证两个平台对同一个
+//! 后端的回调表、按键映射与错误分类与平台无关，只有「当前环境是否允许注册」这一
+//! 判断因平台而异（Linux 看 X11/Wayland 会话，macOS 看辅助功能权限，Windows 看
+//! 是否存在可交互桌面）。把共享部分集中在这里，可以保证三个平台对同一个
 //! [`HotkeySpec`] 映射到同一个后端按键，并且这段映射能在 Linux 上被真实测试。
+//!
+//! 唯一按平台分支的是管理器的生命周期：Linux 与 macOS 可以放心用进程级单例；
+//! Windows 上管理器持有隐藏窗口的 `HWND`，`WM_HOTKEY` 只投递到创建它的线程，
+//! 因此见下面 `#[cfg(target_os = "windows")]` 的 [`manager`]。
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -28,6 +32,8 @@ fn lock_callbacks() -> MutexGuard<'static, HashMap<u32, PressCallback>> {
 }
 
 /// 进程级后端管理器。初始化失败会被记住并作为可展示原因返回。
+#[cfg(not(target_os = "windows"))]
+#[cfg(not(target_os = "windows"))]
 fn manager() -> Result<&'static GlobalHotKeyManager, HotkeyError> {
     static MANAGER: OnceLock<Result<GlobalHotKeyManager, String>> = OnceLock::new();
     MANAGER
@@ -36,6 +42,60 @@ fn manager() -> Result<&'static GlobalHotKeyManager, HotkeyError> {
         .map_err(|reason| HotkeyError::BackendUnavailable {
             reason: format!("无法初始化全局快捷键后端：{reason}"),
         })
+}
+
+/// 在快捷键后端上执行一次操作，并把「后端初始化失败」统一成可展示原因。
+///
+/// 唯一按平台分支的地方就在这里：Linux 与 macOS 的管理器是进程级单例；Windows 的
+/// 管理器持有隐藏窗口的 `HWND`，既是 `!Send + !Sync`，也意味着 `WM_HOTKEY` 只会投递到
+/// **创建该窗口的线程**。所以它必须留在调用线程（Tauri 主线程，其消息循环负责派发），
+/// 用 `thread_local` 保存；并且当注册发生在另一个线程时**明确报错**，而不是在无人
+/// 派发消息的线程上悄悄再建一个 —— 那会得到「注册成功但永远收不到按键」的假象。
+fn with_manager<T>(f: impl FnOnce(&GlobalHotKeyManager) -> T) -> Result<T, HotkeyError> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        manager().map(f)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::cell::RefCell;
+
+        thread_local! {
+            static MANAGER: RefCell<Option<Result<GlobalHotKeyManager, String>>> =
+                const { RefCell::new(None) };
+        }
+
+        thread_local! {
+            static OWNER_THREAD: RefCell<Option<std::thread::ThreadId>> = const { RefCell::new(None) };
+        }
+
+        let current = std::thread::current().id();
+        let owner = OWNER_THREAD.with(|cell| *cell.borrow().as_ref().unwrap_or(&current));
+        OWNER_THREAD.with(|cell| {
+            if cell.borrow().is_none() {
+                *cell.borrow_mut() = Some(current);
+            }
+        });
+        if owner != current {
+            return Err(HotkeyError::BackendUnavailable {
+                reason: "全局快捷键后端属于创建它的线程（Windows 的 WM_HOTKEY 只投递到该线程的\
+                         消息队列）；请在应用主线程注册快捷键"
+                    .to_string(),
+            });
+        }
+        MANAGER.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(GlobalHotKeyManager::new().map_err(|error| error.to_string()));
+            }
+            match slot.as_ref().expect("上面刚写入") {
+                Ok(manager) => Ok(f(manager)),
+                Err(reason) => Err(HotkeyError::BackendUnavailable {
+                    reason: format!("无法初始化全局快捷键后端：{reason}"),
+                }),
+            }
+        })
+    }
 }
 
 /// 启动事件监听线程。进程内只启动一次。
@@ -62,13 +122,11 @@ fn ensure_listener() {
 
 /// 注册快捷键。调用方必须先自行判断当前环境是否允许注册。
 pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHandle, HotkeyError> {
-    let manager = manager()?;
     let hotkey = to_backend_hotkey(spec)?;
     let id = hotkey.id();
 
-    manager
-        .register(hotkey)
-        .map_err(|error| classify(error, spec))?;
+    with_manager(|manager| manager.register(hotkey))
+        .and_then(|result| result.map_err(|error| classify(error, spec)))?;
     lock_callbacks().insert(id, on_press);
     ensure_listener();
     Ok(HotkeyHandle::new(u64::from(id), spec.clone(), {
@@ -97,17 +155,16 @@ pub fn update(handle: &HotkeyHandle, spec: &HotkeySpec) -> Result<HotkeyHandle, 
 pub fn unregister(handle: &HotkeyHandle) -> Result<(), HotkeyError> {
     let id = handle.id as u32;
     lock_callbacks().remove(&id);
-    let Ok(manager) = manager() else {
-        return Ok(());
-    };
     let hotkey = to_backend_hotkey(&handle.spec)?;
-    match manager.unregister(hotkey) {
-        Ok(()) => Ok(()),
+    match with_manager(|manager| manager.unregister(hotkey)) {
+        Ok(Ok(())) => Ok(()),
         // 已经不在注册表中不视为错误。
-        Err(global_hotkey::Error::FailedToUnRegister(_)) => Ok(()),
-        Err(error) => Err(HotkeyError::Other {
+        Ok(Err(global_hotkey::Error::FailedToUnRegister(_))) => Ok(()),
+        Ok(Err(error)) => Err(HotkeyError::Other {
             reason: error.to_string(),
         }),
+        // 后端不可用（或不是创建它的线程）时也视为已注销：清理路径不应报错。
+        Err(_) => Ok(()),
     }
 }
 

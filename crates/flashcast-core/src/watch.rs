@@ -5,9 +5,11 @@
 //!
 //! 1. **原子写入**（[`crate::workspace::write_atomic`]）：同目录临时文件 + `rename`，
 //!    监听侧只看到一次 `Create` + `Rename`，去抖器可以合并。
-//! 2. **内容哈希自写账本**（[`ChangeFilter::record_self_write`]）：按「路径 → 新内容哈希」
+//! 2. **内容哈希账本**（[`ChangeFilter::record_self_write`]）：按「路径 → 新内容哈希」
 //!    记录自身写入。事件到达时重新读取该文件，内容哈希一致就吞掉这次事件。
 //!    用内容哈希而不是 mtime，因为 macOS / Windows 的 mtime 粒度会说谎。
+//!    宿主**自己重载时读到的内容**也记进同一账本（[`ChangeFilter::record_own_read`]），
+//!    原因见下文「重载自己的读」。
 //! 3. **每路径静默窗口**：自身写入后的一小段时间内忽略该路径的事件，兜住编辑器
 //!    与杀毒软件在 `rename` 之后再次触碰文件的情况。
 //! 4. **Git 操作忙标志**：`git` 操作期间丢弃全部事件，并在操作结束后按 Git 状态显式
@@ -22,6 +24,33 @@
 //! 任何事（见 [`crate::host::Host::reload_from_workspace`]）。因此不会出现
 //! 「写入 → 事件 → 应用 → 再写入」的循环。
 //!
+//! ## 跨平台：账本条目保留整个 TTL，命中即删是不可靠的
+//!
+//! 账本条目在第一次命中后**不删除**，而是保留到 `LEDGER_TTL` 到期（命中时只刷新静默
+//! 时间戳）。inotify 对一次 `rename` 基本只上报一条记录，而 macOS 的 FSEvents 与 Windows
+//! 的 `ReadDirectoryChangesW` 常把同一次逻辑写入拆成**多条**记录，且相邻记录之间可能隔着
+//! 几百毫秒到 1 秒（FSEvents 的 latency）。若第一条记录命中内容哈希后就把条目删掉，后面的
+//! 记录只能落到第 3 层静默窗口上；一旦它们晚于 `QUIET_WINDOW` 到达，就会被当成「外部修改」
+//! 产生一次内容并未变化的多余重载（CI 实测：macOS arm64 / x86_64 与 Windows x64 的
+//! `workspace_watch` 用例因此失败）。反过来，条目也不在命中时续期：`LEDGER_TTL` 从「记录
+//! 内容」那一刻起算，保证抑制不会因为持续的事件而无限延长，内存也始终有界。
+//!
+//! `QUIET_WINDOW` 保持 600ms，**不**按平台放宽。它只是第 3 层的兜底，真正的判据是第 2 层的
+//! 内容哈希；把它放到 1 秒以上只会把「用户在自身写入后立刻做的第二次真实外部修改」也一起
+//! 吞掉——静默窗口既挡住噪声，也决定多快能看到真实的连续两次修改，盲目加长是拿正确性换
+//! 稳定。跨平台的多记录问题由账本 TTL 解决，不靠放宽这个窗口。
+//!
+//! ## 重载自己的读也必须记账（macOS 上尤其致命）
+//!
+//! 宿主重载配置时要读 `settings.toml`，这次**读**在 macOS 的 FSEvents 上常被上报为
+//! `EventKind::Any`（FSEvents 经常不给更细的类型），因此 [`is_modification`] 必须接受
+//! `Any`。于是「重载 → 读 → 事件 → 重载」会自我维持：读取的内容与刚应用的内容字节相同，
+//! 却仍被当成一次外部修改送进通道，测试表现为「一次外部修改不得产生持续的事件流」失败。
+//! 修正办法是把这次读取的字节哈希也记进账本（[`ChangeFilter::record_own_read`]）：此后任何
+//! 内容字节一致的事件都被第 2 层吞掉，与平台上报的事件类型无关。它与
+//! [`ChangeFilter::record_self_write`] 共用账本，只是**不**刷新静默时间戳——重载是读而不是
+//! 写，不该顺带屏蔽内容确实变了的紧随修改。
+//!
 //! ## 只读事件必须丢弃（实测踩到的自伤循环）
 //!
 //! notify 的 inotify 后端会把 `IN_ACCESS` / `IN_OPEN` / `IN_CLOSE` 一并上报为
@@ -29,7 +58,8 @@
 //! 这些**读操作本身**又会生成 `Access` 事件；把它们当成「文件改了」就形成
 //! 「读 → 事件 → 再读」的无限事件流（实测：一次写入后事件每隔约 500ms 再来一次，
 //! 且永远不收敛）。因此 [`is_modification`] 只接受 `Create` / `Modify` / `Remove` /
-//! `Any`，丢弃 `Access` 与 `Other`。
+//! `Any`，丢弃 `Access` 与 `Other`。这是 Linux 侧的一道保险；macOS 的 `Any` 无法这样
+//! 过滤，只能靠上面的「重载自己的读也要记账」兜住。
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -40,9 +70,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use notify_debouncer_full::notify::{
-    EventKind, RecommendedWatcher, RecursiveMode,
-};
+use notify_debouncer_full::notify::{EventKind, RecommendedWatcher, RecursiveMode};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 
 use crate::workspace::{MEMOS_DIR, TEMP_SUFFIX, THEMES_DIR, THEME_FILE, WORKSPACE_FILES};
@@ -50,12 +78,17 @@ use crate::workspace::{MEMOS_DIR, TEMP_SUFFIX, THEMES_DIR, THEME_FILE, WORKSPACE
 /// 去抖窗口。编辑器保存是突发写入，500ms 足以合并成一次。
 pub const DEBOUNCE: Duration = Duration::from_millis(500);
 /// 自身写入之后的静默窗口。
+///
+/// 刻意**不**按平台放宽：跨平台的多事件记录问题由内容哈希账本的 `LEDGER_TTL` 解决，
+/// 而放宽这个窗口会连「自身写入后紧接着的真实外部修改」一起吞掉（见模块文档）。
 pub const QUIET_WINDOW: Duration = Duration::from_millis(600);
-/// 自写账本条目的最长保留时间，避免长期占用内存。
+/// 内容哈希账本条目的最长保留时间，避免长期占用内存。
 const LEDGER_TTL: Duration = Duration::from_secs(10);
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -85,16 +118,35 @@ impl ChangeFilter {
     }
 
     /// 记录一次自身写入。写文件**之前**调用。
+    ///
+    /// 同时开一个静默窗口：`rename` 之后编辑器与杀毒软件可能再触碰一次文件，那时内容
+    /// 未必还是刚写下的字节，哈希对不上，只能靠静默窗口兜住。
     pub fn record_self_write(&self, path: &Path, bytes: &[u8]) {
         let now = Instant::now();
+        self.remember_content(path, bytes, now);
+        lock(&self.quiet).insert(path.to_path_buf(), now);
+    }
+
+    /// 记录宿主**自己读到的**文件内容，算作自写。
+    ///
+    /// 宿主重载配置时读文件，这次读在 macOS/Windows 上会被上报成一次像模像样的修改事件
+    /// （macOS 常是 `EventKind::Any`，无法按事件类型丢弃）。把读到的字节记进账本就够了：
+    /// 随后的重复事件内容字节相同，被第 2 层吞掉。
+    ///
+    /// 与 [`Self::record_self_write`] 不同，这里**不**开静默窗口：重载是一次读，文件内容
+    /// 没有变化，不该顺带屏蔽内容确实变了的紧随修改。
+    pub fn record_own_read(&self, path: &Path, bytes: &[u8]) {
+        self.remember_content(path, bytes, Instant::now());
+    }
+
+    fn remember_content(&self, path: &Path, bytes: &[u8], at: Instant) {
         lock(&self.ledger).insert(
             path.to_path_buf(),
             LedgerEntry {
                 hash: hash_bytes(bytes),
-                at: now,
+                at,
             },
         );
-        lock(&self.quiet).insert(path.to_path_buf(), now);
     }
 
     /// Git 操作忙标志。为真时丢弃全部事件。
@@ -125,16 +177,23 @@ impl ChangeFilter {
         }
 
         let now = Instant::now();
-        {
+        // 第 2 层：内容哈希。命中后**保留**条目到 `LEDGER_TTL` 到期，而不是删掉它：
+        // 一次逻辑写入在 macOS/Windows 上会产生多条事件记录，每条都得能继续对上哈希
+        // （见模块文档「跨平台」一节）。命中只刷新静默时间戳，给第 3 层兜底。
+        let matched = {
             let mut ledger = lock(&self.ledger);
             ledger.retain(|_, entry| now.duration_since(entry.at) < LEDGER_TTL);
-            if let Some(entry) = ledger.get(path) {
-                if content_hash(path) == Some(entry.hash) {
-                    ledger.remove(path);
-                    return false;
-                }
+            match ledger.get(path) {
+                Some(entry) if content_hash(path) == Some(entry.hash) => true,
+                _ => false,
             }
+        };
+        if matched {
+            lock(&self.quiet).insert(path.to_path_buf(), now);
+            return false;
         }
+        // 第 3 层：每路径静默窗口。内容哈希对不上（文件在 `rename` 后又被改写）或文件
+        // 已被删除时，靠它吞掉写入后紧随的噪声事件。
         {
             let mut quiet = lock(&self.quiet);
             quiet.retain(|_, at| now.duration_since(*at) < LEDGER_TTL);
@@ -190,7 +249,8 @@ fn is_modification(kind: &EventKind) -> bool {
 }
 
 /// 编辑器与系统噪声：交换文件、备份文件、临时文件、锁文件与目录元数据。
-fn is_noise(name: &str) -> bool {    name.ends_with(TEMP_SUFFIX)
+fn is_noise(name: &str) -> bool {
+    name.ends_with(TEMP_SUFFIX)
         || name.ends_with('~')
         || name.ends_with(".swp")
         || name.ends_with(".swx")
@@ -234,28 +294,24 @@ impl WorkspaceWatcher {
         let filter = Arc::new(ChangeFilter::new(root.to_path_buf(), git_dir));
         let (sender, receiver): (Sender<PathBuf>, Receiver<PathBuf>) = channel();
         let callback_filter = Arc::clone(&filter);
-        let mut debouncer = new_debouncer(
-            DEBOUNCE,
-            None,
-            move |result: DebounceEventResult| {
-                let events = match result {
-                    Ok(events) => events,
-                    // 监听错误（例如 inotify 上限）不改变宿主状态：等下一次有效事件。
-                    Err(_) => return,
-                };
-                for event in events {
-                    // 只读事件不算修改：算哈希时读文件本身会再生成 Access 事件。
-                    if !is_modification(&event.event.kind) {
-                        continue;
-                    }
-                    for path in &event.event.paths {
-                        if callback_filter.accept(path) {
-                            let _ = sender.send(path.clone());
-                        }
+        let mut debouncer = new_debouncer(DEBOUNCE, None, move |result: DebounceEventResult| {
+            let events = match result {
+                Ok(events) => events,
+                // 监听错误（例如 inotify 上限）不改变宿主状态：等下一次有效事件。
+                Err(_) => return,
+            };
+            for event in events {
+                // 只读事件不算修改：算哈希时读文件本身会再生成 Access 事件。
+                if !is_modification(&event.event.kind) {
+                    continue;
+                }
+                for path in &event.event.paths {
+                    if callback_filter.accept(path) {
+                        let _ = sender.send(path.clone());
                     }
                 }
-            },
-        )
+            }
+        })
         .map_err(|error| WatchError::Notify(error.to_string()))?;
         debouncer
             .watch(root, RecursiveMode::Recursive)
@@ -283,6 +339,11 @@ impl WorkspaceWatcher {
 
     pub fn record_self_write(&self, path: &Path, bytes: &[u8]) {
         self.filter.record_self_write(path, bytes);
+    }
+
+    /// 记录宿主自己读到的文件内容（重载读），让随之而来的同内容事件被吞掉。
+    pub fn record_own_read(&self, path: &Path, bytes: &[u8]) {
+        self.filter.record_own_read(path, bytes);
     }
 
     /// Git 操作忙标志：操作期间丢弃事件（见模块文档第 4 层）。

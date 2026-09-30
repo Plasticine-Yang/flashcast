@@ -48,6 +48,8 @@ pub fn run() {
             commands::select_workspace,
             commands::init_workspace,
             commands::reload_workspace,
+            commands::get_git_changes,
+            commands::commit_changes,
             commands::hide_window,
         ])
         .setup(|app| {
