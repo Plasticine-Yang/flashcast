@@ -276,6 +276,10 @@ fn in_progress_state(repo: &git2::Repository) -> Option<String> {
 }
 
 /// 状态分类 + 逐文件真实差异。
+///
+/// 重命名**不**做检测（不打开 `renames_*` 选项）：一次重命名会如实拆成
+/// 「删除 + 新增」两个条目，用户必须显式勾选两者。这样提交范围永远等于
+/// 勾选集合，绝不会因为重命名检测而悄悄把未勾选的路径纳入提交。
 fn statuses(
     repo: &git2::Repository,
     head_tree: Option<&git2::Tree>,
@@ -567,14 +571,31 @@ pub fn commit(
         }
     };
 
-    // 4) 用真实仓库状态核对提交确实存在，且树里确实有这些路径。
+    // 4) 用真实仓库状态核对这次提交：提交对象存在，且每个选中路径的树内容
+    //    与工作区内容逐字节一致（删除则是树里确实没有这个路径）。
     let commit = repo.find_commit(oid).map_err(git_error)?;
     let tree = commit.tree().map_err(git_error)?;
     for path in &paths {
-        if tree.get_path(Path::new(path)).is_err() {
-            return Err(GitError::Git(format!(
-                "提交已创建，但树中缺少选中路径：{path}"
-            )));
+        let full = workdir.join(path);
+        match fs::read(&full) {
+            Ok(expected) => {
+                let entry = tree.get_path(Path::new(path)).map_err(|_| {
+                    GitError::Git(format!("提交已创建，但树中缺少选中路径：{path}"))
+                })?;
+                let blob = repo.find_blob(entry.id()).map_err(git_error)?;
+                if blob.content() != expected.as_slice() {
+                    return Err(GitError::Git(format!(
+                        "提交已创建，但树中 {path} 的内容与工作区不一致"
+                    )));
+                }
+            }
+            Err(_) => {
+                if tree.get_path(Path::new(path)).is_ok() {
+                    return Err(GitError::Git(format!(
+                        "提交已创建，但树中仍包含被选中删除的路径：{path}"
+                    )));
+                }
+            }
         }
     }
 

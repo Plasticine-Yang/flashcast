@@ -790,3 +790,81 @@ fn the_app_keeps_working_after_a_commit() {
     cleanup(&repo);
     cleanup(&device);
 }
+
+/// 重命名在状态里表现为「删除 + 新增」两个条目：只勾选其中一个绝不会静默吞掉另一半。
+#[test]
+fn renames_are_reported_as_delete_plus_add_and_never_widen_the_scope() {
+    let repo = git_repo_with_commit(
+        "git-rename",
+        &[
+            ("memos/old.md", "备忘录内容\n"),
+            (SETTINGS_FILE, "hotkey = \"Ctrl+Alt+Space\"\n"),
+        ],
+    );
+    support::git_remove(&repo, "memos/old.md");
+    git_write(&repo, "memos/new.md", "备忘录内容\n");
+
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    let files = by_path(&host.workspace_changes());
+    assert!(
+        files.contains_key("memos/old.md") && files.contains_key("memos/new.md"),
+        "重命名必须拆成删除与新增两个条目，提交范围才透明：{:?}",
+        files.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(files["memos/old.md"].code, " D");
+
+    // 只勾选新增的路径：旧路径的删除不得被顺手带进提交。
+    let outcome = host
+        .commit_workspace("只提交新增的备忘录", &["memos/new.md".to_string()])
+        .expect("提交必须成功");
+    let oid = git2::Oid::from_str(&outcome.oid).expect("oid");
+    assert!(
+        support::git_show(&repo, oid, "memos/old.md").is_some(),
+        "未勾选的删除被静默纳入了提交"
+    );
+    assert!(support::git_show(&repo, oid, "memos/new.md").is_some());
+    let files = by_path(&host.workspace_changes());
+    assert!(
+        files.contains_key("memos/old.md"),
+        "未勾选的删除必须仍然保留在变更列表：{files:?}"
+    );
+
+    // 再勾选旧路径的删除，重命名才真正完成。
+    let outcome = host
+        .commit_workspace("完成重命名", &["memos/old.md".to_string()])
+        .expect("提交必须成功");
+    let oid = git2::Oid::from_str(&outcome.oid).expect("oid");
+    assert!(support::git_show(&repo, oid, "memos/old.md").is_none());
+    assert!(support::git_show(&repo, oid, "memos/new.md").is_some());
+
+    cleanup(&repo);
+    cleanup(&device);
+}
+
+/// Git 操作不制造自伤事件：提交后不会凭空触发工作区重载。
+#[test]
+fn committing_does_not_trigger_a_spurious_workspace_reload() {
+    let repo = changes_fixture("git-no-self-reload");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+    let before = host.workspace_reloads();
+
+    host.commit_workspace("提交设置", &[SETTINGS_FILE.to_string()])
+        .expect("提交必须成功");
+
+    assert_eq!(
+        host.workspace_reloads(),
+        before,
+        "提交不得触发工作区重载（索引变动必须被监听过滤掉）"
+    );
+    assert!(
+        host.wait_for_workspace_change(std::time::Duration::from_millis(300))
+            .is_none(),
+        "提交后不应残留任何工作区事件"
+    );
+
+    cleanup(&repo);
+    cleanup(&device);
+}
