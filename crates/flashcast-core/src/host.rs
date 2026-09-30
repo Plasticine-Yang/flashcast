@@ -93,7 +93,9 @@ pub struct Host {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// [`Host::wait_for_workspace_change`] 的轮询间隔。
@@ -252,15 +254,33 @@ impl Host {
             Some(workspace) => workspace.clone(),
             None => return self.unchanged_reload(changed.to_path_buf()),
         };
-        match workspace.read_settings() {
+        // 先读**原始字节**、再解析：宿主这次读在 macOS / Windows 上会被上报成像修改的
+        // 事件（macOS 常是 `EventKind::Any`，按事件类型丢不掉）。因此无论解析结果如何，
+        // 读到的内容都先记进监听层的账本，随后内容字节相同的事件才会被吞掉，而不是形成
+        // 「重载 → 读 → 事件 → 重载」（见 [`crate::watch`] 模块文档）。
+        let bytes = match workspace.read_settings_bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => return self.reload_failed(changed, error.to_string()),
+        };
+        let settings = match &bytes {
+            Some(bytes) => {
+                self.record_own_read(&workspace.settings_path(), bytes);
+                match workspace.parse_settings(bytes) {
+                    Ok(settings) => Some(settings),
+                    Err(error) => return self.reload_failed(changed, error.to_string()),
+                }
+            }
+            None => None,
+        };
+        match settings {
             // 幂等：内容与生效设置一致时不做任何事，写入循环在此终止。
-            Ok(Some(settings)) if settings == self.settings() => WorkspaceReload {
+            Some(settings) if settings == self.settings() => WorkspaceReload {
                 path: changed.to_path_buf(),
                 applied: false,
                 settings,
                 error: None,
             },
-            Ok(Some(settings)) => {
+            Some(settings) => {
                 let mut inner = lock(&self.inner);
                 inner.settings = settings.clone();
                 inner.workspace_error = None;
@@ -275,7 +295,7 @@ impl Host {
                     error: None,
                 }
             }
-            Ok(None) => WorkspaceReload {
+            None => WorkspaceReload {
                 path: changed.to_path_buf(),
                 applied: false,
                 settings: self.settings(),
@@ -284,16 +304,25 @@ impl Host {
                     workspace.settings_path().display()
                 )),
             },
-            Err(error) => {
-                let message = error.to_string();
-                lock(&self.inner).workspace_error = Some(message.clone());
-                WorkspaceReload {
-                    path: changed.to_path_buf(),
-                    applied: false,
-                    settings: self.settings(),
-                    error: Some(message),
-                }
-            }
+        }
+    }
+
+    /// 记录宿主自己读到的文件内容：这次读可能被文件监听当成修改（见
+    /// [`Host::reload_from_workspace`] 与 [`crate::watch`] 的模块文档）。
+    fn record_own_read(&self, path: &Path, bytes: &[u8]) {
+        if let Some(watcher) = lock(&self.watch).as_ref() {
+            watcher.record_own_read(path, bytes);
+        }
+    }
+
+    /// 重载失败：保留上一次有效设置，把中文原因记进工作区状态并返回。
+    fn reload_failed(&self, changed: &Path, message: String) -> WorkspaceReload {
+        lock(&self.inner).workspace_error = Some(message.clone());
+        WorkspaceReload {
+            path: changed.to_path_buf(),
+            applied: false,
+            settings: self.settings(),
+            error: Some(message),
         }
     }
 
@@ -307,14 +336,12 @@ impl Host {
     }
 
     /// 让一个已校验的工作区成为当前工作区，并开始监听它的变更。
-    fn activate_workspace(
-        &self,
-        workspace: Workspace,
-    ) -> Result<WorkspaceStatus, WorkspaceError> {
+    fn activate_workspace(&self, workspace: Workspace) -> Result<WorkspaceStatus, WorkspaceError> {
         // 先读设置：无效则整体拒绝，当前工作区与设置原样保留。
         let loaded = workspace.read_settings()?;
-        let watcher = WorkspaceWatcher::start(workspace.root(), workspace.git_dir().map(Path::to_path_buf))
-            .map_err(|error| WorkspaceError::Watch(error.to_string()))?;
+        let watcher =
+            WorkspaceWatcher::start(workspace.root(), workspace.git_dir().map(Path::to_path_buf))
+                .map_err(|error| WorkspaceError::Watch(error.to_string()))?;
         {
             let mut inner = lock(&self.inner);
             if let Some(settings) = loaded {
