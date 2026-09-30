@@ -98,6 +98,11 @@ fn paths(entries: &[flashcast_platform::catalog::AppEntry]) -> Vec<String> {
 // 扫描根目录
 // ---------------------------------------------------------------------------
 
+// 下面两个用例断言的是 POSIX 路径语义（`/Applications`、`is_relative` 的含义）。
+// Windows 上 `Path::is_absolute()` 还要求盘符前缀，因此 `\Applications` 反而算“相对路径”，
+// 这些断言在 Windows 上不成立；而 `default_roots` 产出的本来就是 macOS 专用路径，
+// 所以在非 unix 目标上跳过，而不是把断言改成迁就 Windows 的写法。
+#[cfg(unix)]
 #[test]
 fn default_roots_cover_system_and_user_locations() {
     let home = Path::new("/Users/tester");
@@ -120,6 +125,7 @@ fn default_roots_cover_system_and_user_locations() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn default_roots_without_home_skip_the_user_directory() {
     let roots = default_roots(None);
