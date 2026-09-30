@@ -16,10 +16,16 @@ toml = { workspace = true }
 # 远端，因此打开 `https` 与 `ssh`（git2 0.21 默认两者都不开）：`https` 同时引入
 # `openssl-sys` —— git2 的 TLS 唯一后端，没有 schannel / security-framework 可选。
 #
-# 刻意**不**启用 `vendored-libgit2` / `vendored-openssl`：两者都要在四条 CI 腿上现场
-# 编译 C（Windows 还要 Perl 与 NASM），且本机无法验证；当前各腿自带系统 libgit2 与
-# OpenSSL 开发包（Linux 由 `scripts/dev/linux-native-deps.sh` 提供 libssl-dev）。
-git2 = { version = "0.21.0", default-features = false, features = ["https", "ssh"] }
+# 必须同时启用 `vendored-openssl`：CI 上 macOS 的 x86_64 是**在 arm64 runner 上交叉编译**的，
+# 那里只有 arm64 的 Homebrew OpenSSL，`openssl-sys` 找不到目标架构的库而直接编译失败
+# （CI 运行 36782404097 的实测）。随包编译 OpenSSL 才能让四条腿都成立；代价是各腿多花
+# 几分钟编译 C。Linux 需要 perl/make，Windows 需要 Perl 与 NASM（CI 中显式断言）。
+# 不启用 `vendored-libgit2`：各腿的系统 libgit2 可用，且 libgit2 本身不引入 TLS 依赖。
+git2 = { version = "0.21.0", default-features = false, features = [
+    "https",
+    "ssh",
+    "vendored-openssl",
+] }
 # 工作区文件监听（ADR §8；设计见 notes/research/git-workspace.md §6）。
 notify-debouncer-full = "0.7.0"
 

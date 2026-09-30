@@ -86,6 +86,35 @@ jobs:
             echo "::warning::镜像里同时存在 webkit2gtk-4.0 (${legacy})；以 4.1 断言为准。"
           fi
 
+      # OpenSSL 随包编译（`vendored-openssl`），因为它必须为目标架构构建：
+      # macOS 的 x86_64 是在 arm64 runner 上交叉编译的，那里只有 arm64 的 Homebrew
+      # OpenSSL，openssl-sys 会直接失败（CI 运行 36782404097 实测）。
+      # 这里显式告诉 clang 与 openssl 的 Configure 目标架构，否则会编出 arm64 的库。
+      - name: Cross-compile flags for macOS x86_64
+        if: matrix.target == 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          {
+            echo "CC_x86_64_apple_darwin=clang"
+            echo "CXX_x86_64_apple_darwin=clang++"
+            echo "CFLAGS_x86_64_apple_darwin=-arch x86_64"
+            echo "CXXFLAGS_x86_64_apple_darwin=-arch x86_64"
+          } >> "$GITHUB_ENV"
+
+      # vendored OpenSSL 在 Windows 上需要 Perl 与 NASM（openssl-src 的汇编器）。
+      # 缺少时给出可读的失败原因，而不是让 openssl-src 抛出难懂的报错。
+      - name: Assert Perl and NASM (Windows, for vendored OpenSSL)
+        if: startsWith(matrix.os, 'windows')
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=1
+          if ! perl -v >/dev/null 2>&1; then echo "::error::缺少 Perl，无法编译 vendored OpenSSL。"; ok=0; fi
+          if ! nasm -v >/dev/null 2>&1; then echo "::error::缺少 NASM，无法编译 vendored OpenSSL。"; ok=0; fi
+          [ "$ok" = "1" ] || exit 1
+          perl -v | head -2
+          nasm -v
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
