@@ -13,6 +13,11 @@ pub enum AppSource {
     Desktop,
     Flatpak,
     Snap,
+    /// macOS 的 `.app` 应用包（`/Applications` 等目录中的 bundle）。
+    ///
+    /// 枚举跨平台共享，保证宿主与 UI 只面对一套来源词汇；某个取值是否会被
+    /// 使用由各平台实现决定。
+    Bundle,
 }
 
 impl AppSource {
@@ -21,6 +26,7 @@ impl AppSource {
             AppSource::Desktop => "desktop",
             AppSource::Flatpak => "flatpak",
             AppSource::Snap => "snap",
+            AppSource::Bundle => "bundle",
         }
     }
 }

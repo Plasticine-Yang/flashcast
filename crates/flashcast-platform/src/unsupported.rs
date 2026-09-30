@@ -1,7 +1,8 @@
 //! 尚未实现平台的桩实现。
 //!
-//! Windows 与 macOS 的真实实现由后续 ticket 提供。这些桩必须让宿主在三个平台
-//! 上都能编译，并**如实**报告「不支持」，而不是伪造成功。
+//! Linux（ticket 01）与 macOS（ticket 03）已有真实实现；Windows 及其他目标的
+//! 真实实现由后续 ticket 提供。这些桩必须让宿主在所有目标上都能编译，并**如实**
+//! 报告「不支持」，而不是伪造成功。
 
 use crate::capability::{Capabilities, CapabilityProbe, Support};
 use crate::catalog::{AppCatalog, AppEntry, CatalogError};

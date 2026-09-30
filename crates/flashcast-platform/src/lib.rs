@@ -3,7 +3,7 @@
 //! Flashcast 的平台适配层。按能力拆分的 trait 定义在这里，各平台实现按
 //! `#[cfg(target_os)]` 分模块，测试替身只在 [`fake`]（feature `fake`）中。
 //!
-//! v0.1.0 ticket 01 只实现 Linux；Windows 与 macOS 由后续 ticket 提供，
+//! v0.1.0 ticket 01 实现 Linux，ticket 03 实现 macOS；Windows 由后续 ticket 提供，
 //! 在此之前由 [`unsupported`] 中的桩实现报告「不支持」，保证宿主能在三个
 //! 平台上编译并如实报告能力状态。
 
@@ -14,11 +14,15 @@ pub mod freedesktop;
 pub mod hotkey;
 pub mod launch;
 pub mod launch_request;
+pub mod macos;
 pub mod shortcut;
 pub mod unsupported;
 
 #[cfg(feature = "fake")]
 pub mod fake;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod hotkey_backend;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
@@ -45,7 +49,8 @@ pub struct PlatformAdapters {
 
 /// 当前平台的适配器集合。
 ///
-/// Linux 使用真实实现；其他平台在对应 ticket 落地前使用「不支持」桩实现。
+/// Linux 与 macOS 使用真实实现；Windows 等其余平台在对应 ticket 落地前使用
+/// 「不支持」桩实现，如实报告能力状态而不是伪造成功。
 pub fn current() -> PlatformAdapters {
     #[cfg(target_os = "linux")]
     {
@@ -57,7 +62,17 @@ pub fn current() -> PlatformAdapters {
             capabilities: Arc::new(linux::LinuxCapabilityProbe::new()),
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        PlatformAdapters {
+            catalog: Arc::new(macos::MacosAppCatalog::new()),
+            launcher: Arc::new(macos::MacosLauncher::new()),
+            focus: Arc::new(macos::MacosFocusTracker::new()),
+            hotkeys: Arc::new(macos::MacosHotkeyManager::new()),
+            capabilities: Arc::new(macos::MacosCapabilityProbe::new()),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         PlatformAdapters {
             catalog: Arc::new(unsupported::UnsupportedCatalog),
