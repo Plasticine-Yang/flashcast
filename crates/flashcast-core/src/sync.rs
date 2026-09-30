@@ -969,7 +969,11 @@ pub fn classify(error: &git2::Error, secrets: &[String]) -> SyncError {
         "no supported authentication",
         "publickey",
     ];
-    const OFFLINE: [&str; 8] = [
+    // 各平台的连接失败措辞不同，都要认：
+    // Linux/libcurl 说 "couldn't connect to server" / "connection refused"，
+    // Windows 上 libgit2 走 WinHTTP，说的是
+    // "A connection with the server could not be established"（CI Windows 腿实测）。
+    const OFFLINE: [&str; 14] = [
         "could not resolve host",
         "failed to resolve",
         "connection refused",
@@ -978,6 +982,12 @@ pub fn classify(error: &git2::Error, secrets: &[String]) -> SyncError {
         "no route to host",
         "failed to connect",
         "operation timed out",
+        "could not be established",
+        "couldn't connect",
+        "could not connect",
+        "connection reset",
+        "server name or address could not be resolved",
+        "timed out",
     ];
 
     if error.code() == ErrorCode::NotFastForward || has(&NON_FAST_FORWARD) {

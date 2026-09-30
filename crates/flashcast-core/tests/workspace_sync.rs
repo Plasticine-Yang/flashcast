@@ -37,6 +37,16 @@ fn settings_toml(hotkey: &str) -> String {
     .expect("序列化设置")
 }
 
+/// 读取文件并把换行统一成 LF。
+///
+/// Windows 上 Git for Windows 默认 `core.autocrlf=true`，检出会把 LF 变成 CRLF；
+/// 断言「远端内容确实落到工作区」时不该被宿主机的换行设置影响。
+fn read_normalized(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("读取 {} 失败：{error}", path.display()))
+        .replace("\r\n", "\n")
+}
+
 const HOTKEY_INITIAL: &str = "Ctrl+Alt+Space";
 const HOTKEY_REMOTE: &str = "Alt+Space";
 const HOTKEY_LOCAL: &str = "Ctrl+Shift+Space";
@@ -299,12 +309,16 @@ fn fast_forward_pull_applies_commit_and_reloads_settings_theme_and_memos() {
     assert!(outcome.message.contains("快进"), "{}", outcome.message);
 
     // 工作区内容真的更新了。
+    //
+    // 用统一换行后的比较：Windows 上 Git for Windows 默认 `core.autocrlf=true`，
+    // 检出时会把 LF 换成 CRLF（CI Windows 腿实测）。这里要验证的是「远端内容确实
+    // 落到了工作区」，不该被宿主机的换行设置影响。
     assert_eq!(
-        std::fs::read_to_string(fixture.workspace.join(SETTINGS_FILE)).expect("读设置"),
+        read_normalized(&fixture.workspace.join(SETTINGS_FILE)),
         remote_settings
     );
     assert_eq!(
-        std::fs::read_to_string(fixture.workspace.join(THEME_FILE)).expect("读主题配置"),
+        read_normalized(&fixture.workspace.join(THEME_FILE)),
         remote_theme
     );
     assert!(fixture.workspace.join("memos/remote-note.md").exists());
