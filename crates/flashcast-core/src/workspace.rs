@@ -4,13 +4,14 @@
 //!
 //! ```text
 //! <工作区>/
-//!   settings.toml    设置（TOML）
-//!   manifest.json    插件清单（JSON；语义由 ticket 07 落地）
-//!   theme.json       主题配置（JSON；语义由 ticket 06 落地）
-//!   memos/*.md       带 front matter 的 Markdown 备忘录（ticket 13）
+//!   settings.toml         设置（TOML）
+//!   manifest.json         插件清单：标识、种类、版本与启用状态（JSON）
+//!   theme.json            当前选中的主题（JSON）
+//!   themes/<主题 id>/theme.json  已安装的本地主题包（声明式 JSON）
+//!   memos/*.md            带 front matter 的 Markdown 备忘录（ticket 13）
 //! ```
 //!
-//! 本模块只负责工作区**本身**：目录校验、Git 仓库识别、设置文件的读写。
+//! 本模块只负责工作区**本身**：目录校验、Git 仓库识别、配置文件的位置与原子读写。
 //! 写入一律原子完成（同目录临时文件 + `rename`），供文件监听据此抑制自身写入
 //! （见 [`crate::watch`]）。
 //!
@@ -29,8 +30,10 @@ use crate::settings::{Settings, SettingsError};
 pub const SETTINGS_FILE: &str = "settings.toml";
 /// 工作区内的插件清单（JSON）。
 pub const MANIFEST_FILE: &str = "manifest.json";
-/// 工作区内的主题配置（JSON）。
+/// 工作区内的主题配置（JSON）：当前选中的主题。
 pub const THEME_FILE: &str = "theme.json";
+/// 工作区内已安装的本地主题包目录。
+pub const THEMES_DIR: &str = "themes";
 /// 工作区内的备忘录目录。
 pub const MEMOS_DIR: &str = "memos";
 
@@ -111,16 +114,18 @@ impl WorkspaceStatus {
 }
 
 /// 一次外部修改被处理后的结果。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceReload {
     /// 触发本次处理的文件。
     pub path: PathBuf,
-    /// 是否真的改变了生效设置。相同内容不重复应用（幂等，避免写入循环）。
+    /// 是否真的改变了生效配置。相同内容不重复应用（幂等，避免写入循环）。
     pub applied: bool,
     /// 处理之后生效的设置。
     pub settings: Settings,
-    /// 配置无效时的中文原因；此时保留上一次有效设置。
+    /// 处理之后生效的主题状态（无效主题保留上一次可用外观）。
+    pub theme: crate::theme::ThemeState,
+    /// 配置无效时的中文原因；此时保留上一次有效配置。
     pub error: Option<String>,
 }
 
@@ -208,6 +213,47 @@ impl Workspace {
 
     pub fn settings_path(&self) -> PathBuf {
         self.root.join(SETTINGS_FILE)
+    }
+
+    /// 插件清单文件路径（`manifest.json`）。
+    pub fn manifest_path(&self) -> PathBuf {
+        self.root.join(MANIFEST_FILE)
+    }
+
+    /// 主题配置文件路径（`theme.json`，记录当前选中的主题）。
+    pub fn theme_path(&self) -> PathBuf {
+        self.root.join(THEME_FILE)
+    }
+
+    /// 已安装的本地主题包目录（`themes/`）。
+    pub fn themes_dir(&self) -> PathBuf {
+        self.root.join(THEMES_DIR)
+    }
+
+    /// 某个本地主题包的目录（`themes/<id>/`）。
+    pub fn theme_package_dir(&self, theme_id: &str) -> PathBuf {
+        self.themes_dir().join(theme_id)
+    }
+
+    /// 某个本地主题包的文档路径（`themes/<id>/theme.json`）。
+    pub fn theme_package_path(&self, theme_id: &str) -> PathBuf {
+        self.theme_package_dir(theme_id).join(THEME_FILE)
+    }
+
+    /// 读取工作区里的一个文本文件。文件不存在返回 `None`。
+    ///
+    /// 只用于工作区内的配置文件；路径由调用方用上面这些方法给出。
+    pub fn read_text(&self, path: &Path) -> Result<Option<String>, WorkspaceError> {
+        match fs::read_to_string(path) {
+            Ok(text) => Ok(Some(text)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(WorkspaceError::Io(error.to_string())),
+        }
+    }
+
+    /// 读取工作区里的一个文本文件（例如清单与主题配置）。
+    pub fn read_config_text(&self, path: &Path) -> Result<Option<String>, WorkspaceError> {
+        self.read_text(path)
     }
 
     /// 读取设置。文件不存在返回 `None`；文件存在但无效时返回错误。

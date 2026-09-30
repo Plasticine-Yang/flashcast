@@ -45,7 +45,7 @@ use notify_debouncer_full::notify::{
 };
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 
-use crate::workspace::{MEMOS_DIR, TEMP_SUFFIX, WORKSPACE_FILES};
+use crate::workspace::{MEMOS_DIR, TEMP_SUFFIX, THEMES_DIR, THEME_FILE, WORKSPACE_FILES};
 
 /// 去抖窗口。编辑器保存是突发写入，500ms 足以合并成一次。
 pub const DEBOUNCE: Duration = Duration::from_millis(500);
@@ -162,7 +162,16 @@ impl ChangeFilter {
         match parts.as_slice() {
             [file] => WORKSPACE_FILES.iter().any(|name| OsStr::new(name) == *file),
             [dir, file] => {
-                *dir == OsStr::new(MEMOS_DIR) && file.to_string_lossy().ends_with(".md")
+                if *dir == OsStr::new(MEMOS_DIR) {
+                    return file.to_string_lossy().ends_with(".md");
+                }
+                // 已安装的本地主题包：themes/<主题 id>/theme.json
+                *dir == OsStr::new(THEMES_DIR) && *file == OsStr::new(THEME_FILE)
+            }
+            [dir, id, file] => {
+                *dir == OsStr::new(THEMES_DIR)
+                    && *file == OsStr::new(THEME_FILE)
+                    && !id.is_empty()
             }
             _ => false,
         }
