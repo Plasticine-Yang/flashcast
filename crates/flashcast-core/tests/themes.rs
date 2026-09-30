@@ -589,6 +589,137 @@ fn installing_a_theme_package_requires_a_workspace() {
     cleanup(&device);
 }
 
+/// 主题不能改变布局几何：内置主题的间距与字号完全一致，篡改它们的主题被拒绝。
+///
+/// 「切换主题不改变关键控件的位置与布局」因此是结构保证：主题可以换颜色、字体族、
+/// 圆角与阴影，但挪不动控件，也无法改行高与字号。
+#[test]
+fn themes_cannot_change_the_layout_geometry() {
+    let light = flashcast_core::light_tokens();
+    let dark = flashcast_core::dark_tokens();
+    assert_eq!(light.space, dark.space, "内置主题的间距必须完全一致");
+    assert_eq!(light.font.body, dark.font.body);
+    assert_eq!(light.font.input, dark.font.input);
+    assert_eq!(light.font.aux, dark.font.aux);
+
+    // 三个默认主题（含跟随系统的两套调色板）几何完全一致。
+    for document in flashcast_core::builtin_themes() {
+        for system in [Appearance::Light, Appearance::Dark] {
+            let tokens = document.resolve(system).expect("可解析");
+            assert_eq!(tokens.space, light.space, "{} 改了间距", document.id);
+            assert_eq!(
+                tokens.font.body, light.font.body,
+                "{} 改了正文字号",
+                document.id
+            );
+            assert_eq!(
+                tokens.font.input, light.font.input,
+                "{} 改了输入字号",
+                document.id
+            );
+            assert_eq!(
+                tokens.font.aux, light.font.aux,
+                "{} 改了辅助字号",
+                document.id
+            );
+        }
+    }
+
+    // 篡改间距：拒绝并指出是哪个字段。
+    let mut tokens = flashcast_core::light_tokens();
+    tokens.space.row_height = "80px".to_string();
+    let message = tokens.validate().expect_err("改行高必须被拒绝").to_string();
+    assert!(
+        message.contains("间距") && message.contains("rowHeight"),
+        "原因必须可读：{message}"
+    );
+
+    // 篡改字号：拒绝。
+    let mut tokens = flashcast_core::light_tokens();
+    tokens.font.input = "20px".to_string();
+    let message = tokens.validate().expect_err("改字号必须被拒绝").to_string();
+    assert!(message.contains("字号"), "原因必须可读：{message}");
+
+    // 圆角越界：拒绝。
+    let mut tokens = flashcast_core::light_tokens();
+    tokens.radius.window = "40px".to_string();
+    let message = tokens.validate().expect_err("圆角越界必须被拒绝").to_string();
+    assert!(message.contains("圆角"), "原因必须可读：{message}");
+
+    // 未知字段（试图引入动画）：解析即失败。
+    let mut value = serde_json::to_value(flashcast_core::light_tokens()).unwrap();
+    value["animation"] = serde_json::json!("fade 200ms");
+    assert!(
+        serde_json::from_value::<flashcast_core::ThemeTokens>(value).is_err(),
+        "未知字段必须被拒绝"
+    );
+}
+
+/// 每个内置主题里，正文可读、选中与焦点可辨识、错误与禁用状态可见。
+#[test]
+fn every_theme_keeps_text_readable_and_states_distinguishable() {
+    use flashcast_core::Rgba;
+
+    fn color(value: &str) -> Rgba {
+        Rgba::parse(value).unwrap_or_else(|| panic!("颜色无法解析：{value}"))
+    }
+
+    for document in flashcast_core::builtin_themes() {
+        for system in [Appearance::Light, Appearance::Dark] {
+            let tokens = document.resolve(system).expect("可解析");
+            let surface = color(&tokens.color.surface);
+            let page = color(&tokens.color.page_background);
+
+            // 正文与辅助文字必须可读（列表、设置页共用同一组文字语义）。
+            for (name, value) in [
+                ("color.text", &tokens.color.text),
+                ("color.textMuted", &tokens.color.text_muted),
+            ] {
+                let ratio = color(value).composite_over(surface).contrast_ratio(surface);
+                assert!(
+                    ratio >= 4.5,
+                    "{}（{:?}）的 {name} 对比度只有 {ratio:.2}:1",
+                    document.id,
+                    system
+                );
+            }
+            let ratio = color(&tokens.color.text).contrast_ratio(page);
+            assert!(ratio >= 4.5, "{} 的正文与页面背景对比度不足", document.id);
+
+            // 选中状态必须与普通表面区分得开。
+            let selected = color(&tokens.state.selected.background).composite_over(surface);
+            assert!(
+                selected.max_channel_delta(surface) >= 0.03,
+                "{} 的选中背景与表面太接近",
+                document.id
+            );
+            // 焦点环与选中边框必须彼此可辨识。
+            let ring = color(&tokens.state.focus.ring).composite_over(surface);
+            let selected_border = color(&tokens.state.selected.border).composite_over(surface);
+            assert!(
+                ring.max_channel_delta(selected_border) >= 0.03,
+                "{} 的焦点与选中状态无法区分",
+                document.id
+            );
+            // 错误状态必须可见且文字可读。
+            let error_background = color(&tokens.state.error.background).composite_over(surface);
+            assert!(
+                error_background.max_channel_delta(surface) >= 0.03,
+                "{} 的错误背景与表面太接近",
+                document.id
+            );
+            let ratio = color(&tokens.state.error.text).contrast_ratio(error_background);
+            assert!(ratio >= 4.5, "{} 的错误文字不可读", document.id);
+            // 禁用状态必须与正常状态可区分。
+            assert!(
+                tokens.state.disabled.opacity < 1.0,
+                "{} 的禁用状态必须与正常状态可区分",
+                document.id
+            );
+        }
+    }
+}
+
 /// 主题由清单驱动：清单里指向一个没有文档的主题条目时，它不可用也不能被选择。
 ///
 /// 这条用例是「默认主题经清单加载，而不是按 id 硬编码」的可观测证据：主题的可选性
