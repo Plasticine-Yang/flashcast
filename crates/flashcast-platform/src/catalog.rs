@@ -13,6 +13,12 @@ pub enum AppSource {
     Desktop,
     Flatpak,
     Snap,
+    /// Windows 开始菜单中的 `.lnk` 快捷方式。
+    StartMenu,
+    /// Windows 注册表 Uninstall 键（没有开始菜单快捷方式的安装）。
+    Registry,
+    /// Windows 打包应用（UWP/MSIX），以 AUMID 标识。
+    Uwp,
     /// macOS 的 `.app` 应用包（`/Applications` 等目录中的 bundle）。
     ///
     /// 枚举跨平台共享，保证宿主与 UI 只面对一套来源词汇；某个取值是否会被
@@ -26,6 +32,9 @@ impl AppSource {
             AppSource::Desktop => "desktop",
             AppSource::Flatpak => "flatpak",
             AppSource::Snap => "snap",
+            AppSource::StartMenu => "start-menu",
+            AppSource::Registry => "registry",
+            AppSource::Uwp => "uwp",
             AppSource::Bundle => "bundle",
         }
     }

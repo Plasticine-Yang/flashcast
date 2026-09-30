@@ -52,15 +52,35 @@ use flashcast_platform::macos::icons::{self as macos_icons, ICON_POINT_SIZE};
 #[cfg(target_os = "macos")]
 use flashcast_platform::shortcut::{HotkeyError as MacosHotkeyError, HotkeyManager as MacosHotkeyManagerTrait};
 
-/// 非 Linux 平台上报告「未覆盖」时给出的复现命令提示。
-#[cfg(all(not(target_os = "linux"), target_os = "windows"))]
-const CROSS_CHECK_HINT: &str = "cargo check -p flashcast-platform --target x86_64-pc-windows-msvc";
-#[cfg(all(not(target_os = "linux"), target_os = "macos"))]
+// 以下是 Windows 真实检查所需的导入。
+#[cfg(target_os = "windows")]
+use std::sync::Arc;
+#[cfg(target_os = "windows")]
+use flashcast_platform::capability::{CapabilityProbe, Support};
+#[cfg(target_os = "windows")]
+use flashcast_platform::focus::FocusTracker;
+#[cfg(target_os = "windows")]
+use flashcast_platform::hotkey::HotkeySpec;
+#[cfg(target_os = "windows")]
+use flashcast_platform::launch::AppLauncher;
+#[cfg(target_os = "windows")]
+use flashcast_platform::launch_request::LaunchRequest;
+#[cfg(target_os = "windows")]
+use flashcast_platform::shortcut::HotkeyManager;
+#[cfg(target_os = "windows")]
+use flashcast_platform::windows::{
+    WindowsAppCatalog, WindowsCapabilityProbe, WindowsFocusTracker, WindowsHotkeyManager,
+    WindowsLauncher,
+};
+
+/// 只在 macOS 等尚未实现真实适配的平台上报告「未覆盖」时给出的复现命令提示。
+#[cfg(target_os = "macos")]
 const CROSS_CHECK_HINT: &str = "cargo check -p flashcast-platform --target x86_64-apple-darwin";
-#[cfg(all(not(target_os = "linux"), not(any(target_os = "windows", target_os = "macos"))))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const CROSS_CHECK_HINT: &str = "cargo check -p flashcast-platform";
 
-/// 探测当前环境能力。Linux 与 macOS 用真实探测器，其余平台用「不支持」桩实现。
+/// 探测当前环境能力。Linux、Windows 与 macOS 用各自的真实探测器，其余平台用
+/// 「不支持」桩实现。
 fn probe_capabilities() -> Capabilities {
     #[cfg(target_os = "linux")]
     {
@@ -70,7 +90,11 @@ fn probe_capabilities() -> Capabilities {
     {
         flashcast_platform::macos::MacosCapabilityProbe::new().probe()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        WindowsCapabilityProbe::new().probe()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         flashcast_platform::current().capabilities.probe()
     }
@@ -354,7 +378,12 @@ fn main() {
         checks.extend(macos_checks(&capabilities));
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        checks.extend(windows_checks(&capabilities));
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         checks.extend(uncovered_checks(&capabilities));
     }
@@ -364,6 +393,322 @@ fn main() {
     } else {
         print_human(&capabilities, &checks);
     }
+}
+
+/// Windows 平台的检查列表。
+///
+/// 每一项都调用**真实实现**（真实扫描、真实 `CreateProcessW`/`ShellExecuteW`、
+/// 真实 `RegisterHotKey`、真实焦点读写），并按「实测通过 / 实测失败 / 未覆盖」如实
+/// 报告。id 与 Linux 侧对齐，另外补上 Windows 独有的 `apps.launch`、`focus.restore`
+/// 与 `win.shell`。
+#[cfg(target_os = "windows")]
+fn windows_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
+    use flashcast_platform::focus::FocusError;
+    use flashcast_platform::windows::session;
+
+    let command = "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string();
+    let json_command =
+        "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json".to_string();
+    let desktop = session::desktop_session();
+    let mut checks = Vec::new();
+
+    // 1. 会话判定：Windows 上不存在 X11/Wayland 分类，探测本身总能给出确定答案。
+    checks.push(CheckResult {
+        id: "session.detect",
+        title: "桌面会话判定",
+        status: Status::MeasuredPass,
+        detail: format!(
+            "Windows 会话（不适用 X11/Wayland 分类）：{}；GetForegroundWindow={}，GetShellWindow={}",
+            desktop.label_zh(),
+            desktop.foreground_window,
+            desktop.shell_window
+        ),
+        command: command.clone(),
+    });
+
+    // 2. 软件发现：开始菜单 + 注册表 + 打包应用三个来源都真实扫描。
+    let catalog = WindowsAppCatalog::new();
+    let outcome = catalog.scan_detailed();
+    let with_icons = outcome
+        .entries
+        .iter()
+        .filter(|entry| entry.icon.as_ref().and_then(|icon| icon.path.as_ref()).is_some())
+        .count();
+    let (status, detail) = if outcome.start_menu_roots_present == 0
+        && outcome.registry_keys_seen == 0
+        && outcome.uwp_seen == 0
+    {
+        (
+            Status::NotCovered,
+            format!(
+                "没有可读的开始菜单目录，注册表与打包应用来源也没有返回数据（可能是无桌面会话）；\
+                 开始菜单根={:?}",
+                outcome.start_menu_roots
+            ),
+        )
+    } else if outcome.entries.is_empty() {
+        (
+            Status::MeasuredFail,
+            format!(
+                "来源存在但没有可启动条目：开始菜单根存在 {} 个，扫描快捷方式 {} 个，\
+                 注册表子键 {} 个，打包应用 {} 个，跳过 {} 条",
+                outcome.start_menu_roots_present,
+                outcome.shortcuts_seen,
+                outcome.registry_keys_seen,
+                outcome.uwp_seen,
+                outcome.skipped.len()
+            ),
+        )
+    } else {
+        (
+            Status::MeasuredPass,
+            format!(
+                "发现 {} 个可启动条目：开始菜单快捷方式 {} 个（{} 次走 IShellLinkW 纠正），\
+                 注册表子键 {} 个，打包应用 {} 个；其中 {} 个解析到图标文件、抽取失败 {} 次；\
+                 跳过 {} 条",
+                outcome.entries.len(),
+                outcome.shortcuts_seen,
+                outcome.shell_corrections,
+                outcome.registry_keys_seen,
+                outcome.uwp_seen,
+                with_icons,
+                outcome.icons_failed,
+                outcome.skipped.len()
+            ),
+        )
+    };
+    checks.push(CheckResult {
+        id: "apps.discovery",
+        title: "Windows 软件发现（开始菜单 / 注册表 / 打包应用）",
+        status,
+        detail,
+        command: json_command.clone(),
+    });
+
+    // 3. 真实启动：一个有效目标必须成功，一个失效目标必须报错（绝不静默成功）。
+    let launcher = WindowsLauncher::new();
+    let comspec = std::env::var("ComSpec")
+        .unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string());
+    let positive = launcher.launch(&LaunchRequest::new(comspec.clone()).with_args(["/c", "exit"]));
+    let missing = r"C:\Flashcast\definitely-missing\nope.exe";
+    let negative = launcher.launch(&LaunchRequest::new(missing));
+    let (status, detail) = match (&positive, &negative) {
+        (Ok(receipt), Err(error)) => (
+            Status::MeasuredPass,
+            format!(
+                "用 {comspec} /c exit 启动成功（pid={:?}）；失效路径按预期报错：{error}",
+                receipt.pid
+            ),
+        ),
+        (Err(error), _) => (
+            Status::MeasuredFail,
+            format!("启动 {comspec} 失败：{error}"),
+        ),
+        (Ok(receipt), Ok(_)) => (
+            Status::MeasuredFail,
+            format!(
+                "失效路径 {missing} 被当成启动成功（pid={:?}），违反「失效入口必须报错」",
+                receipt.pid
+            ),
+        ),
+    };
+    checks.push(CheckResult {
+        id: "apps.launch",
+        title: "启动真实目标与失效条目报错",
+        status,
+        detail,
+        command: command.clone(),
+    });
+
+    // 4~5. 焦点读取与恢复。
+    let focus = WindowsFocusTracker::new();
+    let captured = focus.capture();
+    checks.push(match &captured {
+        Ok(app) => CheckResult {
+            id: "focus.capture",
+            title: "读取唤起前前台应用",
+            status: Status::MeasuredPass,
+            detail: format!(
+                "读取到 id={} name={} pid={:?} window={:?}",
+                app.id, app.name, app.pid, app.window
+            ),
+            command: command.clone(),
+        },
+        Err(FocusError::Unsupported { reason }) => CheckResult {
+            id: "focus.capture",
+            title: "读取唤起前前台应用",
+            status: Status::NotCovered,
+            detail: reason.clone(),
+            command: command.clone(),
+        },
+        Err(error) => CheckResult {
+            id: "focus.capture",
+            title: "读取唤起前前台应用",
+            status: Status::MeasuredFail,
+            detail: error.to_string(),
+            command: command.clone(),
+        },
+    });
+    checks.push(match &captured {
+        Err(FocusError::Unsupported { reason }) => CheckResult {
+            id: "focus.restore",
+            title: "把焦点还给唤起前应用",
+            status: Status::NotCovered,
+            detail: format!("没有可交互桌面，未尝试恢复焦点：{reason}"),
+            command: command.clone(),
+        },
+        Ok(app) => match focus.restore(app) {
+            Ok(()) => CheckResult {
+                id: "focus.restore",
+                title: "把焦点还给唤起前应用",
+                status: Status::MeasuredPass,
+                detail: format!("ShowWindow(SW_RESTORE)+SetForegroundWindow 把焦点还给 {} 并在回读校验中一致", app.name),
+                command: command.clone(),
+            },
+            Err(error) => CheckResult {
+                id: "focus.restore",
+                title: "把焦点还给唤起前应用",
+                status: Status::MeasuredFail,
+                detail: format!("{}（Windows 可能拒绝前台切换，UI 需退回手动粘贴）", error),
+                command: command.clone(),
+            },
+        },
+        Err(error) => CheckResult {
+            id: "focus.restore",
+            title: "把焦点还给唤起前应用",
+            status: Status::NotCovered,
+            detail: format!("未能先捕获前台应用，因此未尝试恢复：{error}"),
+            command: command.clone(),
+        },
+    });
+
+    // 6. 全局快捷键：真实注册并立即注销。
+    let hotkeys = WindowsHotkeyManager::new();
+    let spec = HotkeySpec::parse("Ctrl+Alt+F12").expect("固定检查用快捷键必须可解析");
+    let hotkey_check = if !desktop.interactive() {
+        CheckResult {
+            id: "hotkey.register",
+            title: "全局快捷键注册",
+            status: Status::NotCovered,
+            detail: "没有可交互桌面会话，RegisterHotKey 无法工作".to_string(),
+            command: command.clone(),
+        }
+    } else {
+        match hotkeys.register(&spec, Arc::new(|| {})) {
+            Ok(handle) => {
+                let _ = hotkeys.unregister(&handle);
+                CheckResult {
+                    id: "hotkey.register",
+                    title: "全局快捷键注册",
+                    status: Status::MeasuredPass,
+                    detail: format!("注册并注销 {} 成功", spec.canonical()),
+                    command: command.clone(),
+                }
+            }
+            Err(flashcast_platform::shortcut::HotkeyError::BackendUnavailable { reason }) => {
+                CheckResult {
+                    id: "hotkey.register",
+                    title: "全局快捷键注册",
+                    status: Status::NotCovered,
+                    detail: reason,
+                    command: command.clone(),
+                }
+            }
+            Err(error) => CheckResult {
+                id: "hotkey.register",
+                title: "全局快捷键注册",
+                status: Status::MeasuredFail,
+                detail: error.to_string(),
+                command: command.clone(),
+            },
+        }
+    };
+    checks.push(hotkey_check);
+
+    // 7. 剪贴板与自动粘贴：ticket 08/09/10 才实现，这里只如实报告环境前提。
+    for (id, title, support) in [
+        (
+            "clipboard.text",
+            "剪贴板文字读写",
+            capabilities.clipboard.clone(),
+        ),
+        (
+            "paste.auto",
+            "自动粘贴到唤起前应用",
+            capabilities.auto_paste.clone(),
+        ),
+    ] {
+        let (status, detail) = match &support {
+            Support::Supported => (Status::MeasuredPass, "支持".to_string()),
+            Support::Unsupported { reason } => (Status::MeasuredFail, reason.clone()),
+            Support::Unknown { reason } => (Status::NotCovered, reason.clone()),
+        };
+        checks.push(CheckResult {
+            id,
+            title,
+            status,
+            detail,
+            command: command.clone(),
+        });
+    }
+
+    // 8. Windows shell 环境：真实检查 explorer.exe 与 PowerShell 是否可用
+    //    （打包应用枚举依赖后者）。
+    let windir = std::env::var("WINDIR").ok();
+    let explorer = format!(
+        "{}\\explorer.exe",
+        windir.as_deref().unwrap_or(r"C:\Windows")
+    );
+    let explorer_present = std::path::Path::new(&explorer).is_file();
+    let powershell = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$PSVersionTable.PSVersion.ToString()",
+        ])
+        .output();
+    let (powershell_status, powershell_detail) = match powershell {
+        Ok(output) if output.status.success() => (
+            Status::MeasuredPass,
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ),
+        Ok(output) => (
+            Status::MeasuredFail,
+            format!("退出码 {:?}", output.status.code()),
+        ),
+        Err(error) => (Status::MeasuredFail, error.to_string()),
+    };
+    checks.push(CheckResult {
+        id: "win.shell",
+        title: "Windows shell 环境（explorer / PowerShell）",
+        status: if explorer_present && powershell_status == Status::MeasuredPass {
+            Status::MeasuredPass
+        } else {
+            Status::MeasuredFail
+        },
+        detail: format!(
+            "WINDIR={:?}，ComSpec={:?}，{} 存在={}，PowerShell={}（{}）",
+            windir,
+            std::env::var("ComSpec").ok(),
+            explorer,
+            explorer_present,
+            powershell_detail,
+            powershell_status.label_zh()
+        ),
+        command: command.clone(),
+    });
+
+    // 9. X11/EWMH 只存在于 Linux 会话。
+    checks.push(CheckResult {
+        id: "x11.diagnostics",
+        title: "X11/EWMH 诊断",
+        status: Status::NotCovered,
+        detail: "X11 / EWMH 只存在于 Linux 会话，Windows 上不适用".to_string(),
+        command: command.clone(),
+    });
+
+    checks
 }
 
 fn print_human(capabilities: &flashcast_platform::capability::Capabilities, checks: &[CheckResult]) {
@@ -546,13 +891,13 @@ fn print_json(
     }
 }
 
-/// 复现「编译」检查的命令：Linux 是本机构建，其他平台是交叉 `cargo check`。
+/// 复现「编译」检查的命令：Linux 与 Windows 是本机构建，其余平台是交叉 `cargo check`。
 fn compile_command() -> String {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         "cargo build -p flashcast-platform --bin flashcast-platform-check".to_string()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         CROSS_CHECK_HINT.to_string()
     }
@@ -803,11 +1148,11 @@ fn macos_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
     checks
 }
 
-/// 既非 Linux 也非 macOS 的目标上的检查列表。
+/// Linux / Windows / macOS 之外的目标上的检查列表。
 ///
 /// id 与标题和 Linux 侧保持一致，状态一律为「未覆盖」，并写明原因：
-/// 这些能力的真实实现由后续的 Windows ticket 提供，本平台目前只保证能编译。
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// 这些能力的真实实现由后续平台 ticket 提供，本平台目前只保证能编译。
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 fn uncovered_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
     let os = capabilities.os.as_str();
     let unchecked = |id: &'static str, title: &'static str, what: &str| CheckResult {
