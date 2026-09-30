@@ -43,6 +43,8 @@ pub enum SettingsError {
     InvalidPluginTimeout(u64),
     #[error("设置序列化失败：{0}")]
     Serialize(String),
+    #[error("设置无法写入配置工作区：{0}")]
+    Workspace(String),
 }
 
 impl Settings {

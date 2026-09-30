@@ -6,14 +6,17 @@
 //! - 搜索结果的排序完全确定，与目录读取顺序无关。
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use flashcast_platform::capability::{Capabilities, CapabilityProbe};
 use flashcast_platform::catalog::{AppCatalog, AppEntry};
 use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
 
+use crate::device::DeviceStore;
 use crate::model::{
     ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview,
     QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES, COMMAND_PREFIX,
@@ -23,6 +26,8 @@ use crate::plugin::{PluginScope, SearchContext};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
 use crate::registry::PluginRegistry;
 use crate::settings::{Settings, SettingsError};
+use crate::watch::WorkspaceWatcher;
+use crate::workspace::{Workspace, WorkspaceError, WorkspaceReload, WorkspaceStatus};
 
 /// 宿主的注入依赖。不含任何 Tauri 类型。
 #[derive(Clone)]
@@ -31,6 +36,9 @@ pub struct HostDeps {
     pub launcher: Arc<dyn AppLauncher>,
     pub capabilities: Arc<dyn CapabilityProbe>,
     pub plugins: Arc<PluginRegistry>,
+    /// 设备本地数据根目录（应用数据目录）。工作区之外的本机数据都放这里：
+    /// 当前工作区的路径、缓存、设备路径、权限状态、日志与凭证。
+    pub device_dir: PathBuf,
 }
 
 /// 一次查询历史。`back()` 用它恢复此前的查询、范围与选择。
@@ -54,6 +62,12 @@ struct HostInner {
     /// 已进入的插件范围对象。ticket 01 只用它验证 `back()` 与范围切换。
     plugin_scopes: HashMap<String, Box<dyn PluginScope>>,
     settings: Settings,
+    /// 当前配置工作区；`None` 表示尚未关联。
+    workspace: Option<Workspace>,
+    /// 最近一次工作区失败的中文原因。
+    workspace_error: Option<String>,
+    /// 已应用的外部重载次数（自写抑制的观测点）。
+    reloads: u64,
 }
 
 impl HostInner {
@@ -72,6 +86,10 @@ pub struct Host {
     inner: Mutex<HostInner>,
     seq: AtomicU64,
     deps: HostDeps,
+    /// 设备本地存储：位于应用数据目录，与配置工作区分离。
+    device: DeviceStore,
+    /// 当前工作区的文件监听器。切换工作区时整体替换。
+    watch: Mutex<Option<WorkspaceWatcher>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -86,7 +104,11 @@ enum SearchMode {
 
 impl Host {
     /// 构造宿主。首次扫描在此完成，扫描失败会记录为提示，不影响宿主创建。
+    ///
+    /// 构造时会尝试恢复上次使用的配置工作区（指针保存在设备本地存储里）；
+    /// 恢复失败不影响宿主可用性，只把原因记录到工作区状态。
     pub fn new(deps: HostDeps, settings: Settings) -> Self {
+        let device = DeviceStore::new(deps.device_dir.clone());
         let host = Self {
             inner: Mutex::new(HostInner {
                 input: String::new(),
@@ -99,11 +121,17 @@ impl Host {
                 history: Vec::new(),
                 plugin_scopes: HashMap::new(),
                 settings,
+                workspace: None,
+                workspace_error: None,
+                reloads: 0,
             }),
             seq: AtomicU64::new(0),
             deps,
+            device,
+            watch: Mutex::new(None),
         };
         host.rescan_catalog();
+        host.restore_workspace();
         host
     }
 
@@ -116,16 +144,220 @@ impl Host {
         &self.deps.plugins
     }
 
+    /// 设备本地数据存储（应用数据目录）。
+    pub fn device(&self) -> &DeviceStore {
+        &self.device
+    }
+
     pub fn settings(&self) -> Settings {
         lock(&self.inner).settings.clone()
     }
 
-    /// 更新设置。无效设置被拒绝，保留上一次可用状态。
+    /// 更新设置：先落到工作区文件，成功后才改为生效状态。
+    ///
+    /// 未关联工作区时设置只在内存中生效（`workspace_status().persisted == false`）。
+    /// 写入失败时保留上一次可用状态并返回中文原因。
     pub fn update_settings(&self, settings: Settings) -> Result<Settings, SettingsError> {
         settings.validate()?;
+        self.persist_settings(&settings)?;
         let mut inner = lock(&self.inner);
         inner.settings = settings.clone();
         Ok(settings)
+    }
+
+    /// 当前工作区与它的有效性。
+    pub fn workspace_status(&self) -> WorkspaceStatus {
+        let inner = lock(&self.inner);
+        match &inner.workspace {
+            Some(workspace) => {
+                let mut status = WorkspaceStatus::linked(workspace);
+                status.error = inner.workspace_error.clone();
+                status.valid = inner.workspace_error.is_none();
+                status
+            }
+            None => WorkspaceStatus::unlinked(inner.workspace_error.clone()),
+        }
+    }
+
+    /// 把一个已存在的本地仓库 / 目录关联为当前工作区。
+    ///
+    /// 先校验目标目录与它已有的配置；失败时当前工作区与有效设置都保持不变。
+    pub fn select_workspace(&self, path: &Path) -> Result<WorkspaceStatus, WorkspaceError> {
+        let workspace = Workspace::open(path)?;
+        self.activate_workspace(workspace)
+    }
+
+    /// 在新目录（必须为空或不存在）上初始化工作区**及其 Git 仓库**。
+    ///
+    /// 非空目录一律拒绝，绝不覆盖已有用户文件。
+    pub fn init_workspace(&self, path: &Path) -> Result<WorkspaceStatus, WorkspaceError> {
+        let workspace = Workspace::init(path)?;
+        self.activate_workspace(workspace)
+    }
+
+    /// Git 操作忙标志：置位期间丢弃工作区文件事件。
+    ///
+    /// ticket 15/16 的 status / commit / pull 用它包住整个 Git 操作，操作结束后按
+    /// Git 状态显式重建界面（见 [`crate::watch`] 的模块文档）。
+    pub fn set_git_busy(&self, busy: bool) {
+        if let Some(watcher) = lock(&self.watch).as_ref() {
+            watcher.set_git_busy(busy);
+        }
+    }
+
+    /// 已应用的外部重载次数。
+    pub fn workspace_reloads(&self) -> u64 {
+        lock(&self.inner).reloads
+    }
+
+    /// 显式重新读取工作区配置（UI 的「重新检测」入口）。
+    pub fn reload_workspace(&self) -> WorkspaceReload {
+        let path = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.settings_path(),
+            None => return self.unchanged_reload(PathBuf::new()),
+        };
+        self.reload_from_workspace(&path)
+    }
+
+    /// 等待并处理一次外部修改。
+    ///
+    /// 阻塞至多 `timeout`：超时、没有工作区或事件被自写抑制层吞掉时返回 `None`。
+    /// 外壳在后台线程里循环调用它并把结果推送给 UI。
+    pub fn wait_for_workspace_change(&self, timeout: Duration) -> Option<WorkspaceReload> {
+        let changed = {
+            let watch = lock(&self.watch);
+            watch.as_ref()?.next_change(timeout)?
+        };
+        Some(self.reload_from_workspace(&changed))
+    }
+
+    /// 按外部修改重新加载配置。无效配置保留上一次有效状态并给出中文原因。
+    fn reload_from_workspace(&self, changed: &Path) -> WorkspaceReload {
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return self.unchanged_reload(changed.to_path_buf()),
+        };
+        match workspace.read_settings() {
+            // 幂等：内容与生效设置一致时不做任何事，写入循环在此终止。
+            Ok(Some(settings)) if settings == self.settings() => WorkspaceReload {
+                path: changed.to_path_buf(),
+                applied: false,
+                settings,
+                error: None,
+            },
+            Ok(Some(settings)) => {
+                let mut inner = lock(&self.inner);
+                inner.settings = settings.clone();
+                inner.workspace_error = None;
+                inner.reloads += 1;
+                let applied = inner.reloads;
+                drop(inner);
+                let _ = applied;
+                WorkspaceReload {
+                    path: changed.to_path_buf(),
+                    applied: true,
+                    settings,
+                    error: None,
+                }
+            }
+            Ok(None) => WorkspaceReload {
+                path: changed.to_path_buf(),
+                applied: false,
+                settings: self.settings(),
+                error: Some(format!(
+                    "设置文件已不存在，继续使用上一次有效设置（{}）",
+                    workspace.settings_path().display()
+                )),
+            },
+            Err(error) => {
+                let message = error.to_string();
+                lock(&self.inner).workspace_error = Some(message.clone());
+                WorkspaceReload {
+                    path: changed.to_path_buf(),
+                    applied: false,
+                    settings: self.settings(),
+                    error: Some(message),
+                }
+            }
+        }
+    }
+
+    fn unchanged_reload(&self, path: PathBuf) -> WorkspaceReload {
+        WorkspaceReload {
+            path,
+            applied: false,
+            settings: self.settings(),
+            error: None,
+        }
+    }
+
+    /// 让一个已校验的工作区成为当前工作区，并开始监听它的变更。
+    fn activate_workspace(
+        &self,
+        workspace: Workspace,
+    ) -> Result<WorkspaceStatus, WorkspaceError> {
+        // 先读设置：无效则整体拒绝，当前工作区与设置原样保留。
+        let loaded = workspace.read_settings()?;
+        let watcher = WorkspaceWatcher::start(workspace.root(), workspace.git_dir().map(Path::to_path_buf))
+            .map_err(|error| WorkspaceError::Watch(error.to_string()))?;
+        {
+            let mut inner = lock(&self.inner);
+            if let Some(settings) = loaded {
+                inner.settings = settings;
+            }
+            inner.workspace = Some(workspace.clone());
+            inner.workspace_error = None;
+        }
+        *lock(&self.watch) = Some(watcher);
+        // 记住本机路径，重启后恢复。这是设备本地数据，不写进工作区。
+        if let Err(error) = self.device.set_workspace_path(Some(workspace.root())) {
+            lock(&self.inner).workspace_error = Some(error.to_string());
+        }
+        Ok(self.workspace_status())
+    }
+
+    /// 启动时恢复上次使用的配置工作区。
+    fn restore_workspace(&self) {
+        let path = match self.device.workspace_path() {
+            Ok(Some(path)) => path,
+            Ok(None) => return,
+            Err(error) => {
+                lock(&self.inner).workspace_error = Some(error.to_string());
+                return;
+            }
+        };
+        let workspace = match Workspace::open(&path) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                lock(&self.inner).workspace_error =
+                    Some(format!("上次使用的配置工作区已不可用：{error}"));
+                return;
+            }
+        };
+        // 已有设置文件但无效时不切换，保留构造时传入的设置并说明原因。
+        if let Err(error) = self.activate_workspace(workspace) {
+            lock(&self.inner).workspace_error =
+                Some(format!("上次使用的配置工作区无法恢复：{error}"));
+        }
+    }
+
+    /// 把设置写入当前工作区文件。
+    fn persist_settings(&self, settings: &Settings) -> Result<(), SettingsError> {
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return Ok(()),
+        };
+        let bytes = settings.to_toml()?.into_bytes();
+        {
+            let watch = lock(&self.watch);
+            if let Some(watcher) = watch.as_ref() {
+                // 先记账再写文件：监听回调可能在写入后立刻看到事件。
+                watcher.record_self_write(&workspace.settings_path(), &bytes);
+            }
+        }
+        workspace
+            .write_settings_bytes(&bytes)
+            .map_err(|error| SettingsError::Workspace(error.to_string()))
     }
 
     /// 平台能力快照（如实反映当前环境）。
