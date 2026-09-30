@@ -19,6 +19,10 @@ serde_json = { workspace = true }
 # 必须保留默认 feature `serde`：0.6.4 的源码无条件使用 `#[serde(skip)]`，
 # 关闭默认 feature 会直接编译失败。
 lnk = "0.6.4"
+# Windows 图标抽取（`IShellItemImageFactory::GetImage`）得到的像素要编码成 PNG。
+# 放在通用依赖而不是 Windows 专属依赖：像素编码是纯逻辑，`windows_fixture.rs`
+# 在 Linux 上以真实像素做往返验证，因此必须在开发机上可编译。
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 global-hotkey = "0.8.0"
@@ -44,7 +48,6 @@ windows = { version = "0.62.2", features = [
 # 只读注册表，不需要 9 MB 的 `windows` bindings；用 wow64_32/wow64_64 视图，
 # 而不是拼接 WOW6432Node 字符串。
 windows-registry = "0.100.0"
-image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [[bin]]
 name = "flashcast-platform-check"
