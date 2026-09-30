@@ -26,6 +26,8 @@ pub mod cap;
 #[cfg(target_os = "windows")]
 pub mod catalog;
 #[cfg(target_os = "windows")]
+pub mod clipboard;
+#[cfg(target_os = "windows")]
 pub mod focus;
 #[cfg(target_os = "windows")]
 pub mod hotkeys;
@@ -38,6 +40,8 @@ pub mod session;
 pub use cap::WindowsCapabilityProbe;
 #[cfg(target_os = "windows")]
 pub use catalog::WindowsAppCatalog;
+#[cfg(target_os = "windows")]
+pub use clipboard::WindowsClipboard;
 #[cfg(target_os = "windows")]
 pub use focus::WindowsFocusTracker;
 #[cfg(target_os = "windows")]

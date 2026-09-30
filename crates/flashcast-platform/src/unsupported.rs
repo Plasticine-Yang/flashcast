@@ -8,6 +8,7 @@
 
 use crate::capability::{Capabilities, CapabilityProbe, Support};
 use crate::catalog::{AppCatalog, AppEntry, CatalogError};
+use crate::clipboard::{ClipboardAccess, ClipboardError};
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
 use crate::launch::{AppLauncher, LaunchError, LaunchReceipt};
@@ -15,6 +16,16 @@ use crate::launch_request::LaunchRequest;
 use crate::shortcut::{HotkeyError, HotkeyHandle, HotkeyManager, PressCallback};
 
 const REASON: &str = "当前平台的实现尚未提供（由后续平台 ticket 完成）";
+
+pub struct UnsupportedClipboard;
+
+impl ClipboardAccess for UnsupportedClipboard {
+    fn write_text(&self, _text: &str) -> Result<(), ClipboardError> {
+        Err(ClipboardError::Unsupported {
+            reason: REASON.to_string(),
+        })
+    }
+}
 
 pub struct UnsupportedCatalog;
 

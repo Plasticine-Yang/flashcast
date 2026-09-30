@@ -11,6 +11,7 @@
 
 pub mod bundle;
 pub mod cap;
+pub mod clipboard;
 pub mod focus;
 pub mod hotkeys;
 pub mod icons;
@@ -23,6 +24,7 @@ pub mod catalog;
 pub use cap::MacosCapabilityProbe;
 #[cfg(target_os = "macos")]
 pub use catalog::MacosAppCatalog;
+pub use clipboard::MacosClipboard;
 #[cfg(target_os = "macos")]
 pub use focus::{accessibility_granted, MacosFocusTracker};
 #[cfg(target_os = "macos")]

@@ -8,7 +8,7 @@
 //!   manifest.json         插件清单：标识、种类、版本与启用状态（JSON）
 //!   theme.json            当前选中的主题（JSON）
 //!   themes/<主题 id>/theme.json  已安装的本地主题包（声明式 JSON）
-//!   memos/*.md            带 front matter 的 Markdown 备忘录（ticket 13）
+//!   memos/*.md            带 front matter 的 Markdown 备忘录（ticket 07）
 //! ```
 //!
 //! 本模块只负责工作区**本身**：目录校验、Git 仓库识别、配置文件的位置与原子读写。
@@ -261,6 +261,18 @@ impl Workspace {
         self.root.join(THEMES_DIR)
     }
 
+    /// 备忘录目录（`memos/`）。
+    pub fn memos_dir(&self) -> PathBuf {
+        self.root.join(MEMOS_DIR)
+    }
+
+    /// 某条备忘录的文件（`memos/<id>.md`）。标识由 [`crate::memo::is_valid_memo_id`] 保证
+    /// 不含路径分隔符，因此不会越出 `memos/`。
+    pub fn memo_path(&self, id: &str) -> PathBuf {
+        self.memos_dir()
+            .join(format!("{id}.{}", crate::memo::MEMO_EXTENSION))
+    }
+
     /// 某个本地主题包的目录（`themes/<id>/`）。
     pub fn theme_package_dir(&self, theme_id: &str) -> PathBuf {
         self.themes_dir().join(theme_id)
@@ -387,22 +399,15 @@ pub fn workspace_remote_of(repo: &git2::Repository) -> Option<WorkspaceRemote> {
         .unwrap_or_else(|| "main".to_string());
 
     // 上游：branch.<name>.remote 与 branch.<name>.merge（克隆会自动写好）。
-    let upstream = repo
-        .config()
-        .ok()
-        .and_then(|config| {
-            let remote_name = config
-                .get_string(&format!("branch.{branch}.remote"))
-                .ok()?;
-            if remote_name == "." {
-                return None;
-            }
-            let merge = config
-                .get_string(&format!("branch.{branch}.merge"))
-                .ok()?;
-            let short = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
-            Some(format!("{remote_name}/{short}"))
-        });
+    let upstream = repo.config().ok().and_then(|config| {
+        let remote_name = config.get_string(&format!("branch.{branch}.remote")).ok()?;
+        if remote_name == "." {
+            return None;
+        }
+        let merge = config.get_string(&format!("branch.{branch}.merge")).ok()?;
+        let short = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
+        Some(format!("{remote_name}/{short}"))
+    });
 
     Some(WorkspaceRemote {
         name,

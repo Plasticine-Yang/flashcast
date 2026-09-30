@@ -11,8 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use flashcast_platform::capability::{Capabilities, CapabilityProbe};
+use flashcast_platform::capability::{Capabilities, CapabilityProbe, Support};
 use flashcast_platform::catalog::{AppCatalog, AppEntry};
+use flashcast_platform::clipboard::ClipboardAccess;
 use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
 
@@ -20,12 +21,13 @@ use crate::clone::{self, CloneControl, CloneOutcome, CloneProgress, CredentialPr
 use crate::device::{CredentialStore, DeviceStore, StoredToken};
 use crate::git::{CommitOutcome, GitError, WorkspaceChanges};
 use crate::manifest::{ManifestEntry, ManifestError, PluginManifestFile};
+use crate::memo::{self, Memo, MemoBook, MemoError, MemoProblem};
 use crate::model::{
     ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview,
     QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES, COMMAND_PREFIX,
     COMMAND_RESCAN, HOST_SOURCE,
 };
-use crate::plugin::{PluginKind, PluginScope, SearchContext};
+use crate::plugin::{PluginKind, PluginScope, SearchContext, CAP_CLIPBOARD_WRITE};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
 use crate::registry::PluginRegistry;
 use crate::settings::{Settings, SettingsError};
@@ -44,6 +46,9 @@ pub struct HostDeps {
     pub catalog: Arc<dyn AppCatalog>,
     pub launcher: Arc<dyn AppLauncher>,
     pub capabilities: Arc<dyn CapabilityProbe>,
+    /// 剪贴板（ADR §5）。只有宿主在命令入口里经权限校验后调用它；
+    /// 功能插件拿不到这个句柄。
+    pub clipboard: Arc<dyn ClipboardAccess>,
     pub plugins: Arc<PluginRegistry>,
     /// 设备本地数据根目录（应用数据目录）。工作区之外的本机数据都放这里：
     /// 当前工作区的路径、缓存、设备路径、权限状态、日志与凭证。
@@ -68,8 +73,9 @@ struct HostInner {
     apps_error: Option<String>,
     plugin_failures: Vec<PluginFailure>,
     history: Vec<HistoryEntry>,
-    /// 已进入的插件范围对象。ticket 01 只用它验证 `back()` 与范围切换。
-    plugin_scopes: HashMap<String, Box<dyn PluginScope>>,
+    /// 已进入的插件范围对象。用 `Arc` 持有，范围搜索才能放进带超时的隔离线程
+    /// （ADR §6：插件任务具有隔离、取消与超时）。
+    plugin_scopes: HashMap<String, Arc<dyn PluginScope>>,
     settings: Settings,
     /// 插件清单：插件标识、种类、版本与启用状态。主题与功能插件共用。
     manifest: PluginManifestFile,
@@ -122,6 +128,9 @@ pub struct Host {
     inner: Mutex<HostInner>,
     seq: AtomicU64,
     deps: HostDeps,
+    /// 备忘录的**生效内容**。宿主在成功写入工作区之后更新它，功能插件只读快照：
+    /// 插件因此不持有工作区路径，也无法绕过宿主直接改文件（ADR §6）。
+    memos: Arc<MemoBook>,
     /// 设备本地存储：位于应用数据目录，与配置工作区分离。
     device: DeviceStore,
     /// 设备本地的 Git 凭证（https 令牌）；与工作区严格分离。
@@ -183,6 +192,7 @@ impl Host {
             }),
             seq: AtomicU64::new(0),
             deps,
+            memos: Arc::new(MemoBook::new()),
             device,
             credentials,
             watch: Mutex::new(None),
@@ -442,6 +452,10 @@ impl Host {
     }
 
     /// 工作区记录为「停用」但本机没有对应实现的插件 id（如实报告，不假装已恢复）。
+    ///
+    /// 两个来源都算「工作区的记录」：清单里 `enabled = false` 的功能插件条目，
+    /// 以及一次性迁移用的历史字段 `settings.toml` 的 `disabledPlugins`（ticket 07 起
+    /// 只在清单还没有该插件条目时生效）。本机有实现的 id 不算「缺失」。
     fn unavailable_plugins(&self) -> Vec<String> {
         let known: std::collections::HashSet<String> = self
             .deps
@@ -450,10 +464,13 @@ impl Host {
             .into_iter()
             .map(|(manifest, _enabled)| manifest.id)
             .collect();
-        let mut missing: Vec<String> = self
-            .settings()
-            .disabled_plugins
-            .into_iter()
+        let mut missing: Vec<String> = lock(&self.inner)
+            .manifest
+            .entries()
+            .iter()
+            .filter(|entry| entry.kind == PluginKind::Feature && !entry.enabled)
+            .map(|entry| entry.id.clone())
+            .chain(self.settings().disabled_plugins)
             .filter(|id| !known.contains(id))
             .collect();
         missing.sort();
@@ -604,8 +621,7 @@ impl Host {
         // 其它工作区文件（manifest.json / theme.json / themes/<id>/theme.json）变化时
         // settings.toml 通常原封不动，这里若一并短路，就会把主题与清单的外部修改吞掉；
         // 因此先按文件名判断这次改的是不是设置文件。
-        let settings_file_changed =
-            changed.file_name() == workspace.settings_path().file_name();
+        let settings_file_changed = changed.file_name() == workspace.settings_path().file_name();
         if settings_file_changed
             && incoming_hash.is_some()
             && incoming_hash == lock(&self.inner).applied_settings_hash
@@ -644,36 +660,36 @@ impl Host {
         // （主题 / 清单）时 settings.toml 往往没变，提前返回会把那次外部修改吞掉；
         // 真正的「什么都没变」由下面 `applied` 与消息共同判定。
 
-        let (applied, settings_changed) = {
+        // 备忘录内容（`memos/*.md`）：整个目录重新读取后与**已生效内容**比对。
+        // 解析后相同就不算一次重载（文本变了、语义没变），与设置文件同一判据。
+        let memos_changed = self.load_memos(&workspace);
+
+        let applied = {
             let mut inner = lock(&self.inner);
-            let mut applied = false;
-            let mut settings_changed = false;
+            let mut applied = memos_changed;
             if let Some(settings) = settings {
                 if settings != inner.settings {
                     inner.settings = settings;
                     applied = true;
-                    settings_changed = true;
                 }
             }
             // 外部重载生效也必须刷新已应用哈希，否则同一内容会被反复重载。
             if let Some(hash) = incoming_hash {
                 inner.applied_settings_hash = Some(hash);
             }
-            let (theme_changed, theme_reason) =
+            let (config_changed, theme_reason) =
                 self.apply_workspace_config(&mut inner, &workspace, false);
-            applied |= theme_changed;
+            applied |= config_changed;
             inner.theme_notice = theme_reason;
             if applied {
                 inner.workspace_error = None;
                 inner.reloads += 1;
             }
-            (applied, settings_changed)
+            applied
         };
-        // 外部修改的插件启停也要真正生效（已有功能读取其中内容）。只在设置真的变了时
-        // 应用一次，避免把清单里刚读到的启停状态覆盖回去（见 [`Host::plugin_manifests`]）。
-        if settings_changed {
-            self.apply_plugin_choices(&self.settings().disabled_plugins);
-        }
+        // 外部修改的插件启停也要真正生效。清单是唯一权威，因此这里无条件按清单
+        // 重放一次启停（幂等；避免上一次请求留下的注册表状态覆盖刚读到的清单）。
+        self.apply_manifest_plugin_state();
         if applied {
             self.record_outcome(changed, "applied");
         } else if messages.is_empty() {
@@ -744,11 +760,22 @@ impl Host {
         let mut changed = false;
         let mut reason: Option<String> = None;
 
+        let legacy = inner.settings.disabled_plugins.clone();
         // 1. 插件清单。文件不存在时保留当前清单（例如用户还没提交过）。
         match workspace.read_config_text(&workspace.manifest_path()) {
             Ok(Some(text)) => match PluginManifestFile::from_json(&text) {
                 Ok(file) => {
-                    let extras = self.expected_manifest_extras();
+                    // 清单文件里已有的条目 id：这些条目的启停以文件为权威。
+                    let file_ids: Vec<String> = file
+                        .entries()
+                        .iter()
+                        .map(|entry| entry.id.clone())
+                        .collect();
+                    let extras = self.seed_legacy_disabled(
+                        &legacy,
+                        &file_ids,
+                        self.expected_manifest_extras(),
+                    );
                     let (merged, _) = file.merged_with(extras);
                     if merged != inner.manifest {
                         inner.manifest = merged;
@@ -758,8 +785,11 @@ impl Host {
                 Err(error) => reason = Some(format!("插件清单无效：{error}")),
             },
             Ok(None) if activation => {
-                let (merged, _) = PluginManifestFile::defaults()
-                    .merged_with(self.expected_manifest_extras());
+                // 没有清单文件：默认条目 + 已注册的功能插件都从内存默认值来，
+                // 因此历史 `disabledPlugins` 对它们全都算「清单里还没有条目」。
+                let extras =
+                    self.seed_legacy_disabled(&legacy, &[], self.expected_manifest_extras());
+                let (merged, _) = PluginManifestFile::defaults().merged_with(extras);
                 if merged != inner.manifest {
                     inner.manifest = merged;
                     changed = true;
@@ -841,10 +871,9 @@ impl Host {
                 Ok(None) => inner
                     .theme_library
                     .mark_broken(id, format!("主题包文件不存在：{}", path.display())),
-                Err(error) => inner.theme_library.mark_broken(
-                    id,
-                    format!("无法读取主题包 {}：{error}", path.display()),
-                ),
+                Err(error) => inner
+                    .theme_library
+                    .mark_broken(id, format!("无法读取主题包 {}：{error}", path.display())),
             }
         }
         // 清单里已经不存在的本地主题从库里清掉。
@@ -903,9 +932,13 @@ impl Host {
             let (_, theme_reason) = self.apply_workspace_config(&mut inner, &workspace, true);
             inner.theme_notice = theme_reason;
         }
-        // 工作区记录的插件启停立刻生效：克隆 / 切换后已有功能随即按新选择工作。
-        self.apply_plugin_choices(&self.settings().disabled_plugins);
+        // 工作区记录的插件启停立刻生效（清单是唯一权威）：克隆 / 切换后已有功能
+        // 随即按新选择工作。
+        self.apply_manifest_plugin_state();
+        // 新监听器先生效，读备忘录时的自读记账才能落在正确的监听器上。
         *lock(&self.watch) = Some(watcher);
+        // 备忘录：切换工作区时以目标工作区为准（读到的内容就是生效内容）。
+        self.load_memos(&workspace);
         if bootstrap {
             // 新工作区写出默认文件（清单与主题选择），让用户可以手写、提交和同步。
             self.bootstrap_workspace_files(&workspace);
@@ -917,18 +950,66 @@ impl Host {
         Ok(self.workspace_status())
     }
 
-    /// 把工作区记录的插件启停选择应用到插件注册表。
+    /// 把**清单**里的功能插件启停状态应用到插件注册表。
     ///
-    /// `disabledPlugins` 是工作区里的可迁移偏好（ticket 05 的 `settings.toml`），
-    /// 这里是「已有功能读取其中内容」的落点；本机没有对应实现的 id 由
-    /// [`Host::unavailable_plugins`] 如实报告，不会被静默当成已恢复。
-    fn apply_plugin_choices(&self, disabled: &[String]) {
-        for (manifest, enabled) in self.deps.plugins.manifests() {
-            let should_enable = !disabled.iter().any(|id| id == &manifest.id);
-            if enabled != should_enable {
-                self.deps.plugins.set_enabled(&manifest.id, should_enable);
+    /// 插件清单（`manifest.json`）是启停状态的**唯一权威**：ticket 06 的
+    /// `Settings::disabled_plugins` 只是 ticket 01 的历史字段，仅在清单里还没有该插件
+    /// 条目时用作一次性迁移（见 [`Host::seed_legacy_disabled`]），不再覆盖清单里的选择。
+    /// 本机没有对应实现的 id 由 [`Host::unavailable_plugins`] 如实报告。
+    fn apply_manifest_plugin_state(&self) {
+        let entries = lock(&self.inner).manifest.entries().to_vec();
+        for entry in entries {
+            if entry.kind == PluginKind::Feature {
+                self.deps.plugins.set_enabled(&entry.id, entry.enabled);
             }
         }
+    }
+
+    /// 注册随应用提供的官方功能插件（ticket 07 起：备忘录）。
+    ///
+    /// 实现随应用编译进来（与内置主题一样），而「有哪些插件、是否启用」以工作区的
+    /// `manifest.json` 为唯一权威：注册后把清单里的条目按既有启用状态补进内存清单，
+    /// 再把清单里的启停应用到注册表。`Host::new` **不**自动调用它，因为清单的补全
+    /// 会改变「只有默认主题」时的清单内容；外壳与需要真实插件的调用方显式调用。
+    pub fn install_official_plugins(&self) {
+        crate::plugins::register_official(&self.deps.plugins, &self.memos);
+        let merged = {
+            let inner = lock(&self.inner);
+            let (merged, _) = inner
+                .manifest
+                .clone()
+                .merged_with(self.expected_manifest_extras());
+            merged
+        };
+        lock(&self.inner).manifest = merged;
+        self.apply_manifest_plugin_state();
+    }
+
+    /// 一次性迁移 ticket 01/05 的历史字段 `disabledPlugins`。
+    ///
+    /// 只对**清单文件里还没有条目**的插件生效：清单一旦记录了某个插件的启停，
+    /// 它就是这个插件的唯一权威，设置文件里的旧记录不能再覆盖用户后来的选择。
+    /// 关联已有工作区时仍然只读，不把迁移结果写回任何文件。
+    fn seed_legacy_disabled(
+        &self,
+        legacy: &[String],
+        file_ids: &[String],
+        entries: Vec<ManifestEntry>,
+    ) -> Vec<ManifestEntry> {
+        if legacy.is_empty() {
+            return entries;
+        }
+        entries
+            .into_iter()
+            .map(|mut entry| {
+                if !file_ids.iter().any(|id| id == &entry.id)
+                    && legacy.iter().any(|id| id == &entry.id)
+                {
+                    entry.enabled = false;
+                }
+                entry
+            })
+            .collect()
     }
 
     /// 为刚初始化的空工作区写出默认清单与主题配置。只在这个入口调用，
@@ -936,8 +1017,8 @@ impl Host {
     fn bootstrap_workspace_files(&self, workspace: &Workspace) {
         let manifest_path = workspace.manifest_path();
         if let Ok(None) = workspace.read_config_text(&manifest_path) {
-            let (merged, _) = PluginManifestFile::defaults()
-                .merged_with(self.expected_manifest_extras());
+            let (merged, _) =
+                PluginManifestFile::defaults().merged_with(self.expected_manifest_extras());
             if let Ok(bytes) = merged.to_json().map(String::into_bytes) {
                 if self
                     .persist_workspace_file(|_| manifest_path.clone(), &bytes)
@@ -1060,6 +1141,158 @@ impl Host {
     }
 
     // -----------------------------------------------------------------------
+    // 备忘录
+    // -----------------------------------------------------------------------
+
+    /// 备忘录插件是否存在于清单中且处于启用状态。
+    ///
+    /// 停用插件后不贡献结果也不接受写入：管理界面属于该插件的能力范围。
+    pub fn memo_plugin_enabled(&self) -> bool {
+        lock(&self.inner)
+            .manifest
+            .get(crate::plugins::MEMO_PLUGIN_ID)
+            .map(|entry| entry.kind == PluginKind::Feature && entry.enabled)
+            .unwrap_or(false)
+            && self.deps.plugins.is_enabled(crate::plugins::MEMO_PLUGIN_ID)
+    }
+
+    /// 当前生效的备忘录（按标识排序，与目录读取顺序无关）。
+    pub fn memos(&self) -> Vec<Memo> {
+        self.memos.snapshot().memos
+    }
+
+    /// 无法读取的备忘录文件（保留可用内容并如实报告原因）。
+    pub fn memo_problems(&self) -> Vec<MemoProblem> {
+        self.memos.snapshot().problems
+    }
+
+    /// 新建一条备忘录。未关联工作区或插件已停用时拒绝。
+    pub fn create_memo(&self, title: &str, tags: &[String], body: &str) -> Result<Memo, MemoError> {
+        let workspace = self.memo_workspace()?;
+        let memo = Memo {
+            id: memo::new_memo_id(),
+            title: validate_title(title)?,
+            tags: normalize_tags(tags),
+            body: validate_body(body)?,
+        };
+        let bytes = memo.to_markdown().into_bytes();
+        let path = workspace.memo_path(&memo.id);
+        self.persist_workspace_file(|_| path.clone(), &bytes)?;
+        self.upsert_memo(memo.clone());
+        Ok(memo)
+    }
+
+    /// 修改一条已存在的备忘录（标识不变）。
+    pub fn update_memo(
+        &self,
+        id: &str,
+        title: &str,
+        tags: &[String],
+        body: &str,
+    ) -> Result<Memo, MemoError> {
+        let workspace = self.memo_workspace()?;
+        if self.memos.find(id).is_none() {
+            return Err(MemoError::NotFound(id.to_string()));
+        }
+        let memo = Memo {
+            id: id.to_string(),
+            title: validate_title(title)?,
+            tags: normalize_tags(tags),
+            body: validate_body(body)?,
+        };
+        let bytes = memo.to_markdown().into_bytes();
+        let path = workspace.memo_path(&memo.id);
+        self.persist_workspace_file(|_| path.clone(), &bytes)?;
+        self.upsert_memo(memo.clone());
+        Ok(memo)
+    }
+
+    /// 删除一条备忘录（同时删除工作区里的文件）。
+    pub fn delete_memo(&self, id: &str) -> Result<(), MemoError> {
+        let workspace = self.memo_workspace()?;
+        if self.memos.find(id).is_none() {
+            return Err(MemoError::NotFound(id.to_string()));
+        }
+        let path = workspace.memo_path(id);
+        // 自写抑制：删除同样要记账，否则监听会把这次删除上报成一次外部修改
+        // （见 `ChangeFilter::record_self_delete`）。
+        if let Some(watcher) = lock(&self.watch).as_ref() {
+            watcher.record_self_delete(&path);
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(MemoError::Io(error.to_string())),
+        }
+        let mut snapshot = self.memos.snapshot();
+        snapshot.memos.retain(|memo| memo.id != id);
+        snapshot.problems.retain(|problem| problem.path != path);
+        self.memos.replace(snapshot);
+        Ok(())
+    }
+
+    /// 预览某条结果：备忘录按**当前**内容返回完整正文，其它条目返回结果自带的预览。
+    ///
+    /// 这是 ADR §3 的补充入口 `preview(item)`：搜索结果是快照，预览要按需展开。
+    pub fn preview(&self, item_id: &str) -> Option<Preview> {
+        if let Some(memo_id) = crate::plugins::memo::memo_id_from_item_id(item_id) {
+            if let Some(memo) = self.memos.find(memo_id) {
+                return Some(Preview::Text {
+                    title: Some(memo.title),
+                    body: memo.body,
+                });
+            }
+        }
+        self.item_by_id(item_id).map(|item| item.preview)
+    }
+
+    /// 备忘录写入的前置条件：必须关联了配置工作区，且备忘录插件处于启用状态。
+    fn memo_workspace(&self) -> Result<Workspace, MemoError> {
+        if !self.memo_plugin_enabled() {
+            return Err(MemoError::PluginDisabled);
+        }
+        match &lock(&self.inner).workspace {
+            Some(workspace) => Ok(workspace.clone()),
+            None => Err(MemoError::NoWorkspace),
+        }
+    }
+
+    /// 把一条备忘录写进生效内容（工作区文件已经写好）。
+    fn upsert_memo(&self, memo: Memo) {
+        let mut snapshot = self.memos.snapshot();
+        snapshot.memos.retain(|existing| existing.id != memo.id);
+        // 同名的坏文件（无法解析的旧内容）问题记录随之消失。
+        let memo_id = memo.id.clone();
+        snapshot.problems.retain(|problem| {
+            problem
+                .path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .as_deref()
+                != Some(memo_id.as_str())
+        });
+        snapshot.memos.push(memo);
+        snapshot.memos.sort_by(|a, b| a.id.cmp(&b.id));
+        self.memos.replace(snapshot);
+    }
+
+    /// 从工作区读取备忘录并更新生效内容。返回生效内容是否发生变化。
+    ///
+    /// 读取的每一个文件都记进监听账本（[`Self::record_own_read`]）：macOS 的 FSEvents
+    /// 会把这次读上报成修改事件（见 `crate::watch` 的模块文档）。
+    fn load_memos(&self, workspace: &Workspace) -> bool {
+        let before = self.memos.snapshot();
+        let snapshot = memo::read_dir_with(&workspace.memos_dir(), &|path, bytes| {
+            self.record_own_read(path, bytes)
+        });
+        if snapshot == before {
+            return false;
+        }
+        self.memos.replace(snapshot);
+        true
+    }
+
+    // -----------------------------------------------------------------------
     // 主题
     // -----------------------------------------------------------------------
 
@@ -1112,9 +1345,7 @@ impl Host {
         if document.is_builtin() {
             return Err(ThemeError::Builtin("覆盖", document.id.clone()));
         }
-        let workspace = self
-            .workspace()?
-            .ok_or(ThemeError::NoWorkspace("安装"))?;
+        let workspace = self.workspace()?.ok_or(ThemeError::NoWorkspace("安装"))?;
         let package = workspace.theme_package_path(&document.id);
         let bytes = document.to_json()?.into_bytes();
         self.persist_workspace_file(|_| package.clone(), &bytes)
@@ -1132,7 +1363,8 @@ impl Host {
             )
         };
         let _ = entry;
-        self.persist_manifest(&manifest).map_err(|error| ThemeError::Workspace(error.to_string()))?;
+        self.persist_manifest(&manifest)
+            .map_err(|error| ThemeError::Workspace(error.to_string()))?;
         Ok(self.theme_state())
     }
 
@@ -1150,9 +1382,7 @@ impl Host {
         if !entry.origin.removable() {
             return Err(ThemeError::Builtin("移除", entry.name.clone()));
         }
-        let workspace = self
-            .workspace()?
-            .ok_or(ThemeError::NoWorkspace("移除"))?;
+        let workspace = self.workspace()?.ok_or(ThemeError::NoWorkspace("移除"))?;
         let dir = workspace.theme_package_dir(id);
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => {}
@@ -1177,10 +1407,11 @@ impl Host {
             };
             (inner.manifest.clone(), fallback)
         };
-        self.persist_manifest(&manifest).map_err(|error| ThemeError::Workspace(error.to_string()))?;
-        let notice = fallback.as_ref().map(|_| {
-            format!("主题「{}」已移除，已切换回「浅色」", entry.name)
-        });
+        self.persist_manifest(&manifest)
+            .map_err(|error| ThemeError::Workspace(error.to_string()))?;
+        let notice = fallback
+            .as_ref()
+            .map(|_| format!("主题「{}」已移除，已切换回「浅色」", entry.name));
         if let Some(selection) = fallback {
             let bytes = selection.to_json()?.into_bytes();
             self.persist_workspace_file(|workspace| workspace.theme_path(), &bytes)
@@ -1199,25 +1430,24 @@ impl Host {
     pub fn set_plugin_enabled(&self, id: &str, enabled: bool) -> Result<(), ManifestError> {
         let (manifest, selection, notice) = {
             let mut inner = lock(&self.inner);
-            let entry = inner.manifest.get(id).cloned().ok_or_else(|| {
-                ManifestError::invalid(format!("插件清单里没有这个标识：{id}"))
-            })?;
+            let entry =
+                inner.manifest.get(id).cloned().ok_or_else(|| {
+                    ManifestError::invalid(format!("插件清单里没有这个标识：{id}"))
+                })?;
             inner.manifest.set_enabled(id, enabled);
             if entry.kind == PluginKind::Feature {
                 self.deps.plugins.set_enabled(id, enabled);
             }
             let mut notice = None;
-            let selection = if entry.kind == PluginKind::Theme
-                && !enabled
-                && inner.selected_theme == id
-            {
-                inner.selected_theme = THEME_LIGHT.to_string();
-                inner.theme_error = None;
-                notice = Some(format!("主题「{}」已停用，已切换回「浅色」", entry.name));
-                Some(ThemeSelection::new(THEME_LIGHT))
-            } else {
-                None
-            };
+            let selection =
+                if entry.kind == PluginKind::Theme && !enabled && inner.selected_theme == id {
+                    inner.selected_theme = THEME_LIGHT.to_string();
+                    inner.theme_error = None;
+                    notice = Some(format!("主题「{}」已停用，已切换回「浅色」", entry.name));
+                    Some(ThemeSelection::new(THEME_LIGHT))
+                } else {
+                    None
+                };
             (inner.manifest.clone(), selection, notice)
         };
         self.persist_manifest(&manifest)?;
@@ -1271,10 +1501,12 @@ impl Host {
                     entry.name
                 ))
             }
-            Some(entry) if !entry.enabled => error = Some(format!(
-                "主题「{}」已停用，继续使用上一次可用外观",
-                entry.name
-            )),
+            Some(entry) if !entry.enabled => {
+                error = Some(format!(
+                    "主题「{}」已停用，继续使用上一次可用外观",
+                    entry.name
+                ))
+            }
             Some(_) => {
                 let resolved = inner
                     .theme_library
@@ -1286,7 +1518,8 @@ impl Host {
                     });
                 match resolved {
                     Ok((document, tokens)) => {
-                        inner.theme_appearance = document.resolved_appearance(inner.system_appearance);
+                        inner.theme_appearance =
+                            document.resolved_appearance(inner.system_appearance);
                         inner.theme_tokens = tokens;
                     }
                     Err(failure) => error = Some(failure.to_string()),
@@ -1326,7 +1559,9 @@ impl Host {
                     enabled: entry.enabled,
                     selected: entry.id == selected,
                     builtin: entry.origin == crate::manifest::PluginOrigin::Builtin,
-                    appearance: entry.appearance.unwrap_or(crate::theme::ThemeAppearance::Light),
+                    appearance: entry
+                        .appearance
+                        .unwrap_or(crate::theme::ThemeAppearance::Light),
                     usable,
                     error: theme_error,
                 }
@@ -1480,9 +1715,54 @@ impl Host {
         match item.kind {
             ItemKind::Application => self.execute_application(item),
             ItemKind::Command => self.execute_command(item),
+            ItemKind::Memo => self.execute_memo(item),
             other => ActionOutcome::failed(format!(
                 "当前版本尚不支持执行这类条目（{other:?}），相关功能将在后续版本提供"
             )),
+        }
+    }
+
+    /// 备忘录的默认操作：复制内容。
+    ///
+    /// 权限校验放在**原生边界**：来源插件必须在清单里、已启用，并且声明了
+    /// `clipboard.write`；随后才调用平台剪贴板适配层。自动粘贴（ticket 08）不在本切片，
+    /// 因此成功状态是「已复制，需手动粘贴」，并给出准确的中文反馈。
+    fn execute_memo(&self, item: &SearchItem) -> ActionOutcome {
+        let Some(memo_id) = crate::plugins::memo::memo_id_from_item_id(&item.id) else {
+            return ActionOutcome::failed(format!("无法识别的备忘录条目：{}", item.id));
+        };
+        let entry = lock(&self.inner).manifest.get(&item.source).cloned();
+        let Some(entry) = entry.filter(|entry| entry.kind == PluginKind::Feature) else {
+            return ActionOutcome::failed(format!(
+                "结果来源「{}」不在插件清单里，已拒绝执行",
+                item.source
+            ));
+        };
+        if !entry.enabled || !self.deps.plugins.is_enabled(&item.source) {
+            return ActionOutcome::failed(format!("插件「{}」已停用，已拒绝执行", entry.name));
+        }
+        if !entry.to_feature_manifest().requires(CAP_CLIPBOARD_WRITE) {
+            return ActionOutcome::failed(format!(
+                "插件「{}」没有声明 {} 能力，宿主不会替它写入剪贴板",
+                entry.name, CAP_CLIPBOARD_WRITE
+            ));
+        }
+        if let Support::Unsupported { reason } = self.capabilities().clipboard {
+            return ActionOutcome::failed(format!("系统剪贴板不可用：{reason}"));
+        }
+        // 内容以工作区里**当前**的内容为准：列表可能是上一次查询的快照。
+        let Some(memo) = self.memos.find(memo_id) else {
+            return ActionOutcome::failed(format!(
+                "找不到「{}」对应的备忘录，可能已被删除或改名，请重新查询",
+                item.title
+            ));
+        };
+        match self.deps.clipboard.write_text(&memo.body) {
+            Ok(()) => ActionOutcome::copied_needs_manual_paste(format!(
+                "已复制「{}」到剪贴板；自动粘贴由后续版本提供，请手动粘贴",
+                memo.title
+            )),
+            Err(error) => ActionOutcome::failed(format!("无法复制「{}」：{error}", memo.title)),
         }
     }
 
@@ -1592,7 +1872,9 @@ impl Host {
                     scope: inner.scope.clone(),
                     selection: inner.selection,
                 });
-                inner.plugin_scopes.insert(manifest.id.clone(), scope);
+                inner
+                    .plugin_scopes
+                    .insert(manifest.id.clone(), Arc::from(scope));
                 inner.scope = QueryScope::Plugin {
                     id: manifest.id.clone(),
                     keyword: normalized.clone(),
@@ -1724,10 +2006,15 @@ impl Host {
         ctx: &SearchContext,
         plugin_id: &str,
     ) -> (Vec<RankedItem>, Vec<PluginFailure>) {
-        let Some(scope) = inner.plugin_scopes.get(plugin_id) else {
+        let Some(scope) = inner.plugin_scopes.get(plugin_id).cloned() else {
             return (Vec::new(), Vec::new());
         };
-        match scope.search(ctx) {
+        // 范围搜索与首屏搜索共用同一条隔离边界：独立线程 + 超时 + panic 捕获。
+        match self
+            .deps
+            .plugins
+            .search_scope(plugin_id, scope, ctx, inner.settings.plugin_timeout())
+        {
             Ok(items) => {
                 let ranked = items
                     .into_iter()
@@ -1740,14 +2027,7 @@ impl Host {
                     .collect();
                 (ranked, Vec::new())
             }
-            Err(error) => (
-                Vec::new(),
-                vec![PluginFailure {
-                    plugin_id: plugin_id.to_string(),
-                    reason: error.to_string(),
-                    kind: crate::model::PluginFailureKind::Error,
-                }],
-            ),
+            Err(failure) => (Vec::new(), vec![failure]),
         }
     }
 
@@ -1807,4 +2087,39 @@ fn application_item(entry: &AppEntry, score: Score) -> SearchItem {
         preview: Preview::None,
         score,
     }
+}
+
+/// 校验备忘录标题。标题是识别条目的主要依据，不允许为空。
+fn validate_title(title: &str) -> Result<String, MemoError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(MemoError::Invalid("备忘录标题不能为空".to_string()));
+    }
+    if title.chars().count() > 200 {
+        return Err(MemoError::Invalid(
+            "备忘录标题过长（最多 200 个字符）".to_string(),
+        ));
+    }
+    Ok(title.to_string())
+}
+
+/// 校验并规范化正文。
+fn validate_body(body: &str) -> Result<String, MemoError> {
+    if body.trim().is_empty() {
+        return Err(MemoError::Invalid("备忘录正文不能为空".to_string()));
+    }
+    Ok(body.trim_end().to_string())
+}
+
+/// 规范化标签：去空白、去空项、去重（保持顺序）。
+fn normalize_tags(tags: &[String]) -> Vec<String> {
+    let mut normalized: Vec<String> = Vec::new();
+    for tag in tags {
+        let tag = tag.trim();
+        if tag.is_empty() || normalized.iter().any(|existing| existing == tag) {
+            continue;
+        }
+        normalized.push(tag.to_string());
+    }
+    normalized
 }

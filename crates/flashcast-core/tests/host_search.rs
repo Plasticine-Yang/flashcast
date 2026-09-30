@@ -44,7 +44,12 @@ fn search_by_chinese_application_name_finds_the_application() {
 #[test]
 fn search_result_carries_name_and_icon() {
     let (host, _launcher) = host_with(
-        vec![app_rich("code", "Visual Studio Code", "代码编辑器", &["editor"])],
+        vec![app_rich(
+            "code",
+            "Visual Studio Code",
+            "代码编辑器",
+            &["editor"],
+        )],
         fast_settings(),
     );
 
@@ -115,7 +120,11 @@ fn ranking_prefers_prefix_then_substring_then_metadata() {
     );
 
     let response = host.query("fire");
-    let titles: Vec<&str> = response.items.iter().map(|item| item.title.as_str()).collect();
+    let titles: Vec<&str> = response
+        .items
+        .iter()
+        .map(|item| item.title.as_str())
+        .collect();
 
     assert_eq!(
         titles,
@@ -157,16 +166,22 @@ fn rescan_reflects_newly_installed_application() {
     use std::sync::Arc;
 
     use flashcast_core::{Host, HostDeps, PluginRegistry};
-    use flashcast_platform::fake::{FakeAppCatalog, FakeCapabilityProbe, FakeLauncher};
+    use flashcast_platform::fake::{
+        FakeAppCatalog, FakeCapabilityProbe, FakeClipboard, FakeLauncher,
+    };
 
     let catalog = Arc::new(FakeAppCatalog::with_scan_results(vec![
         Ok(vec![app("firefox", "Firefox")]),
-        Ok(vec![app("firefox", "Firefox"), app("code", "Visual Studio Code")]),
+        Ok(vec![
+            app("firefox", "Firefox"),
+            app("code", "Visual Studio Code"),
+        ]),
     ]));
     let deps = HostDeps {
         catalog,
         launcher: Arc::new(FakeLauncher::always_succeeds()),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
+        clipboard: Arc::new(FakeClipboard::new()),
         plugins: Arc::new(PluginRegistry::new()),
         device_dir: support::unique_dir("device"),
     };
@@ -176,9 +191,10 @@ fn rescan_reflects_newly_installed_application() {
 
     let response = host.rescan();
 
-    assert_eq!(host.query("visual").items.len(), 1, "重新扫描后应发现新软件");
-    assert!(
-        response.notice.is_some(),
-        "重新扫描必须给出可见反馈"
+    assert_eq!(
+        host.query("visual").items.len(),
+        1,
+        "重新扫描后应发现新软件"
     );
+    assert!(response.notice.is_some(), "重新扫描必须给出可见反馈");
 }

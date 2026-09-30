@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::capability::{Capabilities, CapabilityProbe, OsKind, SessionType, Support};
 use crate::catalog::{AppCatalog, AppEntry, CatalogError};
+use crate::clipboard::{ClipboardAccess, ClipboardError};
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
 use crate::launch::{AppLauncher, LaunchError, LaunchReceipt};
@@ -15,7 +16,9 @@ use crate::launch_request::LaunchRequest;
 use crate::shortcut::{HotkeyError, HotkeyHandle, HotkeyManager, PressCallback};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// 可控的软件目录替身。`scan` 依次返回预先设定的结果序列，
@@ -168,9 +171,7 @@ impl FocusTracker for FakeFocusTracker {
         if let Some(error) = lock(&self.error).clone() {
             return Err(error);
         }
-        lock(&self.active)
-            .clone()
-            .ok_or(FocusError::NoActiveWindow)
+        lock(&self.active).clone().ok_or(FocusError::NoActiveWindow)
     }
 
     fn restore(&self, app: &FocusedApp) -> Result<(), FocusError> {
@@ -178,6 +179,59 @@ impl FocusTracker for FakeFocusTracker {
             return Err(error);
         }
         lock(&self.restored).push(app.clone());
+        Ok(())
+    }
+}
+
+/// 记录写入内容的剪贴板替身。
+///
+/// `failures` 非空时按顺序返回失败（用尽后重复最后一个），用于验证「复制失败必须给出
+/// 准确反馈」；默认总是成功。
+#[derive(Default)]
+pub struct FakeClipboard {
+    writes: Mutex<Vec<String>>,
+    failures: Mutex<Vec<ClipboardError>>,
+}
+
+impl FakeClipboard {
+    /// 总是成功。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 总是返回同一个失败原因。
+    pub fn always_fails(error: ClipboardError) -> Self {
+        Self {
+            writes: Mutex::new(Vec::new()),
+            failures: Mutex::new(vec![error]),
+        }
+    }
+
+    /// 已写入的文本，按顺序。
+    pub fn writes(&self) -> Vec<String> {
+        lock(&self.writes).clone()
+    }
+
+    /// 最近一次写入的文本。
+    pub fn last_write(&self) -> Option<String> {
+        lock(&self.writes).last().cloned()
+    }
+
+    pub fn write_count(&self) -> usize {
+        lock(&self.writes).len()
+    }
+}
+
+impl ClipboardAccess for FakeClipboard {
+    fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
+        crate::clipboard::check_text(text)?;
+        let failures = lock(&self.failures);
+        if !failures.is_empty() {
+            let index = lock(&self.writes).len().min(failures.len() - 1);
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        lock(&self.writes).push(text.to_string());
         Ok(())
     }
 }

@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use crate::model::{PluginFailure, PluginFailureKind, SearchItem, SourceId};
-use crate::plugin::{FeaturePlugin, Keyword, PluginError, PluginManifest, PluginScope, SearchContext};
+use crate::plugin::{
+    FeaturePlugin, Keyword, PluginError, PluginManifest, PluginScope, SearchContext,
+};
 
 struct RegisteredPlugin {
     plugin: Arc<dyn FeaturePlugin>,
@@ -24,7 +26,9 @@ pub struct PluginRegistry {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// 某个插件搜索的产出。
@@ -137,39 +141,48 @@ impl PluginRegistry {
         }
         outcome
     }
+
+    /// 运行一次插件范围搜索。与首屏搜索同样有超时、取消与 panic 隔离（ADR §6）：
+    /// 插件报错、无响应或 panic 时本轮返回 [`PluginFailure`]，宿主自身结果与其他
+    /// 插件不受影响，搜索线程也不会被卡住。
+    pub fn search_scope(
+        &self,
+        plugin_id: &str,
+        scope: Arc<dyn PluginScope>,
+        ctx: &SearchContext,
+        timeout: Duration,
+    ) -> Result<Vec<SearchItem>, PluginFailure> {
+        let (sender, receiver) = mpsc::channel::<PluginOutcome>();
+        let scope_id = plugin_id.to_string();
+        let thread_ctx = ctx.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name(format!("flashcast-plugin-scope-{plugin_id}"))
+            .spawn(move || {
+                let payload = match catch_unwind(AssertUnwindSafe(|| scope.search(&thread_ctx))) {
+                    Ok(Ok(items)) => PluginOutcome::Items(items),
+                    Ok(Err(error)) => PluginOutcome::Failed(error),
+                    Err(_) => PluginOutcome::Panicked,
+                };
+                // 接收端可能已因超时退出，发送失败无需处理。
+                let _ = sender.send(payload);
+            });
+        if let Err(error) = spawn_result {
+            return Err(PluginFailure {
+                plugin_id: scope_id,
+                reason: format!("无法启动插件搜索线程：{error}"),
+                kind: PluginFailureKind::Error,
+            });
+        }
+        collect(receiver, timeout, scope_id)
+    }
 }
 
-/// 在独立线程中运行插件搜索，隔离超时、错误与 panic。
-fn run_isolated(
-    plugin: Arc<dyn FeaturePlugin>,
-    ctx: SearchContext,
+/// 收集插件搜索线程的结果，把超时、错误与 panic 归一成 [`PluginFailure`]。
+fn collect(
+    receiver: mpsc::Receiver<PluginOutcome>,
     timeout: Duration,
+    plugin_id: String,
 ) -> Result<Vec<SearchItem>, PluginFailure> {
-    let plugin_id = plugin.manifest().id;
-    let (sender, receiver) = mpsc::channel::<PluginOutcome>();
-    let thread_plugin = Arc::clone(&plugin);
-    let thread_ctx = ctx.clone();
-    let spawn_result = std::thread::Builder::new()
-        .name(format!("flashcast-plugin-{plugin_id}"))
-        .spawn(move || {
-            let payload = match catch_unwind(AssertUnwindSafe(|| thread_plugin.search(&thread_ctx))) {
-                Ok(Ok(items)) => PluginOutcome::Items(items),
-                Ok(Err(error)) => PluginOutcome::Failed(error),
-                // panic 与普通错误必须区分，诊断报告才能说明真实原因。
-                Err(_) => PluginOutcome::Panicked,
-            };
-            // 接收端可能已因超时退出，发送失败无需处理。
-            let _ = sender.send(payload);
-        });
-
-    if let Err(error) = spawn_result {
-        return Err(PluginFailure {
-            plugin_id,
-            reason: format!("无法启动插件搜索线程：{error}"),
-            kind: PluginFailureKind::Error,
-        });
-    }
-
     match receiver.recv_timeout(timeout) {
         Ok(PluginOutcome::Items(items)) => Ok(items),
         Ok(PluginOutcome::Failed(error)) => Err(PluginFailure {
@@ -193,6 +206,41 @@ fn run_isolated(
             kind: PluginFailureKind::Panic,
         }),
     }
+}
+
+/// 在独立线程中运行插件搜索，隔离超时、错误与 panic。
+fn run_isolated(
+    plugin: Arc<dyn FeaturePlugin>,
+    ctx: SearchContext,
+    timeout: Duration,
+) -> Result<Vec<SearchItem>, PluginFailure> {
+    let plugin_id = plugin.manifest().id;
+    let (sender, receiver) = mpsc::channel::<PluginOutcome>();
+    let thread_plugin = Arc::clone(&plugin);
+    let thread_ctx = ctx.clone();
+    let spawn_result = std::thread::Builder::new()
+        .name(format!("flashcast-plugin-{plugin_id}"))
+        .spawn(move || {
+            let payload = match catch_unwind(AssertUnwindSafe(|| thread_plugin.search(&thread_ctx)))
+            {
+                Ok(Ok(items)) => PluginOutcome::Items(items),
+                Ok(Err(error)) => PluginOutcome::Failed(error),
+                // panic 与普通错误必须区分，诊断报告才能说明真实原因。
+                Err(_) => PluginOutcome::Panicked,
+            };
+            // 接收端可能已因超时退出，发送失败无需处理。
+            let _ = sender.send(payload);
+        });
+
+    if let Err(error) = spawn_result {
+        return Err(PluginFailure {
+            plugin_id,
+            reason: format!("无法启动插件搜索线程：{error}"),
+            kind: PluginFailureKind::Error,
+        });
+    }
+
+    collect(receiver, timeout, plugin_id)
 }
 
 /// 插件搜索线程的返回值。

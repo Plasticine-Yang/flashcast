@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{QueryScope, SearchItem};
 
+/// 能力标识：写入系统剪贴板的文本。
+///
+/// 功能插件在清单里声明所需能力；宿主在**原生边界**（真正调用平台适配层之前）
+/// 校验声明，未声明的插件拿不到原生能力（ADR §6）。
+pub const CAP_CLIPBOARD_WRITE: &str = "clipboard.write";
+
 /// 插件种类。v0.1.0 的功能插件使用 `Feature`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +59,21 @@ impl PluginManifest {
     {
         self.keywords = keywords.into_iter().map(Into::into).collect();
         self
+    }
+
+    /// 声明所需能力。宿主在原生边界按它做权限校验。
+    pub fn with_capabilities<I, S>(mut self, capabilities: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.capabilities = capabilities.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// 是否声明了某项能力。
+    pub fn requires(&self, capability: &str) -> bool {
+        self.capabilities.iter().any(|item| item == capability)
     }
 
     /// 关键词是否与该输入完整匹配（不区分大小写）。

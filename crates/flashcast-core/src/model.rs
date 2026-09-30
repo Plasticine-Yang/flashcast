@@ -253,6 +253,14 @@ impl ActionOutcome {
         }
     }
 
+    /// 已复制到剪贴板，但需要用户手动粘贴（自动粘贴不可用或尚未提供）。
+    pub fn copied_needs_manual_paste(message: impl Into<String>) -> Self {
+        Self {
+            status: ActionStatus::CopiedNeedsManualPaste,
+            message: Some(message.into()),
+        }
+    }
+
     pub fn failed(message: impl Into<String>) -> Self {
         Self {
             status: ActionStatus::Failed,

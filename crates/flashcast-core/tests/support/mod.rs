@@ -17,7 +17,7 @@ use flashcast_core::{
     PluginRegistry, PluginScope, Preview, Score, SearchContext, SearchItem, Settings,
 };
 use flashcast_platform::catalog::{AppEntry, AppSource, IconRef};
-use flashcast_platform::fake::{FakeAppCatalog, FakeCapabilityProbe, FakeLauncher};
+use flashcast_platform::fake::{FakeAppCatalog, FakeCapabilityProbe, FakeClipboard, FakeLauncher};
 
 /// 构造一个软件条目。
 pub fn app(id: &str, name: &str) -> AppEntry {
@@ -77,7 +77,12 @@ pub fn host_with_device(
     settings: Settings,
 ) -> (Host, Arc<FakeLauncher>, PathBuf) {
     let device_dir = unique_dir("device");
-    let (host, launcher) = build_host(apps, settings, Arc::new(PluginRegistry::new()), device_dir.clone());
+    let (host, launcher) = build_host(
+        apps,
+        settings,
+        Arc::new(PluginRegistry::new()),
+        device_dir.clone(),
+    );
     (host, launcher, device_dir)
 }
 
@@ -108,10 +113,70 @@ pub fn host_restarted(device_dir: &Path, settings: Settings) -> Host {
         catalog: Arc::new(FakeAppCatalog::with_apps(Vec::new())),
         launcher: Arc::new(FakeLauncher::always_succeeds()),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
+        clipboard: Arc::new(FakeClipboard::new()),
         plugins: Arc::new(PluginRegistry::new()),
         device_dir: device_dir.to_path_buf(),
     };
     Host::new(deps, settings)
+}
+
+/// 用同一个设备目录重建宿主，并安装随应用提供的官方功能插件：模拟「重启应用」。
+pub fn official_host_restarted(device_dir: &Path, settings: Settings) -> Host {
+    let host = host_restarted(device_dir, settings);
+    host.install_official_plugins();
+    host
+}
+
+/// 构造带官方功能插件（备忘录）的宿主与剪贴板替身。
+pub fn official_host(
+    apps: Vec<AppEntry>,
+    settings: Settings,
+) -> (Host, Arc<FakeLauncher>, Arc<FakeClipboard>, PathBuf) {
+    official_host_with_device(apps, settings)
+}
+
+/// 同 [`official_host`]，并返回设备本地数据目录。
+pub fn official_host_with_device(
+    apps: Vec<AppEntry>,
+    settings: Settings,
+) -> (Host, Arc<FakeLauncher>, Arc<FakeClipboard>, PathBuf) {
+    let device_dir = unique_dir("device");
+    let launcher = Arc::new(FakeLauncher::always_succeeds());
+    let clipboard = Arc::new(FakeClipboard::new());
+    let deps = HostDeps {
+        catalog: Arc::new(FakeAppCatalog::with_apps(apps)),
+        launcher: launcher.clone(),
+        capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
+        clipboard: clipboard.clone(),
+        plugins: Arc::new(PluginRegistry::new()),
+        device_dir: device_dir.clone(),
+    };
+    let host = Host::new(deps, settings);
+    host.install_official_plugins();
+    (host, launcher, clipboard, device_dir)
+}
+
+/// 同 [`official_host_with_device`]，但使用调用方提供的插件注册表与能力探测。
+pub fn official_host_with_plugins(
+    apps: Vec<AppEntry>,
+    settings: Settings,
+    plugins: Arc<PluginRegistry>,
+    capabilities: Arc<dyn flashcast_platform::CapabilityProbe>,
+    clipboard: Arc<FakeClipboard>,
+) -> (Host, Arc<FakeLauncher>, Arc<FakeClipboard>, PathBuf) {
+    let device_dir = unique_dir("device");
+    let launcher = Arc::new(FakeLauncher::always_succeeds());
+    let deps = HostDeps {
+        catalog: Arc::new(FakeAppCatalog::with_apps(apps)),
+        launcher: launcher.clone(),
+        capabilities,
+        clipboard: clipboard.clone(),
+        plugins,
+        device_dir: device_dir.clone(),
+    };
+    let host = Host::new(deps, settings);
+    host.install_official_plugins();
+    (host, launcher, clipboard, device_dir)
 }
 
 fn build_host(
@@ -125,6 +190,7 @@ fn build_host(
         catalog: Arc::new(FakeAppCatalog::with_apps(apps)),
         launcher: launcher.clone(),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
+        clipboard: Arc::new(FakeClipboard::new()),
         plugins,
         device_dir,
     };
@@ -332,16 +398,21 @@ pub fn git_commit_all(repo: &Path, message: &str) -> git2::Oid {
     index.write().expect("写入索引");
     let tree_oid = index.write_tree().expect("写出树");
     let tree = repository.find_tree(tree_oid).expect("读取树");
-    let signature = repository
-        .signature()
-        .expect("测试仓库必须配置了提交身份");
+    let signature = repository.signature().expect("测试仓库必须配置了提交身份");
     let parents = match repository.head() {
         Ok(head) => vec![head.peel_to_commit().expect("读取 HEAD 提交")],
         Err(_) => Vec::new(),
     };
     let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
     repository
-        .commit(Some("HEAD"), &signature, &signature, message, &tree, &parent_refs)
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parent_refs,
+        )
         .expect("创建测试提交")
 }
 

@@ -104,7 +104,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[derive(Debug, Clone, Copy)]
 struct LedgerEntry {
-    hash: u64,
+    /// 记录的**期望内容**哈希。`None` 表示宿主刚删除了这个文件，之后的
+    /// 「文件不存在」事件同样算自写。
+    hash: Option<u64>,
     at: Instant,
 }
 
@@ -201,10 +203,25 @@ impl ChangeFilter {
         lock(&self.ledger).insert(
             path.to_path_buf(),
             LedgerEntry {
-                hash: hash_bytes(bytes),
+                hash: Some(hash_bytes(bytes)),
                 at,
             },
         );
+    }
+
+    /// 记录一次自身删除。删除后文件不存在，内容哈希无从比对，因此账本里记下
+    /// 「期望不存在」（`hash: None`）：随后 `Remove` 事件到达时判为自写，
+    /// 与自身写入一样被吞掉，不会触发一次外部重载。
+    pub fn record_self_delete(&self, path: &Path) {
+        let now = Instant::now();
+        lock(&self.ledger).insert(
+            path.to_path_buf(),
+            LedgerEntry {
+                hash: None,
+                at: now,
+            },
+        );
+        lock(&self.quiet).insert(path.to_path_buf(), now);
     }
 
     /// Git 操作忙标志。为真时丢弃全部事件。
@@ -285,7 +302,7 @@ impl ChangeFilter {
             let mut ledger = lock(&self.ledger);
             ledger.retain(|_, entry| now.duration_since(entry.at) < LEDGER_TTL);
             match ledger.get(path) {
-                Some(entry) if content_hash(path) == Some(entry.hash) => true,
+                Some(entry) if content_hash(path) == entry.hash => true,
                 _ => false,
             }
         };
@@ -339,9 +356,7 @@ impl ChangeFilter {
                 *dir == OsStr::new(THEMES_DIR) && *file == OsStr::new(THEME_FILE)
             }
             [dir, id, file] => {
-                *dir == OsStr::new(THEMES_DIR)
-                    && *file == OsStr::new(THEME_FILE)
-                    && !id.is_empty()
+                *dir == OsStr::new(THEMES_DIR) && *file == OsStr::new(THEME_FILE) && !id.is_empty()
             }
             _ => false,
         }
@@ -459,6 +474,11 @@ impl WorkspaceWatcher {
     /// 记录宿主自己读到的文件内容（重载读），让随之而来的同内容事件被吞掉。
     pub fn record_own_read(&self, path: &Path, bytes: &[u8]) {
         self.filter.record_own_read(path, bytes);
+    }
+
+    /// 记录宿主自己删除的文件，让随之而来的删除事件被吞掉。
+    pub fn record_self_delete(&self, path: &Path) {
+        self.filter.record_self_delete(path);
     }
 
     /// 记录宿主对一条已接受事件的处理结果（诊断用）。

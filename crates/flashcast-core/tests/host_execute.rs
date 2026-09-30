@@ -9,7 +9,7 @@ use flashcast_core::{
     SearchItem, COMMAND_CAPABILITIES, COMMAND_RESCAN,
 };
 use flashcast_platform::catalog::{AppEntry, AppSource};
-use flashcast_platform::fake::{FakeAppCatalog, FakeCapabilityProbe, FakeLauncher};
+use flashcast_platform::fake::{FakeAppCatalog, FakeCapabilityProbe, FakeClipboard, FakeLauncher};
 use flashcast_platform::launch::LaunchError;
 use support::{app, fast_settings, host_with};
 
@@ -45,7 +45,10 @@ fn execute_launches_application_with_tokenized_argv() {
     assert_eq!(requests[0].program, "/usr/bin/code");
     assert_eq!(
         requests[0].args,
-        vec!["--new-window".to_string(), "/home/user/项目 目录".to_string()]
+        vec![
+            "--new-window".to_string(),
+            "/home/user/项目 目录".to_string()
+        ]
     );
 }
 
@@ -69,7 +72,11 @@ fn execute_passes_arguments_without_shell_interpretation() {
     let outcome = host.execute(&item);
 
     assert_eq!(outcome.status, ActionStatus::Done);
-    let request = launcher.requests().into_iter().next().expect("应有启动请求");
+    let request = launcher
+        .requests()
+        .into_iter()
+        .next()
+        .expect("应有启动请求");
     assert_eq!(request.program, "/usr/bin/printf");
     assert_eq!(
         request.args,
@@ -97,6 +104,7 @@ fn launch_failure_produces_chinese_feedback() {
             program: "/usr/bin/missing".to_string(),
         })),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
+        clipboard: Arc::new(FakeClipboard::new()),
         plugins: Arc::new(PluginRegistry::new()),
         device_dir: support::unique_dir("device"),
     };
@@ -107,8 +115,14 @@ fn launch_failure_produces_chinese_feedback() {
 
     assert_eq!(outcome.status, ActionStatus::Failed);
     let message = outcome.message.expect("失败必须带中文反馈");
-    assert!(message.contains("无法启动"), "反馈应说明启动失败：{message}");
-    assert!(message.contains("不存在的软件"), "反馈应包含软件名：{message}");
+    assert!(
+        message.contains("无法启动"),
+        "反馈应说明启动失败：{message}"
+    );
+    assert!(
+        message.contains("不存在的软件"),
+        "反馈应包含软件名：{message}"
+    );
     assert!(
         message.contains("找不到可执行文件"),
         "反馈应包含底层原因：{message}"
@@ -140,16 +154,19 @@ fn execute_stale_application_item_reports_failure() {
 }
 
 /// 尚不支持的条目种类给出明确反馈，而不是静默失败。
+///
+/// ticket 07 起备忘录已经可以执行（复制），因此这里改用仍未实现的剪贴板历史条目：
+/// 断言的是「未知种类不会静默失败」这条行为，而不是某一个具体种类。
 #[test]
 fn execute_unsupported_item_kind_reports_failure() {
     let (host, _launcher) = host_with(vec![app("a", "Alpha")], fast_settings());
     let memo = SearchItem {
-        id: "memo:1".to_string(),
-        title: "常用回复".to_string(),
+        id: "clipboard:1".to_string(),
+        title: "剪贴板条目".to_string(),
         subtitle: None,
         icon: None,
-        source: "memo".to_string(),
-        kind: ItemKind::Memo,
+        source: "clipboard".to_string(),
+        kind: ItemKind::ClipboardEntry,
         default_action: DefaultAction::Paste,
         preview: Preview::None,
         score: Score::unordered(),
@@ -158,10 +175,7 @@ fn execute_unsupported_item_kind_reports_failure() {
     let outcome = host.execute(&memo);
 
     assert_eq!(outcome.status, ActionStatus::Failed);
-    assert!(outcome
-        .message
-        .expect("应有反馈")
-        .contains("后续版本"));
+    assert!(outcome.message.expect("应有反馈").contains("后续版本"));
 }
 
 /// 空查询中的「重新扫描软件」快速访问项可以执行，并给出反馈。
@@ -179,10 +193,7 @@ fn rescan_command_from_quick_access_executes() {
     let outcome = host.execute(&command);
 
     assert_eq!(outcome.status, ActionStatus::Done);
-    assert!(outcome
-        .message
-        .expect("应给出反馈")
-        .contains("重新扫描"));
+    assert!(outcome.message.expect("应给出反馈").contains("重新扫描"));
 }
 
 /// 「查看平台能力」快速访问项给出真实的能力摘要（替身环境为 X11）。

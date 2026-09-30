@@ -11,8 +11,10 @@ pub mod device;
 pub mod git;
 pub mod host;
 pub mod manifest;
+pub mod memo;
 pub mod model;
 pub mod plugin;
+pub mod plugins;
 pub mod ranking;
 pub mod registry;
 pub mod settings;
@@ -33,15 +35,20 @@ pub use host::{quick_access_commands, Host, HostDeps};
 pub use manifest::{
     ManifestEntry, ManifestError, PluginManifestFile, PluginOrigin, MANIFEST_SCHEMA_VERSION,
 };
+pub use memo::{
+    is_valid_memo_id, new_memo_id, Memo, MemoBook, MemoError, MemoProblem, MemoSnapshot,
+    MEMO_EXTENSION,
+};
 pub use model::{
     ActionOutcome, ActionStatus, BackOutcome, DefaultAction, ItemKind, MatchTier, Notice,
     NoticeLevel, PluginFailure, PluginFailureKind, Preview, QueryResponse, QueryScope, Score,
     SearchItem, SourceId, COMMAND_CAPABILITIES, COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
 pub use plugin::{
-    is_valid_plugin_id, FeaturePlugin, Keyword, PluginError, PluginKind, PluginManifest, PluginScope,
-    SearchContext,
+    is_valid_plugin_id, FeaturePlugin, Keyword, PluginError, PluginKind, PluginManifest,
+    PluginScope, SearchContext, CAP_CLIPBOARD_WRITE,
 };
+pub use plugins::{MemoPlugin, MEMO_PLUGIN_ID};
 pub use ranking::{score_match, sort_ranked, RankedItem};
 pub use registry::{PluginRegistry, PluginSearchOutcome};
 pub use settings::{Settings, SettingsError};

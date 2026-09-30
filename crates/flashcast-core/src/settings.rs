@@ -18,6 +18,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// `deny_unknown_fields` 让拼错的键名直接报错，而不是被静默忽略成默认值：
 /// 「无效配置保留上次有效状态并指出问题」要求错误可见。
+///
+/// `disabledPlugins` 是 ticket 01 的历史字段：插件启停的**唯一权威**是工作区的
+/// `manifest.json`（ticket 06 建立，ticket 07 收口）。这里保留字段是为了仍能读取
+/// 旧工作区，仅在清单里还没有该插件条目时用作一次性迁移，不再覆盖清单里的选择；
+/// 应用也不会再写它。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Settings {
@@ -29,7 +34,7 @@ pub struct Settings {
     pub quick_access_limit: usize,
     /// 每个插件单次搜索的超时（毫秒）。
     pub plugin_timeout_ms: u64,
-    /// 已停用的插件 id。
+    /// 历史字段：旧工作区记录的停用插件。见类型文档。
     pub disabled_plugins: Vec<String>,
 }
 

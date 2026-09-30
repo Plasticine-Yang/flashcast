@@ -45,6 +45,9 @@ windows = { version = "0.62.2", features = [
     "Win32_UI_WindowsAndMessaging", # GetForegroundWindow、SetForegroundWindow、ShowWindow、GetWindowTextW
     "Win32_UI_Input_KeyboardAndMouse", # GetActiveWindow、SetActiveWindow、SetFocus
     "Win32_System_Com", # CoInitializeEx、CoCreateInstance、IPersistFile
+    "Win32_System_DataExchange", # OpenClipboard、EmptyClipboard、SetClipboardData（剪贴板文本）
+    "Win32_System_Memory", # GlobalAlloc、GlobalLock、GlobalUnlock（CF_UNICODETEXT 内存块）
+    "Win32_System_Ole", # CF_UNICODETEXT
     "Win32_System_Threading", # OpenProcess、QueryFullProcessImageNameW、AttachThreadInput
     "Win32_Storage_FileSystem", # WIN32_FIND_DATAW（IShellLinkW::GetPath 的 pfd 参数）
     "Win32_Graphics_Gdi", # HBITMAP、GetDIBits、GetDC（GetImage 在缺少该 feature 时是空槽）

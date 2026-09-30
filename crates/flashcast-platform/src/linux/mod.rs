@@ -5,6 +5,7 @@
 
 pub mod cap;
 pub mod catalog;
+pub mod clipboard;
 pub mod focus;
 pub mod hotkeys;
 pub mod launcher;
@@ -12,6 +13,7 @@ pub mod x11;
 
 pub use cap::LinuxCapabilityProbe;
 pub use catalog::LinuxAppCatalog;
+pub use clipboard::LinuxClipboard;
 pub use focus::LinuxFocusTracker;
 pub use hotkeys::LinuxHotkeyManager;
 pub use launcher::LinuxLauncher;

@@ -24,10 +24,7 @@ impl LinuxCapabilityProbe {
     }
 
     pub fn with_session(session: SessionType, force_x11: bool) -> Self {
-        Self {
-            session,
-            force_x11,
-        }
+        Self { session, force_x11 }
     }
 }
 
@@ -106,7 +103,9 @@ fn clipboard_support(session: SessionType) -> Support {
     match session {
         SessionType::Wayland => match wayland_tool {
             Some(tool) => Support::Unknown {
-                reason: format!("剪贴板适配尚未实现（ticket 09/10 覆盖）；环境已具备 {tool}"),
+                reason: format!(
+                    "文本复制已由 ticket 07 实现；图片、富文本与文件列表尚未实现（ticket 09/10 覆盖）；环境已具备 {tool}"
+                ),
             },
             None => Support::Unsupported {
                 reason: "未找到 wl-copy，Wayland 下无法读写剪贴板".to_string(),
@@ -114,7 +113,9 @@ fn clipboard_support(session: SessionType) -> Support {
         },
         _ => match x11_tool {
             Some(tool) => Support::Unknown {
-                reason: format!("剪贴板适配尚未实现（ticket 09/10 覆盖）；环境已具备 {tool}"),
+                reason: format!(
+                    "文本复制已由 ticket 07 实现；图片、富文本与文件列表尚未实现（ticket 09/10 覆盖）；环境已具备 {tool}"
+                ),
             },
             None => Support::Unsupported {
                 reason: "未找到 xclip 或 xsel，X11 下无法读写剪贴板".to_string(),
@@ -127,7 +128,8 @@ fn clipboard_support(session: SessionType) -> Support {
 fn auto_paste_support(session: SessionType) -> Support {
     if session == SessionType::Wayland {
         return Support::Unsupported {
-            reason: "Wayland 不允许应用在转移焦点后注入按键；需 XDG RemoteDesktop 门户授权".to_string(),
+            reason: "Wayland 不允许应用在转移焦点后注入按键；需 XDG RemoteDesktop 门户授权"
+                .to_string(),
         };
     }
     match which("xdotool") {
