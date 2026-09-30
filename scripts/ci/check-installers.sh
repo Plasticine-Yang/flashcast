@@ -259,16 +259,18 @@ check_linux_deb() {
     "$deb" "$control" "$deb" "$listing"
 
   local problems=""
+  # dpkg-deb 的输出随版本变化：新版本打印 `usr/bin/flashcast`，老版本打印 `./usr/bin/flashcast`，
+  # 因此只匹配不含 `./` 的核心片段。
   case "$listing" in
-    *"./usr/bin/flashcast"*) : ;;
+    *"usr/bin/flashcast"*) : ;;
     *) problems="${problems}缺少 /usr/bin/flashcast；" ;;
   esac
   case "$listing" in
-    *"/usr/share/applications/"*".desktop"*) : ;;
+    *"usr/share/applications/"*".desktop"*) : ;;
     *) problems="${problems}缺少桌面入口 .desktop；" ;;
   esac
   case "$listing" in
-    *"/usr/share/icons/"*) : ;;
+    *"usr/share/icons/"*) : ;;
     *) problems="${problems}缺少图标；" ;;
   esac
 
@@ -376,8 +378,8 @@ check_linux_appimage() {
 
 check_linux() {
   local work=$1
-  expect_artifact appimage "${PRODUCT}_${VERSION}_${ARCH}.AppImage" 8388608 "AppImage 安装包"
-  expect_artifact deb "${PRODUCT}_${VERSION}_${ARCH}.deb" 1048576 "deb 安装包"
+  expect_artifact appimage "appimage/${PRODUCT}_${VERSION}_${ARCH}.AppImage" 8388608 "AppImage 安装包"
+  expect_artifact deb "deb/${PRODUCT}_${VERSION}_${ARCH}.deb" 1048576 "deb 安装包"
 
   local appimage="$BUNDLES_DIR/appimage/${PRODUCT}_${VERSION}_${ARCH}.AppImage"
   local deb="$BUNDLES_DIR/deb/${PRODUCT}_${VERSION}_${ARCH}.deb"
@@ -392,7 +394,7 @@ check_linux() {
 # ── macOS ───────────────────────────────────────────────────────────────
 check_macos() {
   local work=$1
-  expect_artifact dmg "${PRODUCT}_${VERSION}_${ARCH}.dmg" 1048576 "dmg 安装包"
+  expect_artifact dmg "dmg/${PRODUCT}_${VERSION}_${ARCH}.dmg" 1048576 "dmg 安装包"
   local dmg="$BUNDLES_DIR/dmg/${PRODUCT}_${VERSION}_${ARCH}.dmg"
   if [ ! -f "$dmg" ]; then
     add_signing "macos" "未覆盖" "没有 dmg，无法检查签名状态"
@@ -600,7 +602,7 @@ check_windows_signature() {
 
 check_windows() {
   local work=$1
-  expect_artifact nsis "${PRODUCT}_${VERSION}_${ARCH}-setup.exe" 1048576 "NSIS 安装程序"
+  expect_artifact nsis "nsis/${PRODUCT}_${VERSION}_${ARCH}-setup.exe" 1048576 "NSIS 安装程序"
   local exe="$BUNDLES_DIR/nsis/${PRODUCT}_${VERSION}_${ARCH}-setup.exe"
   if [ ! -f "$exe" ]; then
     add_signing "windows" "未覆盖" "没有安装程序，无法检查签名状态"
@@ -767,14 +769,17 @@ main() {
   add_note "本报告只覆盖本平台 runner 上真实执行的检查；其他平台由各自的 job 分别产出。"
 
   local meta="$WORK_DIR/meta.env"
+  # meta.env 会被 source 回来，值里可能带空格（如内核版本、PRETTY_NAME），因此都加单引号，
+  # 并把值里可能出现的单引号去掉。
   {
-    printf 'os=%s\n' "$EXPECTED_OS"
-    printf 'os_version=%s\n' "$(uname -sr 2>/dev/null || printf '未知')"
-    printf 'arch=%s\n' "$ARCH"
-    printf 'slug=%s\n' "$SLUG"
-    printf 'commit=%s\n' "$(cat "$REPO_ROOT/.git/HEAD" >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')"
-    printf 'version=%s\n' "$VERSION"
-    printf 'platform=%s\n' "$PLATFORM"
+    quote() { printf '%s' "${1-}" | tr -d "'"; }
+    printf "os='%s'\n" "$(quote "$EXPECTED_OS")"
+    printf "os_version='%s'\n" "$(quote "$(uname -r 2>/dev/null || printf '未知')")"
+    printf "arch='%s'\n" "$(quote "$ARCH")"
+    printf "slug='%s'\n" "$(quote "$SLUG")"
+    printf "commit='%s'\n" "$(quote "$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')")"
+    printf "version='%s'\n" "$(quote "$VERSION")"
+    printf "platform='%s'\n" "$(quote "$PLATFORM")"
   } >"$meta"
 
   local json="$ARTIFACTS_DIR/installer-check-$SLUG.json"

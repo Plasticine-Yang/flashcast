@@ -94,7 +94,8 @@ add_signing() {
 }
 
 add_note() {
-  _sanitize "${1-}" >>"$REPORT_NOTES"
+  # 必须以换行结尾：report_write_json 用 `while read` 逐行读，缺尾换行会丢掉最后一条。
+  printf '%s\n' "$(_sanitize "${1-}")" >>"$REPORT_NOTES"
 }
 
 # report_counts <状态>：统计某状态的检查条数。
