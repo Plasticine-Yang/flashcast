@@ -57,33 +57,33 @@ fn with_manager<T>(f: impl FnOnce(&GlobalHotKeyManager) -> T) -> Result<T, Hotke
 #[cfg(target_os = "windows")]
 fn with_manager<T>(f: impl FnOnce(&GlobalHotKeyManager) -> T) -> Result<T, HotkeyError> {
     use std::cell::RefCell;
+    use std::sync::OnceLock;
 
-    struct Slot {
-        thread: std::thread::ThreadId,
-        manager: Result<GlobalHotKeyManager, String>,
-    }
+    /// 第一个创建后端窗口的线程。`WM_HOTKEY` 只投递到该线程的消息队列，
+    /// 因此在别的线程上再注册只会得到「注册成功但永远收不到按键」的假象。
+    static OWNER_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
 
     thread_local! {
-        static MANAGER: RefCell<Option<Slot>> = const { RefCell::new(None) };
+        static MANAGER: RefCell<Option<Result<GlobalHotKeyManager, String>>> =
+            const { RefCell::new(None) };
+    }
+
+    let current = std::thread::current().id();
+    let owner = *OWNER_THREAD.get_or_init(|| current);
+    if owner != current {
+        return Err(HotkeyError::BackendUnavailable {
+            reason: "全局快捷键后端属于创建它的线程（Windows 的 WM_HOTKEY 只投递到该线程的\
+                     消息队列）；请在应用主线程注册快捷键"
+                .to_string(),
+        });
     }
 
     MANAGER.with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot.is_none() {
-            *slot = Some(Slot {
-                thread: std::thread::current().id(),
-                manager: GlobalHotKeyManager::new().map_err(|error| error.to_string()),
-            });
+            *slot = Some(GlobalHotKeyManager::new().map_err(|error| error.to_string()));
         }
-        let slot = slot.as_ref().expect("上面刚写入");
-        if slot.thread != std::thread::current().id() {
-            return Err(HotkeyError::BackendUnavailable {
-                reason: "全局快捷键只能在创建后端的线程上操作（Windows 的 WM_HOTKEY 只投递到创建\
-                         后端窗口的线程）；请在应用主线程注册快捷键"
-                    .to_string(),
-            });
-        }
-        match &slot.manager {
+        match slot.as_ref().expect("上面刚写入") {
             Ok(manager) => Ok(f(manager)),
             Err(reason) => Err(backend_unavailable(reason)),
         }
