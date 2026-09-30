@@ -340,6 +340,13 @@ check_linux_appimage() {
   mkdir -p "$launch_work"
   local used_flag=""
 
+  # tauri-plugin-single-instance：若本机已经有一个 Flashcast 在跑，新实例会立刻正常退出（退出码 0），
+  # 看起来像「启动失败」。CI 上是干净环境不会遇到，本机反复检查时要先关掉旧实例。
+  local single_instance_hint=""
+  if command -v pgrep >/dev/null 2>&1 && pgrep -x flashcast >/dev/null 2>&1; then
+    single_instance_hint="（注意：本机已有 flashcast 进程在运行，single-instance 插件会让新实例立刻退出；请先结束旧实例）"
+  fi
+
   if ! build_launcher; then
     add_check "installer.appimage.launch" "AppImage 启动" "$STATUS_SKIP" \
       "当前环境既没有 \$DISPLAY/\$WAYLAND_DISPLAY，也没有 xvfb-run，无法启动图形应用" \
@@ -360,7 +367,7 @@ check_linux_appimage() {
       add_check "installer.appimage.fuse" "AppImage FUSE 挂载" "$STATUS_FAIL" \
         "直接运行失败（退出码 ${direct_exit}）：$(tail_log "$direct_log" 5)" "$img"
       add_check "installer.appimage.launch" "AppImage 启动" "$STATUS_FAIL" \
-        "直接运行与 --appimage-extract-and-run 都未存活：$(tail_log "$SMOKE_LOG" 12)" \
+        "直接运行与 --appimage-extract-and-run 都未存活${single_instance_hint}：$(tail_log "$SMOKE_LOG" 12)" \
         "xvfb-run -a $img --appimage-extract-and-run"
       return
     fi
@@ -418,8 +425,14 @@ check_macos() {
     return
   fi
 
-  local app
-  app=$(find "$mnt" -maxdepth 1 -name '*.app' -print -quit 2>/dev/null)
+  local app candidate
+  # 不用 `find -maxdepth`：macOS 自带的是 BSD find，这里改用 glob，行为在各平台一致。
+  for candidate in "$mnt"/*.app; do
+    if [ -d "$candidate" ]; then
+      app=$candidate
+      break
+    fi
+  done
   local problems=""
   if [ -z "$app" ]; then
     problems="dmg 内没有 .app"
@@ -618,20 +631,47 @@ check_windows() {
 
   local local_appdata
   local_appdata=$(win_path "${LOCALAPPDATA:-$HOME/AppData/Local}")
-  local candidates=("$local_appdata/$PRODUCT" "$local_appdata/Programs/$PRODUCT")
+  # Tauri 的 NSIS 在 installMode=currentUser 下默认装到 %LOCALAPPDATA%\<productName>；
+  # 把 Program Files 变体也列上，避免模板变化时误判。
+  local -a candidates=("$local_appdata/$PRODUCT" "$local_appdata/Programs/$PRODUCT")
   local install_dir="${candidates[0]}"
 
-  local cmd="$exe /S && %LOCALAPPDATA%\\\\$PRODUCT\\\\flashcast.exe"
-  printf '\n--- 静默安装 %s /S ---\n' "$exe"
-  if ! "$exe" /S >"$work/nsis-install.log" 2>&1; then
+  # 找已安装的主程序：优先 flashcast.exe（Cargo 包名），否则取安装目录里第一个非 uninstall 的 exe。
+  # 返回非空即找到；不依赖 mainBinaryName 的默认值。
+  find_installed_exe() {
+    local dir=$1 f base
+    for f in "$dir"/*.exe; do
+      [ -f "$f" ] || continue
+      base=$(basename "$f")
+      case "$base" in
+        uninstall.exe | Uninstall.exe | *.tmp) continue ;;
+      esac
+      if [ "$base" = "flashcast.exe" ]; then
+        printf '%s' "$f"
+        return 0
+      fi
+      FOUND_FALLBACK=$f
+    done
+    if [ -n "${FOUND_FALLBACK:-}" ]; then
+      printf '%s' "$FOUND_FALLBACK"
+      return 0
+    fi
+    return 1
+  }
+
+  # Git Bash 的 MSYS 会把 `/S` 当成路径改写成 `S:\`，必须写成 `//S`（MSYS 再还原成 `/S`）。
+  local cmd="$exe //S"
+  printf '\n--- 静默安装 %s //S ---\n' "$exe"
+  if ! "$exe" //S >"$work/nsis-install.log" 2>&1; then
     add_check "installer.nsis.install" "NSIS 静默安装" "$STATUS_FAIL" \
-      "安装程序 /S 返回非零：$(tail_log "$work/nsis-install.log" 8)" "$cmd"
+      "安装程序 //S 返回非零：$(tail_log "$work/nsis-install.log" 8)" "$cmd"
   else
-    local waited=0 found=""
+    local waited=0 found="" app_exe=""
     while [ "$waited" -lt 120 ]; do
       local dir
       for dir in "${candidates[@]}"; do
-        if [ -f "$dir/flashcast.exe" ]; then
+        FOUND_FALLBACK=""
+        if app_exe=$(find_installed_exe "$dir"); then
           found=$dir
           break
         fi
@@ -643,57 +683,58 @@ check_windows() {
     if [ -n "$found" ]; then
       install_dir=$found
       add_check "installer.nsis.install" "NSIS 静默安装" "$STATUS_PASS" \
-        "currentUser 静默安装成功，flashcast.exe 位于 $found" "$cmd"
+        "currentUser 静默安装成功，主程序位于 $app_exe" "$cmd"
     else
       add_check "installer.nsis.install" "NSIS 静默安装" "$STATUS_FAIL" \
-        "安装程序返回 0，但 120 秒内未在 ${candidates[*]} 找到 flashcast.exe" "$cmd"
+        "安装程序返回 0，但 120 秒内在 ${candidates[*]} 都没找到可执行文件" "$cmd"
     fi
   fi
 
   # 启动已安装的应用。
-  if [ -f "$install_dir/flashcast.exe" ]; then
-    printf '\n--- 启动 %s ---\n' "$install_dir/flashcast.exe"
-    "$install_dir/flashcast.exe" >"$work/win-launch.log" 2>&1 &
+  if [ -n "${app_exe:-}" ] && [ -f "$app_exe" ]; then
+    local exe_name
+    exe_name=$(basename "$app_exe")
+    printf '\n--- 启动 %s ---\n' "$app_exe"
+    "$app_exe" >"$work/win-launch.log" 2>&1 &
     local pid=$!
     sleep "$LAUNCH_SECONDS"
     local running
-    running=$(tasklist //FI "IMAGENAME eq flashcast.exe" //NH 2>/dev/null | tr -d '\r')
-    if printf '%s' "$running" | grep -qi "flashcast.exe"; then
+    running=$(tasklist //FI "IMAGENAME eq $exe_name" //NH 2>/dev/null | tr -d '\r')
+    if printf '%s' "$running" | grep -qi "$exe_name"; then
       add_check "installer.app.launch" "Windows 应用启动" "$STATUS_PASS" \
-        "安装后的 flashcast.exe 启动后仍在运行（${LAUNCH_SECONDS} 秒）" \
-        "\"$install_dir/flashcast.exe\""
-      taskkill //F //IM flashcast.exe >/dev/null 2>&1 || true
+        "安装后的 $exe_name 启动后仍在运行（${LAUNCH_SECONDS} 秒）" "\"$app_exe\""
+      taskkill //F //IM "$exe_name" >/dev/null 2>&1 || true
     else
       add_check "installer.app.launch" "Windows 应用启动" "$STATUS_FAIL" \
-        "启动后 ${LAUNCH_SECONDS} 秒内进程消失：$(tail_log "$work/win-launch.log" 12)" \
-        "\"$install_dir/flashcast.exe\""
+        "启动后 ${LAUNCH_SECONDS} 秒内 $exe_name 进程消失：$(tail_log "$work/win-launch.log" 12)" \
+        "\"$app_exe\""
     fi
     kill "$pid" 2>/dev/null || true
   else
     add_check "installer.app.launch" "Windows 应用启动" "$STATUS_SKIP" \
-      "没有安装成功的 flashcast.exe，无法启动" "\"$install_dir/flashcast.exe\""
+      "没有安装成功的主程序，无法启动" "\"$install_dir\\flashcast.exe\""
   fi
 
   # 静默卸载，确认安装是可逆的。
   if [ -f "$install_dir/uninstall.exe" ]; then
-    printf '\n--- 静默卸载 %s /S ---\n' "$install_dir/uninstall.exe"
-    "$install_dir/uninstall.exe" /S >"$work/nsis-uninstall.log" 2>&1 || true
+    printf '\n--- 静默卸载 %s //S ---\n' "$install_dir/uninstall.exe"
+    "$install_dir/uninstall.exe" //S >"$work/nsis-uninstall.log" 2>&1 || true
     local waited=0
     while [ "$waited" -lt 60 ]; do
-      [ -f "$install_dir/flashcast.exe" ] || break
+      [ -n "${app_exe:-}" ] && [ -f "$app_exe" ] || break
       sleep 2
       waited=$((waited + 2))
     done
-    if [ -f "$install_dir/flashcast.exe" ]; then
+    if [ -n "${app_exe:-}" ] && [ -f "$app_exe" ]; then
       add_check "installer.nsis.uninstall" "NSIS 静默卸载" "$STATUS_FAIL" \
-        "uninstall.exe /S 之后 flashcast.exe 仍存在" "\"$install_dir/uninstall.exe\" /S"
+        "uninstall.exe //S 之后 $app_exe 仍存在" "\"$install_dir\\uninstall.exe\" //S"
     else
       add_check "installer.nsis.uninstall" "NSIS 静默卸载" "$STATUS_PASS" \
-        "uninstall.exe /S 已移除已安装的程序" "\"$install_dir/uninstall.exe\" /S"
+        "uninstall.exe //S 已移除已安装的程序" "\"$install_dir\\uninstall.exe\" //S"
     fi
   else
     add_check "installer.nsis.uninstall" "NSIS 静默卸载" "$STATUS_SKIP" \
-      "安装目录里没有 uninstall.exe，无法验证卸载" "\"$install_dir/uninstall.exe\" /S"
+      "安装目录里没有 uninstall.exe，无法验证卸载" "\"$install_dir\\uninstall.exe\" //S"
   fi
 }
 
