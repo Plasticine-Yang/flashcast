@@ -583,7 +583,14 @@ impl Host {
         // 拉取后按 Git 状态显式重建视图：重新加载生效设置与主题（`reload_from_workspace`
         // 会重新解析 settings.toml 与 theme.json，并应用插件清单里的主题包），
         // 再重新读取备忘录列表。
-        let reload = self.reload_from_workspace(&workspace.settings_path());
+        //
+        // 判据是「磁盘内容与已应用内容是否一致」，已经是最新时返回 None；这里要的是
+        // 一份可展示的结果，因此用当前状态补一份 applied=false 的回报（与
+        // [`Host::reload_workspace`] 同一处理）。
+        let settings_path = workspace.settings_path();
+        let reload = self
+            .reload_from_workspace(&settings_path)
+            .unwrap_or_else(|| self.unchanged_reload(settings_path.clone()));
         let theme = reload.theme.selected.clone();
         Ok(PullOutcome {
             result: report.result,
