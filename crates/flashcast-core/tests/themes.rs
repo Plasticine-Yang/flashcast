@@ -318,6 +318,145 @@ fn follow_system_theme_reacts_to_system_appearance_changes() {
     cleanup(&device);
 }
 
+/// 无效 / 读不到的主题保留上一次可用外观，并给出可读的中文原因。
+#[test]
+fn an_unreadable_theme_keeps_the_last_usable_appearance() {
+    let repo = real_git_repo("theme-invalid");
+    let packages = unique_dir("theme-packages-invalid");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    let package = write_theme_package(&packages, "example.solarized", "Solarized 深色");
+    host.install_theme_package(&package).expect("安装主题包");
+    host.select_theme("example.solarized")
+        .expect("选择已安装主题");
+    let good = host.theme_state();
+    assert_eq!(good.tokens.color.surface, "#101418");
+
+    // 外部把主题包文件写坏：保留可用外观，说明原因，主题在列表里标记为不可用。
+    let installed = repo
+        .join(THEMES_DIR)
+        .join("example.solarized")
+        .join(THEME_FILE);
+    fs::write(&installed, "{ 坏掉的 JSON").expect("写坏主题包");
+    let reload = host.reload_workspace();
+    // 主题列表确实变了（该主题被标记为不可用），但生效外观不得改变。
+    assert!(
+        reload.error.is_some(),
+        "读不到的主题必须在重载结果里给出原因：{reload:?}"
+    );
+    let state = host.theme_state();
+    assert_eq!(state.selected, "example.solarized", "主题选择不得被回退");
+    assert_eq!(state.tokens, good.tokens, "必须保留上一次可用外观");
+    assert_eq!(
+        state.css_vars, good.css_vars,
+        "下发给 UI 的 CSS 属性也必须是上一次可用的"
+    );
+    let message = state.error.expect("必须给出原因");
+    assert!(
+        message.contains("主题无效") || message.contains("JSON"),
+        "原因必须可读：{message}"
+    );
+    let entry = state
+        .themes
+        .iter()
+        .find(|theme| theme.id == "example.solarized")
+        .expect("列表里仍有它");
+    assert!(!entry.usable, "损坏的主题必须标记为不可用");
+    assert!(entry.error.is_some());
+
+    // 修好文件后恢复，错误消失。
+    fs::write(
+        &installed,
+        custom_theme_json("example.solarized", "Solarized 深色"),
+    )
+    .expect("修好主题包");
+    let reload = host.reload_workspace();
+    assert!(reload.applied, "修好后必须重新生效：{reload:?}");
+    assert_eq!(host.theme_state().error, None);
+    assert_eq!(host.theme_state().tokens.color.surface, "#101418");
+
+    // 主题配置指向一个不存在的主题：保留当前外观并说明原因。
+    fs::write(
+        repo.join(THEME_FILE),
+        ThemeSelection::new("ghost.theme").to_json().unwrap(),
+    )
+    .expect("写出无效的主题配置");
+    let reload = host.reload_workspace();
+    assert!(!reload.applied);
+    assert_eq!(host.theme_state().selected, "example.solarized");
+    assert!(
+        reload
+            .error
+            .as_deref()
+            .is_some_and(|message| message.contains("不可用")),
+        "原因必须可读：{:?}",
+        reload.error
+    );
+
+    cleanup(&repo);
+    cleanup(&packages);
+    cleanup(&device);
+}
+
+/// 选中的主题跟随配置工作区：切换工作区后按目标工作区恢复，切回来也恢复。
+#[test]
+fn the_selected_theme_follows_the_config_workspace() {
+    let first = real_git_repo("theme-ws-first");
+    let second = real_git_repo("theme-ws-second");
+    let packages = unique_dir("theme-packages-ws");
+    let package = write_theme_package(&packages, "example.solarized", "Solarized 深色");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+
+    host.select_workspace(&first).expect("关联第一个工作区");
+    host.select_theme(THEME_DARK).expect("第一个工作区用深色");
+    assert_eq!(host.theme_state().appearance, Appearance::Dark);
+
+    // 第二个工作区：安装并选择一个本地主题包。
+    host.select_workspace(&second).expect("切换到第二个工作区");
+    host.install_theme_package(&package)
+        .expect("在第二个工作区安装主题包");
+    host.select_theme("example.solarized")
+        .expect("在第二个工作区选择已安装主题");
+    assert_eq!(host.theme_state().tokens.color.surface, "#101418");
+
+    // 切回第一个：恢复深色，并且看不到第二个工作区安装的主题。
+    host.select_workspace(&first).expect("切回第一个工作区");
+    let state = host.theme_state();
+    assert_eq!(state.selected, THEME_DARK, "必须恢复该工作区选中的主题");
+    assert_eq!(state.tokens.color.surface, "#202226");
+    assert!(
+        state
+            .themes
+            .iter()
+            .all(|theme| theme.id != "example.solarized"),
+        "不得残留另一个工作区安装的主题：{:?}",
+        state.themes.iter().map(|theme| &theme.id).collect::<Vec<_>>()
+    );
+
+    // 再切到第二个：恢复本地主题包（清单与主题包都来自那个工作区）。
+    host.select_workspace(&second).expect("再切到第二个工作区");
+    let state = host.theme_state();
+    assert_eq!(state.selected, "example.solarized");
+    assert_eq!(state.tokens.color.surface, "#101418");
+    assert!(
+        state
+            .themes
+            .iter()
+            .any(|theme| theme.id == "example.solarized" && theme.usable),
+        "第二个工作区的主题包必须重新可用"
+    );
+
+    // 重启后仍然停在第二个工作区的选择。
+    let restarted = host_restarted(&device, fast_settings());
+    assert_eq!(restarted.theme_state().selected, "example.solarized");
+
+    cleanup(&first);
+    cleanup(&second);
+    cleanup(&packages);
+    cleanup(&device);
+}
+
 /// 本地主题包：校验失败给出中文原因，有效则可安装、选择，并可移除。
 #[test]
 fn a_local_theme_package_is_validated_installed_selected_and_removed() {

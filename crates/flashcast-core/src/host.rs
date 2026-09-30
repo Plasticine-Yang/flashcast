@@ -79,8 +79,10 @@ struct HostInner {
     theme_tokens: ThemeTokens,
     /// 最近一次成功解析出的实际外观。
     theme_appearance: Appearance,
-    /// 最近一次主题相关失败的中文原因。
+    /// 当前选中主题解析失败的中文原因（持续到该主题重新可用）。
     theme_error: Option<String>,
+    /// 工作区主题配置 / 插件清单的问题（持续到配置修好或被重新选择）。
+    theme_notice: Option<String>,
     /// 当前配置工作区；`None` 表示尚未关联。
     workspace: Option<Workspace>,
     /// 最近一次工作区失败的中文原因。
@@ -151,6 +153,7 @@ impl Host {
                 theme_tokens: crate::theme::light_tokens(),
                 theme_appearance: Appearance::Light,
                 theme_error: None,
+                theme_notice: None,
                 workspace: None,
                 workspace_error: None,
                 reloads: 0,
@@ -279,20 +282,16 @@ impl Host {
             Some(workspace) => workspace.clone(),
             None => return self.unchanged_reload(changed.to_path_buf()),
         };
+        let mut messages: Vec<String> = Vec::new();
         let settings = match workspace.read_settings() {
-            Ok(Some(settings)) => settings,
-            // 幂等：内容与生效设置一致时不做任何事，写入循环在此终止。
+            Ok(Some(settings)) => Some(settings),
+            // 设置文件被删除：保留上一次有效设置，但主题与清单仍按工作区重读。
             Ok(None) => {
-                return WorkspaceReload {
-                    path: changed.to_path_buf(),
-                    applied: false,
-                    settings: self.settings(),
-                    theme: self.theme_state(),
-                    error: Some(format!(
-                        "设置文件已不存在，继续使用上一次有效设置（{}）",
-                        workspace.settings_path().display()
-                    )),
-                }
+                messages.push(format!(
+                    "设置文件已不存在，继续使用上一次有效设置（{}）",
+                    workspace.settings_path().display()
+                ));
+                None
             }
             Err(error) => {
                 let message = error.to_string();
@@ -310,15 +309,16 @@ impl Host {
         let applied = {
             let mut inner = lock(&self.inner);
             let mut applied = false;
-            if settings != inner.settings {
-                inner.settings = settings;
-                applied = true;
+            if let Some(settings) = settings {
+                if settings != inner.settings {
+                    inner.settings = settings;
+                    applied = true;
+                }
             }
-            let (theme_changed, theme_reason) = self.apply_workspace_config(&mut inner, &workspace);
+            let (theme_changed, theme_reason) =
+                self.apply_workspace_config(&mut inner, &workspace, false);
             applied |= theme_changed;
-            if let Some(reason) = theme_reason {
-                inner.theme_error = Some(reason);
-            }
+            inner.theme_notice = theme_reason;
             if applied {
                 inner.workspace_error = None;
                 inner.reloads += 1;
@@ -327,11 +327,18 @@ impl Host {
         };
 
         let theme = self.theme_state();
+        if let Some(error) = theme.error.clone() {
+            messages.push(error);
+        }
         WorkspaceReload {
             path: changed.to_path_buf(),
             applied,
             settings: self.settings(),
-            error: theme.error.clone(),
+            error: if messages.is_empty() {
+                None
+            } else {
+                Some(messages.join("；"))
+            },
             theme,
         }
     }
@@ -340,10 +347,15 @@ impl Host {
     ///
     /// 返回（是否有变化，主题相关的中文原因）。任何一部分失败都不会动到
     /// 「上一次可用外观」：调用方只把原因展示出来。
+    ///
+    /// `activation` 为真表示正在**切换**配置工作区：目标工作区缺少清单或主题配置时
+    /// 回到默认（三个内置主题 + 浅色），而不是沿用上一个工作区的选择。重新加载
+    /// （`activation == false`）时缺少文件则保留当前状态，只说明原因。
     fn apply_workspace_config(
         &self,
         inner: &mut HostInner,
         workspace: &Workspace,
+        activation: bool,
     ) -> (bool, Option<String>) {
         let mut changed = false;
         let mut reason: Option<String> = None;
@@ -361,6 +373,14 @@ impl Host {
                 }
                 Err(error) => reason = Some(format!("插件清单无效：{error}")),
             },
+            Ok(None) if activation => {
+                let (merged, _) = PluginManifestFile::defaults()
+                    .merged_with(self.expected_manifest_extras());
+                if merged != inner.manifest {
+                    inner.manifest = merged;
+                    changed = true;
+                }
+            }
             Ok(None) => {}
             Err(error) => reason = Some(format!("无法读取插件清单：{error}")),
         }
@@ -371,32 +391,45 @@ impl Host {
         }
 
         // 3. 当前选中的主题。不可用时不切换，保留上一次可用外观。
-        match workspace.read_config_text(&workspace.theme_path()) {
+        let target: Option<String> = match workspace.read_config_text(&workspace.theme_path()) {
             Ok(Some(text)) => match ThemeSelection::from_json(&text) {
-                Ok(selection) if selection.selected == inner.selected_theme => {}
-                Ok(selection) => {
+                Ok(selection) => Some(selection.selected),
+                Err(error) => {
+                    reason = Some(error.to_string());
+                    None
+                }
+            },
+            // 目标工作区没有主题配置：切换工作区时回到默认主题。
+            Ok(None) if activation => Some(THEME_LIGHT.to_string()),
+            Ok(None) => None,
+            Err(error) => {
+                reason = Some(format!("无法读取主题配置：{error}"));
+                None
+            }
+        };
+        if let Some(target) = target {
+            match () {
+                () if target == inner.selected_theme => {}
+                () => {
                     let usable = inner
                         .manifest
-                        .get(&selection.selected)
+                        .get(&target)
                         .filter(|entry| entry.is_theme() && entry.enabled)
-                        .and_then(|_| inner.theme_library.document(&selection.selected).ok())
+                        .and_then(|_| inner.theme_library.document(&target).ok())
                         .map(|document| document.resolve(inner.system_appearance).is_ok())
                         .unwrap_or(false);
                     if usable {
-                        inner.selected_theme = selection.selected.clone();
+                        inner.selected_theme = target.clone();
                         inner.theme_error = None;
+                        inner.theme_notice = None;
                         changed = true;
                     } else {
                         reason = Some(format!(
-                            "主题「{}」不可用（不存在、已停用或无法解析），继续使用上一次可用外观",
-                            selection.selected
+                            "主题「{target}」不可用（不存在、已停用或无法解析），继续使用上一次可用外观"
                         ));
                     }
                 }
-                Err(error) => reason = Some(error.to_string()),
-            },
-            Ok(None) => {}
-            Err(error) => reason = Some(format!("无法读取主题配置：{error}")),
+            }
         }
 
         (changed, reason)
@@ -465,9 +498,10 @@ impl Host {
             }
             inner.workspace = Some(workspace.clone());
             inner.workspace_error = None;
-            // 插件清单 / 主题配置 / 已安装主题包：读不到的部分保留当前外观并记原因。
-            let (_, theme_error) = self.apply_workspace_config(&mut inner, &workspace);
-            inner.theme_error = theme_error;
+            // 插件清单 / 主题配置 / 已安装主题包。切换工作区时以目标工作区为准；
+            // 读不到的部分保留当前外观并记下中文原因。
+            let (_, theme_reason) = self.apply_workspace_config(&mut inner, &workspace, true);
+            inner.theme_notice = theme_reason;
         }
         *lock(&self.watch) = Some(watcher);
         // 补齐默认文件（清单与主题选择），让用户可以手写、提交和同步。
@@ -663,6 +697,7 @@ impl Host {
             let mut inner = lock(&self.inner);
             inner.selected_theme = id.to_string();
             inner.theme_error = None;
+            inner.theme_notice = None;
         }
         Ok(self.theme_state())
     }
@@ -857,12 +892,21 @@ impl Host {
                 }
             }
         }
-        if let Some(message) = &error {
-            inner.theme_error = Some(message.clone());
-        } else {
-            // 解析成功即清掉上一次的失败原因。
-            inner.theme_error = None;
+        // 解析失败的原因优先；没有解析失败时，回退到工作区配置层的问题。
+        if error.is_none() {
+            error = inner.theme_notice.clone();
         }
+        // 解析成功即清掉「选中主题不可用」的原因；配置层问题保留到配置修好为止。
+        inner.theme_error = if inner
+            .theme_library
+            .document(&inner.selected_theme)
+            .map(|document| document.resolve(inner.system_appearance).is_ok())
+            .unwrap_or(false)
+        {
+            None
+        } else {
+            error.clone()
+        };
 
         let themes = inner
             .manifest
@@ -902,7 +946,8 @@ impl Host {
             tokens: inner.theme_tokens.clone(),
             css_vars: inner.theme_tokens.css_vars(),
             themes,
-            error: inner.theme_error.clone(),
+            // 解析失败原因与配置层问题合并后的结果。
+            error: error.clone(),
         }
     }
 
