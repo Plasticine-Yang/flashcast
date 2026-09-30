@@ -1482,7 +1482,7 @@ async function main() {
         (await text(SYNC_BLOCK)).includes("没有阻塞"),
         "没有阻塞时必须明确说明可以同步",
       );
-      const file = await shot(page, "26-settings-sync.png");
+      const file = await shot(page, "36-settings-sync.png");
       return `分支 ${branch}，远端「${remote}」，${counts}，${dirty}，${capability}，截图 ${file}`;
     });
 
@@ -1500,7 +1500,7 @@ async function main() {
       );
       const dirty = await text(SYNC_DIRTY);
       assert(dirty.includes("已暂存") && dirty.includes("未跟踪"), `脏状态要分类点明：${dirty}`);
-      const file = await shot(page, "27-settings-sync-blocked.png");
+      const file = await shot(page, "37-settings-sync-blocked.png");
       return `阻塞「${label}」，指引指向外部提交后重新检测，截图 ${file}`;
     });
 
@@ -1515,7 +1515,7 @@ async function main() {
       const counts = await text(SYNC_COUNTS);
       assert(counts.includes("领先 1") && counts.includes("落后 1"), `分叉数量不对：${counts}`);
       assert(await page.locator(SYNC_PULL).isDisabled(), "分叉时拉取必须禁用");
-      const file = await shot(page, "28-settings-sync-diverged.png");
+      const file = await shot(page, "38-settings-sync-diverged.png");
       return `阻塞「${await text(SYNC_BLOCK_LABEL)}」，${counts}，不自动合并，截图 ${file}`;
     });
 
@@ -1529,7 +1529,7 @@ async function main() {
       );
       const auth = await text(SETTINGS_MESSAGE);
       assert(auth.includes("令牌"), `鉴权失败要给出令牌指引：${auth}`);
-      const authShot = await shot(page, "29-settings-sync-auth.png");
+      const authShot = await shot(page, "39-settings-sync-auth.png");
 
       await setSyncScenario("offline");
       await page.click(SYNC_PULL);
@@ -1540,7 +1540,7 @@ async function main() {
       const offline = await text(SETTINGS_MESSAGE);
       assert(offline !== auth, "鉴权失败与离线必须是不同的反馈");
       assert(offline.includes("网络"), `离线反馈不对：${offline}`);
-      const offlineShot = await shot(page, "30-settings-sync-offline.png");
+      const offlineShot = await shot(page, "40-settings-sync-offline.png");
 
       // 本地功能不降级：回到搜索页仍能查询并得到结果。
       await page.click('[data-testid="settings-back"]');
@@ -1572,7 +1572,7 @@ async function main() {
         { sel: SYNC_PROGRESS, expected: "拉取中" },
       );
       const progress = await text(SYNC_PROGRESS);
-      const progressShot = await shot(page, "31-settings-sync-pulling.png");
+      const progressShot = await shot(page, "41-settings-sync-pulling.png");
 
       await page.waitForFunction(
         ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
@@ -1589,7 +1589,7 @@ async function main() {
       );
       const counts = await text(SYNC_COUNTS);
       assert(counts.includes("领先 0") && counts.includes("落后 0"), `拉取后应同步：${counts}`);
-      const file = await shot(page, "32-settings-sync-pulled.png");
+      const file = await shot(page, "42-settings-sync-pulled.png");
       return `进度「${progress}」，生效快捷键 ${before} → ${after}，${message}，截图 ${progressShot} / ${file}`;
     });
 
@@ -1611,7 +1611,7 @@ async function main() {
         pushed.includes("refs/heads/main → refs/heads/main"),
         `推送结果必须点明引用：${pushed}`,
       );
-      const file = await shot(page, "33-settings-sync-pushed.png");
+      const file = await shot(page, "43-settings-sync-pushed.png");
 
       await page.click(SYNC_PUSH);
       await page.waitForFunction(
@@ -1631,7 +1631,7 @@ async function main() {
       const hint = await text(SYNC_BLOCK_HINT);
       assert(hint.includes("rebase --abort"), `中止指引不完整：${hint}`);
       assert(await page.locator(SYNC_PULL).isDisabled(), "进行中的操作必须阻塞拉取");
-      const blockedShot = await shot(page, "34-settings-sync-in-progress.png");
+      const blockedShot = await shot(page, "44-settings-sync-in-progress.png");
 
       // 外部处理完毕 → 重新检测 → 阻塞消失。
       await page.evaluate(() => window.__flashcastMock.simulateSyncScenario("ready"));
@@ -1645,7 +1645,7 @@ async function main() {
         recovered.includes("拉取可用") && recovered.includes("推送可用"),
         `重新检测后必须恢复同步能力：${recovered}`,
       );
-      const file = await shot(page, "35-settings-sync-redetected.png");
+      const file = await shot(page, "45-settings-sync-redetected.png");
       return `阻塞时「${state}」，重新检测后「${recovered}」，截图 ${blockedShot} / ${file}`;
     });
 
