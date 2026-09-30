@@ -1,10 +1,10 @@
 //! 尚未实现平台的桩实现。
 //!
-//! Linux（ticket 01）与 Windows（ticket 02）都已有真实实现，因此本模块只在**其余**
-//! 目标上编译 —— 目前是 macOS，由后续平台 ticket 替换。这些桩必须让宿主在三个平台
-//! 上都能编译，并**如实**报告「不支持」，而不是伪造成功。
+//! Linux（ticket 01）、Windows（ticket 02）与 macOS（ticket 03）都已有真实实现，
+//! 因此本模块只在**其余**目标上编译。这些桩必须让宿主在所有目标上都能编译，
+//! 并**如实**报告「不支持」，而不是伪造成功。
 
-#![cfg(not(any(target_os = "linux", target_os = "windows")))]
+#![cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 
 use crate::capability::{Capabilities, CapabilityProbe, Support};
 use crate::catalog::{AppCatalog, AppEntry, CatalogError};

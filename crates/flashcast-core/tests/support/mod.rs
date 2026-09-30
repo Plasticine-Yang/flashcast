@@ -7,6 +7,7 @@
 
 #![allow(dead_code)]
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -65,14 +66,19 @@ pub fn item(id: &str, title: &str, source: &str, relevance: u8) -> SearchItem {
 
 /// 构造宿主与替身启动器。
 pub fn host_with(apps: Vec<AppEntry>, settings: Settings) -> (Host, Arc<FakeLauncher>) {
-    let launcher = Arc::new(FakeLauncher::always_succeeds());
-    let deps = HostDeps {
-        catalog: Arc::new(FakeAppCatalog::with_apps(apps)),
-        launcher: launcher.clone(),
-        capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
-        plugins: Arc::new(PluginRegistry::new()),
-    };
-    (Host::new(deps, settings), launcher)
+    let (host, launcher, _device) = host_with_device(apps, settings);
+    (host, launcher)
+}
+
+/// 构造宿主，并返回它的**设备本地**数据目录（应用数据目录）。
+/// 配置工作区之外的本机数据都放在这里；测试用它断言工作区里没有本机数据。
+pub fn host_with_device(
+    apps: Vec<AppEntry>,
+    settings: Settings,
+) -> (Host, Arc<FakeLauncher>, PathBuf) {
+    let device_dir = unique_dir("device");
+    let (host, launcher) = build_host(apps, settings, Arc::new(PluginRegistry::new()), device_dir.clone());
+    (host, launcher, device_dir)
 }
 
 /// 使用给定插件注册表构造宿主。
@@ -81,14 +87,94 @@ pub fn host_with_plugins(
     settings: Settings,
     plugins: Arc<PluginRegistry>,
 ) -> (Host, Arc<FakeLauncher>) {
+    let (host, launcher, _device) = host_with_plugins_device(apps, settings, plugins);
+    (host, launcher)
+}
+
+/// 使用给定插件注册表与设备目录构造宿主。
+pub fn host_with_plugins_device(
+    apps: Vec<AppEntry>,
+    settings: Settings,
+    plugins: Arc<PluginRegistry>,
+) -> (Host, Arc<FakeLauncher>, PathBuf) {
+    let device_dir = unique_dir("device");
+    let (host, launcher) = build_host(apps, settings, plugins, device_dir.clone());
+    (host, launcher, device_dir)
+}
+
+/// 用同一个设备目录重建宿主：模拟「重启应用」。
+pub fn host_restarted(device_dir: &Path, settings: Settings) -> Host {
+    let deps = HostDeps {
+        catalog: Arc::new(FakeAppCatalog::with_apps(Vec::new())),
+        launcher: Arc::new(FakeLauncher::always_succeeds()),
+        capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
+        plugins: Arc::new(PluginRegistry::new()),
+        device_dir: device_dir.to_path_buf(),
+    };
+    Host::new(deps, settings)
+}
+
+fn build_host(
+    apps: Vec<AppEntry>,
+    settings: Settings,
+    plugins: Arc<PluginRegistry>,
+    device_dir: PathBuf,
+) -> (Host, Arc<FakeLauncher>) {
     let launcher = Arc::new(FakeLauncher::always_succeeds());
     let deps = HostDeps {
         catalog: Arc::new(FakeAppCatalog::with_apps(apps)),
         launcher: launcher.clone(),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         plugins,
+        device_dir,
     };
     (Host::new(deps, settings), launcher)
+}
+
+/// 每次调用返回一个新的临时目录（进程内唯一，测试结束时由 `cleanup` 删除）。
+pub fn unique_dir(prefix: &str) -> PathBuf {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let index = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "flashcast-test-{prefix}-{}-{index}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("无法创建测试临时目录");
+    dir
+}
+
+/// 删除测试创建的临时目录。
+pub fn cleanup(path: &Path) {
+    let _ = std::fs::remove_dir_all(path);
+}
+
+/// 递归收集目录下的所有文件（含隐藏文件与 `.git`）。
+pub fn files_under(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// 用真实 `git2` 初始化一个临时 Git 仓库，返回其根目录。
+pub fn real_git_repo(prefix: &str) -> PathBuf {
+    let dir = unique_dir(prefix);
+    git2::Repository::init(&dir).expect("无法初始化临时 Git 仓库");
+    dir
 }
 
 /// 默认设置，插件超时缩短到 60ms 以便快速验证超时隔离。

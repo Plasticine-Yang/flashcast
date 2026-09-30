@@ -4,19 +4,27 @@ interface Props {
   status: StatusView | null;
   response: QueryView;
   feedback: ActionOutcome | null;
+  /** 配置工作区的问题（配置无效、关联失效等）。 */
+  workspaceAlert?: string | null;
 }
 
 /**
- * 提示区：错误、快捷键冲突、插件失败与启动反馈。
+ * 提示区：错误、快捷键冲突、插件失败、工作区问题与启动反馈。
  * 错误状态与普通提示在视觉上必须可区分（见 styles.css 的 .banner-error）。
  */
-export function StatusBanner({ status, response, feedback }: Props) {
+export function StatusBanner({ status, response, feedback, workspaceAlert }: Props) {
   const hotkeyError = status?.hotkey.error ?? null;
   const notice = response.notice;
   const failures = response.pluginFailures;
 
   return (
     <div className="banners">
+      {workspaceAlert ? (
+        <div className="banner banner-error" data-testid="workspace-alert" role="alert">
+          {workspaceAlert}
+          <span className="banner-hint">按 Ctrl+, 或点击「设置」检查配置工作区。</span>
+        </div>
+      ) : null}
       {feedback?.status === "failed" ? (
         <div className="banner banner-error" data-testid="notice" role="alert">
           {feedback.message ?? "操作失败"}

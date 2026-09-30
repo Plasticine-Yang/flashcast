@@ -3,17 +3,19 @@
 //! 这里只做三件事：调用宿主入口、把结果整理成 UI 需要的展示结构、
 //! 把错误与提示原样带回。命令中不出现业务分支。
 
+use std::path::Path;
 use std::sync::Arc;
 
 use flashcast_core::{
     ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, QueryResponse,
-    QueryScope, Score, SearchItem, Settings,
+    QueryScope, Score, SearchItem, Settings, WorkspaceStatus,
 };
 use tauri::{AppHandle, Manager, State};
 
 use crate::icon::icon_data_url;
 use crate::state::{lock, AppState};
 use crate::summon;
+use crate::watch::WorkspaceEvent;
 
 /// 展示用的结果条目：在宿主模型之上附加可直接显示的图标 data URL。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -186,6 +188,8 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 }
 
 /// 写入设置。快捷键变化时重新注册，注册失败会作为可展示的错误返回。
+///
+/// 宿主先把设置写进当前工作区文件，写入失败时保留上一次可用状态并返回中文原因。
 #[tauri::command(rename_all = "snake_case")]
 pub fn set_settings(
     app: AppHandle,
@@ -201,6 +205,48 @@ pub fn set_settings(
         crate::hotkey::apply(&app, &state, &applied.hotkey);
     }
     Ok(hotkey_status(&state))
+}
+
+/// 当前配置工作区与它的有效性。
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_workspace(state: State<'_, AppState>) -> WorkspaceStatus {
+    state.host.workspace_status()
+}
+
+/// 关联一个已存在的本地仓库 / 目录为配置工作区。失败时返回中文原因，
+/// 并且不改变当前工作区与有效设置。
+#[tauri::command(rename_all = "snake_case")]
+pub fn select_workspace(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<WorkspaceStatus, String> {
+    state
+        .host
+        .select_workspace(Path::new(&path))
+        .map_err(|error| error.to_string())
+}
+
+/// 在指定目录初始化新的配置工作区及其 Git 仓库。目标目录非空时拒绝。
+#[tauri::command(rename_all = "snake_case")]
+pub fn init_workspace(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<WorkspaceStatus, String> {
+    state
+        .host
+        .init_workspace(Path::new(&path))
+        .map_err(|error| error.to_string())
+}
+
+/// 重新读取工作区配置（外部修改未触发监听时的兜底入口）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn reload_workspace(state: State<'_, AppState>) -> WorkspaceEvent {
+    let reload = state.host.reload_workspace();
+    WorkspaceEvent {
+        status: state.host.workspace_status(),
+        settings: state.host.settings(),
+        reload: Some(reload),
+    }
 }
 
 #[tauri::command(rename_all = "snake_case")]

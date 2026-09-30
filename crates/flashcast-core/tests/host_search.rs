@@ -168,6 +168,7 @@ fn rescan_reflects_newly_installed_application() {
         launcher: Arc::new(FakeLauncher::always_succeeds()),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         plugins: Arc::new(PluginRegistry::new()),
+        device_dir: support::unique_dir("device"),
     };
     let host = Host::new(deps, fast_settings());
 

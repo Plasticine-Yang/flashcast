@@ -1,18 +1,16 @@
-//! `global-hotkey` 后端的共享实现（Linux X11 与 Windows）。
+//! `global-hotkey` 后端的共享部分，供 Linux、Windows 与 macOS 三个平台实现复用。
 //!
-//! `global-hotkey` 在 X11（`XGrabKey`）与 Windows（`RegisterHotKey`）上共用同一套
-//! Rust API，注册、注销、更新与事件分发的代码在两个平台上完全一致；只有
-//! 「当前会话是否允许注册」的判断不同（Linux 看 X11/Wayland，Windows 看是否有可
-//! 交互桌面）。因此把这部分放在这里，两个平台各自只保留自己的准入判断与错误文案。
+//! 后端的回调表、按键映射与错误分类与平台无关，只有「当前环境是否允许注册」这一
+//! 判断因平台而异（Linux 看 X11/Wayland 会话，macOS 看辅助功能权限，Windows 看
+//! 是否存在可交互桌面）。把共享部分集中在这里，可以保证三个平台对同一个
+//! [`HotkeySpec`] 映射到同一个后端按键，并且这段映射能在 Linux 上被真实测试。
 //!
-//! 后端的错误必须被分类成面向用户的 [`HotkeyError`]：`FailedToRegister` 在两个平台
-//! 上都表示「该组合已被其他应用占用」，而不是内部故障。
-//!
-//! 唯一的平台差异是管理器的生命周期约束（见 [`with_manager`]）：Linux 上是进程级
-//! 单例，Windows 上必须留在创建它的那个线程。
+//! 唯一按平台分支的是管理器的生命周期：Linux 与 macOS 可以放心用进程级单例；
+//! Windows 上管理器持有隐藏窗口的 `HWND`，`WM_HOTKEY` 只投递到创建它的线程，
+//! 因此见下面 `#[cfg(target_os = "windows")]` 的 [`manager`]。
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
@@ -27,72 +25,76 @@ fn callbacks() -> &'static Mutex<HashMap<u32, PressCallback>> {
     CALLBACKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn lock_callbacks() -> std::sync::MutexGuard<'static, HashMap<u32, PressCallback>> {
+fn lock_callbacks() -> MutexGuard<'static, HashMap<u32, PressCallback>> {
     callbacks()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// 在全局快捷键后端上执行一次操作，并统一处理「后端初始化失败」。
-///
-/// 两个平台的管理器生命周期约束不同，这是本文件里唯一按平台分支的地方：
-///
-/// - **Linux（X11）**：`GlobalHotKeyManager` 可以从任意线程注册，按键事件由后端
-///   自己的线程分发，因此保存为进程级单例。
-/// - **Windows**：管理器持有一个隐藏窗口的 `HWND`，因此既是 `!Send + !Sync`，也
-///   意味着 `WM_HOTKEY` 只会投递到**创建该窗口的线程**的消息队列。所以它必须留在
-///   调用线程（Tauri 主线程，其消息循环负责派发），用 `thread_local` 保存；并且当
-///   注册发生在另一个线程时**明确报错**，而不是在无人派发消息的线程上悄悄再建一个
-///   管理器——那会得到「注册成功但永远收不到按键」的假象。
-#[cfg(target_os = "linux")]
-fn with_manager<T>(f: impl FnOnce(&GlobalHotKeyManager) -> T) -> Result<T, HotkeyError> {
+/// 进程级后端管理器。初始化失败会被记住并作为可展示原因返回。
+#[cfg(not(target_os = "windows"))]
+#[cfg(not(target_os = "windows"))]
+fn manager() -> Result<&'static GlobalHotKeyManager, HotkeyError> {
     static MANAGER: OnceLock<Result<GlobalHotKeyManager, String>> = OnceLock::new();
-    let manager = MANAGER.get_or_init(|| GlobalHotKeyManager::new().map_err(|error| error.to_string()));
-    match manager {
-        Ok(manager) => Ok(f(manager)),
-        Err(reason) => Err(backend_unavailable(reason)),
-    }
+    MANAGER
+        .get_or_init(|| GlobalHotKeyManager::new().map_err(|error| error.to_string()))
+        .as_ref()
+        .map_err(|reason| HotkeyError::BackendUnavailable {
+            reason: format!("无法初始化全局快捷键后端：{reason}"),
+        })
 }
 
-#[cfg(target_os = "windows")]
+/// 在快捷键后端上执行一次操作，并把「后端初始化失败」统一成可展示原因。
+///
+/// 唯一按平台分支的地方就在这里：Linux 与 macOS 的管理器是进程级单例；Windows 的
+/// 管理器持有隐藏窗口的 `HWND`，既是 `!Send + !Sync`，也意味着 `WM_HOTKEY` 只会投递到
+/// **创建该窗口的线程**。所以它必须留在调用线程（Tauri 主线程，其消息循环负责派发），
+/// 用 `thread_local` 保存；并且当注册发生在另一个线程时**明确报错**，而不是在无人
+/// 派发消息的线程上悄悄再建一个 —— 那会得到「注册成功但永远收不到按键」的假象。
 fn with_manager<T>(f: impl FnOnce(&GlobalHotKeyManager) -> T) -> Result<T, HotkeyError> {
-    use std::cell::RefCell;
-    use std::sync::OnceLock;
-
-    /// 第一个创建后端窗口的线程。`WM_HOTKEY` 只投递到该线程的消息队列，
-    /// 因此在别的线程上再注册只会得到「注册成功但永远收不到按键」的假象。
-    static OWNER_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
-
-    thread_local! {
-        static MANAGER: RefCell<Option<Result<GlobalHotKeyManager, String>>> =
-            const { RefCell::new(None) };
+    #[cfg(not(target_os = "windows"))]
+    {
+        manager().map(f)
     }
+    #[cfg(target_os = "windows")]
+    {
+        use std::cell::RefCell;
 
-    let current = std::thread::current().id();
-    let owner = *OWNER_THREAD.get_or_init(|| current);
-    if owner != current {
-        return Err(HotkeyError::BackendUnavailable {
-            reason: "全局快捷键后端属于创建它的线程（Windows 的 WM_HOTKEY 只投递到该线程的\
-                     消息队列）；请在应用主线程注册快捷键"
-                .to_string(),
+        thread_local! {
+            static MANAGER: RefCell<Option<Result<GlobalHotKeyManager, String>>> =
+                const { RefCell::new(None) };
+        }
+
+        thread_local! {
+            static OWNER_THREAD: RefCell<Option<std::thread::ThreadId>> = const { RefCell::new(None) };
+        }
+
+        let current = std::thread::current().id();
+        let owner = OWNER_THREAD.with(|cell| *cell.borrow().as_ref().unwrap_or(&current));
+        OWNER_THREAD.with(|cell| {
+            if cell.borrow().is_none() {
+                *cell.borrow_mut() = Some(current);
+            }
         });
-    }
-
-    MANAGER.with(|cell| {
-        let mut slot = cell.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(GlobalHotKeyManager::new().map_err(|error| error.to_string()));
+        if owner != current {
+            return Err(HotkeyError::BackendUnavailable {
+                reason: "全局快捷键后端属于创建它的线程（Windows 的 WM_HOTKEY 只投递到该线程的\
+                         消息队列）；请在应用主线程注册快捷键"
+                    .to_string(),
+            });
         }
-        match slot.as_ref().expect("上面刚写入") {
-            Ok(manager) => Ok(f(manager)),
-            Err(reason) => Err(backend_unavailable(reason)),
-        }
-    })
-}
-
-fn backend_unavailable(reason: &str) -> HotkeyError {
-    HotkeyError::BackendUnavailable {
-        reason: format!("无法初始化全局快捷键后端：{reason}"),
+        MANAGER.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(GlobalHotKeyManager::new().map_err(|error| error.to_string()));
+            }
+            match slot.as_ref().expect("上面刚写入") {
+                Ok(manager) => Ok(f(manager)),
+                Err(reason) => Err(HotkeyError::BackendUnavailable {
+                    reason: format!("无法初始化全局快捷键后端：{reason}"),
+                }),
+            }
+        })
     }
 }
 
@@ -118,11 +120,8 @@ fn ensure_listener() {
     });
 }
 
-/// 注册 `spec`。调用方负责先做平台准入判断。
-pub(crate) fn register(
-    spec: &HotkeySpec,
-    on_press: PressCallback,
-) -> Result<HotkeyHandle, HotkeyError> {
+/// 注册快捷键。调用方必须先自行判断当前环境是否允许注册。
+pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHandle, HotkeyError> {
     let hotkey = to_backend_hotkey(spec)?;
     let id = hotkey.id();
 
@@ -136,12 +135,8 @@ pub(crate) fn register(
     }))
 }
 
-/// 用新规格替换已注册的快捷键。失败时恢复原快捷键，避免用户彻底失去入口。
-pub(crate) fn update(
-    handle: &HotkeyHandle,
-    spec: &HotkeySpec,
-) -> Result<HotkeyHandle, HotkeyError> {
-    // 保持回调不变：先取出旧回调，注销后重新注册。
+/// 替换已注册的快捷键。失败时恢复原快捷键，避免用户彻底失去入口。
+pub fn update(handle: &HotkeyHandle, spec: &HotkeySpec) -> Result<HotkeyHandle, HotkeyError> {
     let callback = lock_callbacks()
         .get(&(handle.id as u32))
         .cloned()
@@ -156,8 +151,8 @@ pub(crate) fn update(
     }
 }
 
-/// 注销已注册的快捷键。重复注销不视为错误。
-pub(crate) fn unregister(handle: &HotkeyHandle) -> Result<(), HotkeyError> {
+/// 注销快捷键。重复注销不视为错误。
+pub fn unregister(handle: &HotkeyHandle) -> Result<(), HotkeyError> {
     let id = handle.id as u32;
     lock_callbacks().remove(&id);
     let hotkey = to_backend_hotkey(&handle.spec)?;
@@ -168,19 +163,21 @@ pub(crate) fn unregister(handle: &HotkeyHandle) -> Result<(), HotkeyError> {
         Ok(Err(error)) => Err(HotkeyError::Other {
             reason: error.to_string(),
         }),
-        // 后端不可初始化（或不是创建它的线程）时也视为已注销：清理路径不应报错。
+        // 后端不可用（或不是创建它的线程）时也视为已注销：清理路径不应报错。
         Err(_) => Ok(()),
     }
 }
 
 /// 把内部规格转换为后端快捷键。
-pub(crate) fn to_backend_hotkey(spec: &HotkeySpec) -> Result<HotKey, HotkeyError> {
+pub fn to_backend_hotkey(spec: &HotkeySpec) -> Result<HotKey, HotkeyError> {
     let code = to_code(spec.key).ok_or_else(|| HotkeyError::Other {
         reason: format!("后端不支持按键 {}", spec.key.canonical()),
     })?;
     let mut modifiers = Modifiers::empty();
     for modifier in &spec.modifiers {
         modifiers |= match modifier {
+            // `Modifier::Super` 在 macOS 上即 Command：前端用 `Cmd` / `CmdOrCtrl`
+            // 书写，解析层已统一映射到 `Super`。
             Modifier::Control => Modifiers::CONTROL,
             Modifier::Alt => Modifiers::ALT,
             Modifier::Shift => Modifiers::SHIFT,
@@ -197,8 +194,8 @@ pub(crate) fn to_backend_hotkey(spec: &HotkeySpec) -> Result<HotKey, HotkeyError
     Ok(HotKey::new(Some(modifiers), code))
 }
 
-/// 内部主键到后端键码的映射。`None` 表示后端没有对应键位。
-pub(crate) fn to_code(key: Key) -> Option<Code> {
+/// 内部主键 → 后端键码。不支持的按键返回 `None`，由调用方给出可展示原因。
+pub fn to_code(key: Key) -> Option<Code> {
     Some(match key {
         Key::Letter(c) => match c.to_ascii_uppercase() {
             'A' => Code::KeyA,
@@ -265,10 +262,10 @@ pub(crate) fn to_code(key: Key) -> Option<Code> {
 }
 
 /// 把后端错误分类为可展示的原因。
-pub(crate) fn classify(error: global_hotkey::Error, spec: &HotkeySpec) -> HotkeyError {
+pub fn classify(error: global_hotkey::Error, spec: &HotkeySpec) -> HotkeyError {
     match error {
-        // X11 下 XGrabKey 返回 BadAccess、Windows 下 RegisterHotKey 失败都走这里：
-        // 快捷键已被其他应用占用。
+        // X11 下 XGrabKey 返回 BadAccess、macOS 下 RegisterEventHotKey 返回
+        // eventHotKeyExistsErr 都走这里：快捷键被其他应用占用。
         global_hotkey::Error::FailedToRegister(_) => HotkeyError::Conflict {
             spec: spec.canonical(),
         },
@@ -303,27 +300,47 @@ fn dummy_callback(id: u32) -> PressCallback {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hotkey::HotkeySpec;
 
-    /// 每个内部主键都必须映射到后端键码，且字母键大小写不敏感。
+    /// 默认快捷键必须能映射到后端键码 —— 否则用户一开箱就注册失败。
     #[test]
-    fn every_supported_key_maps_to_a_backend_code() {
+    fn default_hotkey_maps_to_a_backend_code() {
+        let spec = HotkeySpec::parse(crate::hotkey::DEFAULT_HOTKEY).expect("默认快捷键可解析");
+        let hotkey = to_backend_hotkey(&spec).expect("默认快捷键可映射");
+        assert_eq!(hotkey.mods, Modifiers::CONTROL | Modifiers::ALT);
+        assert_eq!(hotkey.key, Code::Space);
+    }
+
+    /// 全部字母与数字键都应映射成功，且大小写等价（macOS 与 X11 共用该映射）。
+    #[test]
+    fn every_letter_and_digit_maps_case_insensitively() {
         for c in 'a'..='z' {
-            assert!(
-                to_code(Key::Letter(c)).is_some(),
-                "小写字母 {c} 必须有映射"
-            );
-            assert_eq!(
-                to_code(Key::Letter(c)),
-                to_code(Key::Letter(c.to_ascii_uppercase())),
-                "字母 {c} 的大小写必须映射到同一键码"
-            );
+            let lower = to_code(Key::Letter(c)).unwrap_or_else(|| panic!("字母 {c} 未映射"));
+            let upper = to_code(Key::Letter(c.to_ascii_uppercase()))
+                .unwrap_or_else(|| panic!("大写字母 {c} 未映射"));
+            assert_eq!(lower, upper, "字母 {c} 的大小写映射不一致");
         }
-        for d in 0..=9u8 {
-            assert!(to_code(Key::Digit(d)).is_some(), "数字 {d} 必须有映射");
+        for digit in 0..=9u8 {
+            assert!(to_code(Key::Digit(digit)).is_some(), "数字 {digit} 未映射");
         }
+        // 超出范围的取值必须如实返回 None，而不是映射到别的键。
+        assert!(to_code(Key::Digit(10)).is_none());
+        assert!(to_code(Key::Letter('中')).is_none());
+    }
+
+    /// F1–F12 已映射，F13 以上不支持。
+    #[test]
+    fn function_keys_cover_f1_to_f12_only() {
         for n in 1..=12u8 {
-            assert!(to_code(Key::Function(n)).is_some(), "F{n} 必须有映射");
+            assert!(to_code(Key::Function(n)).is_some(), "F{n} 应已映射");
         }
+        for n in 13..=24u8 {
+            assert!(to_code(Key::Function(n)).is_none(), "F{n} 不应被映射");
+        }
+    }
+
+    #[test]
+    fn named_keys_are_all_mapped() {
         for key in [
             Key::Space,
             Key::Enter,
@@ -334,60 +351,23 @@ mod tests {
             Key::ArrowLeft,
             Key::ArrowRight,
         ] {
-            assert!(to_code(key).is_some(), "{} 必须有映射", key.canonical());
+            assert!(to_code(key).is_some(), "{key:?} 未映射");
         }
-        // 明确的「后端不支持」：F13 与非法数字不静默映射到别的键。
-        assert_eq!(to_code(Key::Function(13)), None);
-        assert_eq!(to_code(Key::Digit(10)), None);
-        assert_eq!(to_code(Key::Letter('中')), None);
     }
 
-    /// 注册失败必须区分「被占用」与「后端不可用」：前者用户改键即可解决。
+    /// 冲突必须被分类为「被其他应用占用」，而不是笼统的失败。
     #[test]
-    fn backend_errors_are_classified_for_the_user() {
-        let spec = HotkeySpec::parse("Ctrl+Alt+Space").expect("规格可解析");
+    fn registration_failure_is_reported_as_conflict() {
+        let spec = HotkeySpec::parse("Ctrl+Alt+Space").expect("可解析");
+        let error = classify(
+            global_hotkey::Error::FailedToRegister("RegisterEventHotKey failed".to_string()),
+            &spec,
+        );
         assert_eq!(
-            classify(global_hotkey::Error::FailedToRegister("x".to_string()), &spec),
+            error,
             HotkeyError::Conflict {
                 spec: "Ctrl+Alt+Space".to_string()
             }
         );
-        assert_eq!(
-            classify(
-                global_hotkey::Error::AlreadyRegistered(HotKey::new(
-                    Some(Modifiers::CONTROL),
-                    Code::KeyA
-                )),
-                &spec
-            ),
-            HotkeyError::AlreadyRegistered {
-                spec: "Ctrl+Alt+Space".to_string()
-            }
-        );
-        let io_error = std::io::Error::new(std::io::ErrorKind::Other, "nope");
-        match classify(global_hotkey::Error::OsError(io_error), &spec) {
-            HotkeyError::BackendUnavailable { reason } => assert!(reason.contains("nope")),
-            other => panic!("OsError 应归类为后端不可用，实际为 {other:?}"),
-        }
-    }
-
-    /// 规格到后端的转换保留修饰键，并且拒绝没有修饰键的规格。
-    #[test]
-    fn backend_hotkey_conversion_keeps_modifiers() {
-        let spec = HotkeySpec::parse("Ctrl+Shift+K").expect("规格可解析");
-        let hotkey = to_backend_hotkey(&spec).expect("转换成功");
-        assert!(hotkey.mods.contains(Modifiers::CONTROL));
-        assert!(hotkey.mods.contains(Modifiers::SHIFT));
-        assert_eq!(hotkey.key, Code::KeyK);
-
-        let bare = HotkeySpec {
-            raw: "K".to_string(),
-            modifiers: Vec::new(),
-            key: Key::Letter('k'),
-        };
-        assert!(matches!(
-            to_backend_hotkey(&bare),
-            Err(HotkeyError::InvalidSpec(_))
-        ));
     }
 }

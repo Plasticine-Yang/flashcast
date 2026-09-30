@@ -13,7 +13,7 @@ Blocked by: None (can start immediately)
 - [x] 唤起、关闭、键盘选择与结果更新无动画；中文输入法确认不误执行，旧查询结果不会覆盖新查询，鼠标移动不抢走键盘选择。
 - [x] 保存唤起前应用的身份，明确本地实际 X11/Wayland 会话类型；记录通过与无法覆盖的系统能力。
 - [x] 建立宿主查询/命令入口的非 UI 验证，手动或浏览器交互检查主流程，不添加 UI 单元测试。
-- [ ] GitHub Actions 在 Linux x64、Windows x64、macOS Apple Silicon/Intel 上编译，执行可适用的核心检查，并保存诊断信息。
+- [x] GitHub Actions 在 Linux x64、Windows x64、macOS Apple Silicon/Intel 上编译，执行可适用的核心检查，并保存诊断信息。
 - [x] 完成适用验证后更新正式 ticket 为 done，与实现一起创建中文 Git commit。
 
 ## Comments
@@ -51,7 +51,7 @@ Blocked by: None (can start immediately)
   - **托盘与真实 webview**：浏览器检查不是 Tauri webview，`pnpm ui-check` 不能证明托盘菜单、托盘左键切换或 webview 内图标渲染。真实窗口与托盘只做了「进程能起来、appindicator 能初始化」的冒烟，没有目视确认（本机无人值守）。
   - **真实软件启动**：回车的运行逻辑由 core 测试（fake launcher）与浏览器模拟宿主验证，**没有真的拉起过一个桌面软件**；ticket 的验收注记要求首次切片包含真实软件启动，因此第 2 个复选框未勾选，需在下一张 ticket 或人工检查时补上。
   - **唤起前应用身份**：Wayland 下读不到全局焦点窗口，platform_check 报未覆盖；第 5 个复选框只按「会话类型与能力状态被如实记录」勾选，身份保存本身未验证。
-  - **CI**：`.github/workflows/ci.yml` 已写好并在本机校验过（YAML 解析、所有 `run` 块 bash 语法、WebKitGTK 4.1 断言、platform_check 与摘要步骤都本地跑过），但**从未在 GitHub 上运行过**，故第 7 个复选框未勾选。另外 `-p flashcast` 无法在 Linux 上交叉 `cargo check`（Windows 目标要 `llvm-rc` 嵌图标，macOS 目标要能识别 `-arch` 的 Apple 工具链），所以跨目标检查只覆盖 `flashcast-platform`，外壳靠矩阵里各自的 runner。
+  - **CI**：已在本仓库 `feat/flashcast-v0.1.0` 分支上实际运行并通过，运行 `36768856398`（提交 `12a9684`）：6 个任务全部 success —— Linux x64、Windows x64、macOS arm64（原生）、macOS x86_64（在 arm64 runner 上交叉编译），以及两个廉价的跨目标 `cargo check`。第一次运行（`36768539969`）暴露了研究工作笔记里写错的 action 版本 `actions/upload-artifact@v8`（该 tag 不存在，4 个矩阵任务全部卡在 Set up job），已改为 `v7` 后重跑通过。每个矩阵任务都上传了 `diagnostics-<slug>` artifact；平台检查在各 runner 上如实输出「实测通过 / 实测失败 / 未覆盖」（macOS 两条腿在平台实现落地前为 1 通过 / 0 失败 / 7 未覆盖）。注意本机无法交叉 `cargo check -p flashcast`（Windows 目标要 `llvm-rc` 嵌图标，macOS 目标要能识别 `-arch` 的 Apple 工具链），外壳由矩阵里各自的 runner 编译。
   - **release / `tauri build` 打包**未验证：debug 构建走 `devUrl`、不嵌入 `dist`，非 dev 构建才嵌入 `frontendDist`（缺失时 tauri-codegen 直接 panic）。
 
   **后续 ticket 需注意**

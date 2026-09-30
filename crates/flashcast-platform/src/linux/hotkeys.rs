@@ -4,11 +4,12 @@
 //! 因此默认拒绝注册并返回 [`HotkeyError::BackendUnavailable`]，让 UI 明确提示
 //! 用户改用托盘入口，而不是给出一个「看起来注册成功」的假象。
 //!
-//! 注册、注销、更新与事件分发在 [`crate::hotkey_backend`] 中与 Windows 共用；
-//! 本文件只负责 Linux 的准入判断。
+//! 进程级回调表、按键映射与错误分类在 [`crate::hotkey_backend`] 中与 macOS 共享；
+//! 本模块只负责「当前会话是否允许注册」这一 Linux 专有判断。
 
 use crate::capability::SessionType;
 use crate::hotkey::HotkeySpec;
+use crate::hotkey_backend;
 use crate::shortcut::{HotkeyError, HotkeyHandle, HotkeyManager, PressCallback};
 
 use super::{detect_session_type, force_x11_backend};
@@ -33,10 +34,7 @@ impl LinuxHotkeyManager {
     }
 
     pub fn with_session(session: SessionType, force_x11: bool) -> Self {
-        Self {
-            session,
-            force_x11,
-        }
+        Self { session, force_x11 }
     }
 
     /// 当前会话下是否允许尝试注册。
@@ -67,7 +65,7 @@ impl HotkeyManager for LinuxHotkeyManager {
         on_press: PressCallback,
     ) -> Result<HotkeyHandle, HotkeyError> {
         self.backend_allowed()?;
-        crate::hotkey_backend::register(spec, on_press)
+        hotkey_backend::register(spec, on_press)
     }
 
     fn update(
@@ -75,11 +73,10 @@ impl HotkeyManager for LinuxHotkeyManager {
         handle: &HotkeyHandle,
         spec: &HotkeySpec,
     ) -> Result<HotkeyHandle, HotkeyError> {
-        // 更新不重复做准入判断：能注册成功就说明后端可用。
-        crate::hotkey_backend::update(handle, spec)
+        hotkey_backend::update(handle, spec)
     }
 
     fn unregister(&self, handle: &HotkeyHandle) -> Result<(), HotkeyError> {
-        crate::hotkey_backend::unregister(handle)
+        hotkey_backend::unregister(handle)
     }
 }

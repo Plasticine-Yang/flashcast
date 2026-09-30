@@ -116,4 +116,33 @@ export interface Settings {
   disabledPlugins: string[];
 }
 
+/** 当前配置工作区与它的有效性（对应 flashcast_core::WorkspaceStatus）。 */
+export interface WorkspaceStatus {
+  /** 工作区根目录；null 表示尚未关联工作区。 */
+  path: string | null;
+  /** Git 仓库目录（`.git`）；不是 Git 仓库时为 null。 */
+  gitDir: string | null;
+  valid: boolean;
+  settingsFile: string | null;
+  /** 设置是否落在工作区文件里；未关联时只在内存中，重启不保留。 */
+  persisted: boolean;
+  /** 最近一次失败的中文原因。 */
+  error: string | null;
+}
+
+/** 一次外部修改被处理后的结果。 */
+export interface WorkspaceReload {
+  path: string;
+  applied: boolean;
+  settings: Settings;
+  error: string | null;
+}
+
+/** 宿主推送的工作区事件。 */
+export interface WorkspaceEvent {
+  status: WorkspaceStatus;
+  settings: Settings;
+  reload: WorkspaceReload | null;
+}
+
 export type UnlistenFn = () => void;

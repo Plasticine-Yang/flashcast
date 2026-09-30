@@ -24,6 +24,10 @@ lnk = "0.6.4"
 # 在 Linux 上以真实像素做往返验证，因此必须在开发机上可编译。
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 
+# macOS `.app` 包的 Info.plist 解析。该 crate 是纯 Rust、跨平台的，因此不按目标
+# 条件编译：`src/macos/bundle.rs` 的遍历与字段映射逻辑要在 Linux 上也能被夹具测试。
+plist = "1.10.1"
+
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 global-hotkey = "0.8.0"
 
@@ -48,6 +52,50 @@ windows = { version = "0.62.2", features = [
 # 只读注册表，不需要 9 MB 的 `windows` bindings；用 wow64_32/wow64_64 视图，
 # 而不是拼接 WOW6432Node 字符串。
 windows-registry = "0.100.0"
+
+# macOS 适配层。全部经 `cfg(target_os = "macos")` 条件编译，Linux 构建不受影响；
+# 这些 crate 只做 FFI，`cargo check --target x86_64-apple-darwin` 不需要 macOS SDK。
+[target.'cfg(target_os = "macos")'.dependencies]
+# global-hotkey 的 macOS 后端用 Carbon RegisterEventHotKey + 应用事件目标。
+global-hotkey = "0.8.0"
+objc2 = "0.6.4"
+# 每个 feature 都要显式声明：objc2-app-kit 以 default-features = false 引入
+# objc2-foundation，不声明就会缺少 NSString / NSData 等基本类型。
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSString",
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSGeometry",
+    "NSProcessInfo",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    # processIdentifier / runningApplicationWithProcessIdentifier 由 libc feature 提供。
+    "libc",
+    "NSWorkspace",
+    "NSImage",
+    # NSBitmapImageRep 本身由 NSImageRep 提供（其父类）。
+    "NSImageRep",
+    "NSBitmapImageRep",
+    "NSRunningApplication",
+] }
+# AXIsProcessTrusted / AXIsProcessTrustedWithOptions 与 kAXTrustedCheckOptionPrompt。
+objc2-application-services = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "HIServices",
+    "AXUIElement",
+    "objc2",
+] }
+# 辅助功能权限提示字典。CFBoolean 定义在 CFNumber 模块下，feature 名是 CFNumber。
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CFString",
+    "CFNumber",
+    "CFDictionary",
+    "objc2",
+] }
 
 [[bin]]
 name = "flashcast-platform-check"
