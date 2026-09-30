@@ -30,6 +30,28 @@ use flashcast_platform::linux::{
     LinuxAppCatalog, LinuxCapabilityProbe, LinuxFocusTracker, LinuxHotkeyManager,
 };
 
+// macOS 的真实检查全部经 `flashcast_platform::macos`，不经过任何替身。
+#[cfg(target_os = "macos")]
+use std::sync::Arc as MacosArc;
+#[cfg(target_os = "macos")]
+use flashcast_platform::capability::{CapabilityProbe as MacosCapabilityProbeTrait, Support as MacosSupport};
+#[cfg(target_os = "macos")]
+use flashcast_platform::focus::FocusTracker as MacosFocusTrackerTrait;
+#[cfg(target_os = "macos")]
+use flashcast_platform::hotkey::HotkeySpec as MacosHotkeySpec;
+#[cfg(target_os = "macos")]
+use flashcast_platform::macos::catalog::MacosAppCatalog;
+#[cfg(target_os = "macos")]
+use flashcast_platform::macos::focus::{
+    accessibility_granted, MacosFocusTracker, ACCESSIBILITY_SETTINGS_LABEL,
+};
+#[cfg(target_os = "macos")]
+use flashcast_platform::macos::hotkeys::MacosHotkeyManager;
+#[cfg(target_os = "macos")]
+use flashcast_platform::macos::icons::{self as macos_icons, ICON_POINT_SIZE};
+#[cfg(target_os = "macos")]
+use flashcast_platform::shortcut::{HotkeyError as MacosHotkeyError, HotkeyManager as MacosHotkeyManagerTrait};
+
 /// 非 Linux 平台上报告「未覆盖」时给出的复现命令提示。
 #[cfg(all(not(target_os = "linux"), target_os = "windows"))]
 const CROSS_CHECK_HINT: &str = "cargo check -p flashcast-platform --target x86_64-pc-windows-msvc";
@@ -38,13 +60,17 @@ const CROSS_CHECK_HINT: &str = "cargo check -p flashcast-platform --target x86_6
 #[cfg(all(not(target_os = "linux"), not(any(target_os = "windows", target_os = "macos"))))]
 const CROSS_CHECK_HINT: &str = "cargo check -p flashcast-platform";
 
-/// 探测当前环境能力。Linux 用真实探测器，其他平台用「不支持」桩实现。
+/// 探测当前环境能力。Linux 与 macOS 用真实探测器，其余平台用「不支持」桩实现。
 fn probe_capabilities() -> Capabilities {
     #[cfg(target_os = "linux")]
     {
         LinuxCapabilityProbe::new().probe()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        flashcast_platform::macos::MacosCapabilityProbe::new().probe()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         flashcast_platform::current().capabilities.probe()
     }
@@ -139,8 +165,9 @@ fn main() {
         command: compile_command(),
     });
 
-    // 2~7 依赖各平台的具体实现，因此按平台分开：
-    // Linux 走真实实现；Windows / macOS 由后续平台 ticket 提供，这里如实报告「未覆盖」。
+    // 2~8 依赖各平台的具体实现，因此按平台分开：
+    // Linux（ticket 01）与 macOS（ticket 03）走真实实现；
+    // Windows 等其余目标由后续平台 ticket 提供，这里如实报告「未覆盖」。
     #[cfg(target_os = "linux")]
     {
         // 2. 会话类型判定。
@@ -322,7 +349,12 @@ fn main() {
 
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        checks.extend(macos_checks(&capabilities));
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         checks.extend(uncovered_checks(&capabilities));
     }
@@ -357,6 +389,11 @@ fn print_human(capabilities: &flashcast_platform::capability::Capabilities, chec
         );
     }
     println!();
+    println!(
+        "真实执行：以上检查全部调用真实平台实现，未使用任何测试替身（testDoubles 为空）。\
+         替身通过的检查不构成平台适配证据。"
+    );
+    println!();
     let pass = checks
         .iter()
         .filter(|c| c.status == Status::MeasuredPass)
@@ -384,6 +421,9 @@ fn print_json(
     let mut out = String::new();
     out.push_str("{\n");
     out.push_str("  \"schemaVersion\": 1,\n");
+    // 「真实执行 / 测试替身 / 未覆盖」三者在报告里分开：本二进制不使用替身，
+    // 因此这里恒为空数组；未覆盖项由各 check 的 status 单独列出。
+    out.push_str("  \"testDoubles\": [],\n");
     out.push_str("  \"product\": \"flashcast\",\n");
     out.push_str(&format!(
         "  \"version\": \"{}\",\n",
@@ -518,11 +558,256 @@ fn compile_command() -> String {
     }
 }
 
-/// 非 Linux 平台的检查列表。
+
+/// macOS 真实检查（ticket 03）。
+///
+/// 每一项都调用真实的 macOS 实现：目录遍历与 `Info.plist` 解析、`NSWorkspace`
+/// 图标渲染、`NSRunningApplication` 焦点读取与激活、Carbon `RegisterEventHotKey`
+/// 注册、`AXIsProcessTrusted` 权限查询。**不使用任何测试替身**。
+///
+/// 环境不支持的项（没有任何应用目录、未授予辅助功能权限、没有桌面会话）记为
+/// 「未覆盖」并写明原因；命令调用成功不等于用户操作成功。
+#[cfg(target_os = "macos")]
+fn macos_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
+    let mut checks = Vec::new();
+    let plain = || "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string();
+    let json = || {
+        "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json".to_string()
+    };
+
+    // 2. 桌面会话可用性。macOS 没有 X11/Wayland 会话区分。
+    checks.push(CheckResult {
+        id: "session.detect",
+        title: "桌面会话可用性",
+        status: if capabilities.desktop_available {
+            Status::MeasuredPass
+        } else {
+            Status::NotCovered
+        },
+        detail: if capabilities.desktop_available {
+            "macOS 没有 X11/Wayland 会话类型；NSWorkspace 能报出前台应用，桌面会话可用".to_string()
+        } else {
+            "NSWorkspace 未报出前台应用：没有可交互的桌面会话（无 Aqua 会话）".to_string()
+        },
+        command: plain(),
+    });
+
+    // 3. 软件发现（真实遍历 /Applications 等目录并解析 Info.plist）。
+    let catalog = MacosAppCatalog::new();
+    let existing = catalog.existing_roots();
+    let missing = catalog.missing_roots();
+    let outcome = catalog.scan_detailed();
+    let discovery_status = if existing.is_empty() {
+        Status::NotCovered
+    } else if outcome.entries.is_empty() {
+        Status::MeasuredFail
+    } else {
+        Status::MeasuredPass
+    };
+    checks.push(CheckResult {
+        id: "apps.discovery",
+        title: "macOS 应用发现",
+        status: discovery_status,
+        detail: format!(
+            "发现 {} 个 .app 包，其中 {} 个可启动；跳过 {} 个；应用目录存在 {} 个、缺失 {} 个（{:?}）；\
+             图标渲染成功 {} 个、失败 {} 个",
+            outcome.scan.bundles_seen,
+            outcome.entries.len(),
+            outcome.scan.skipped.len(),
+            existing.len(),
+            missing.len(),
+            missing,
+            outcome.icons_rendered,
+            outcome.icons_failed.len(),
+        ),
+        command: json(),
+    });
+    if !outcome.scan.skipped.is_empty() {
+        let detail = outcome
+            .scan
+            .skipped
+            .iter()
+            .take(8)
+            .map(|skipped| format!("{}（{}）", skipped.path.display(), skipped.reason.as_str()))
+            .collect::<Vec<_>>()
+            .join("；");
+        checks.push(CheckResult {
+            id: "apps.discovery.skipped",
+            title: "被跳过的 .app 包明细",
+            status: Status::MeasuredPass,
+            detail,
+            command: plain(),
+        });
+    }
+
+    // 4. 图标渲染：最能暴露 AppKit 路径问题的单项。
+    let icon_check = match outcome.entries.first() {
+        None => CheckResult {
+            id: "apps.icon_render",
+            title: "应用图标渲染（NSWorkspace → PNG）",
+            status: Status::NotCovered,
+            detail: "软件发现结果为空，没有可渲染的应用包".to_string(),
+            command: plain(),
+        },
+        Some(entry) => match entry.exec.first().map(std::path::PathBuf::from) {
+            None => CheckResult {
+                id: "apps.icon_render",
+                title: "应用图标渲染（NSWorkspace → PNG）",
+                status: Status::NotCovered,
+                detail: format!("条目 {} 没有可用的应用包路径", entry.name),
+                command: plain(),
+            },
+            Some(bundle) => match macos_icons::render_icon_png(&bundle, ICON_POINT_SIZE) {
+                Ok(bytes) if bytes.starts_with(&[0x89, b'P', b'N', b'G']) => CheckResult {
+                    id: "apps.icon_render",
+                    title: "应用图标渲染（NSWorkspace → PNG）",
+                    status: Status::MeasuredPass,
+                    detail: format!(
+                        "NSWorkspace 渲染 {} 得到 {} 字节 PNG（宽度 {} 点）",
+                        bundle.display(),
+                        bytes.len(),
+                        ICON_POINT_SIZE
+                    ),
+                    command: plain(),
+                },
+                Ok(bytes) => CheckResult {
+                    id: "apps.icon_render",
+                    title: "应用图标渲染（NSWorkspace → PNG）",
+                    status: Status::MeasuredFail,
+                    detail: format!(
+                        "渲染结果不是 PNG：{} 字节，首字节 {:?}",
+                        bytes.len(),
+                        &bytes[..bytes.len().min(8)]
+                    ),
+                    command: plain(),
+                },
+                Err(error) => CheckResult {
+                    id: "apps.icon_render",
+                    title: "应用图标渲染（NSWorkspace → PNG）",
+                    status: Status::MeasuredFail,
+                    detail: format!("渲染 {} 失败：{error}", bundle.display()),
+                    command: plain(),
+                },
+            },
+        },
+    };
+    checks.push(icon_check);
+
+    // 5. 焦点读取：唤起前前台应用。
+    let focus = MacosFocusTracker::new();
+    checks.push(match MacosFocusTrackerTrait::capture(&focus) {
+        Ok(app) => CheckResult {
+            id: "focus.capture",
+            title: "读取唤起前前台应用",
+            status: Status::MeasuredPass,
+            detail: format!(
+                "读取到 id={} name={} bundle={:?} pid={:?}",
+                app.id, app.name, app.wm_class, app.pid
+            ),
+            command: plain(),
+        },
+        Err(flashcast_platform::focus::FocusError::Unsupported { reason }) => CheckResult {
+            id: "focus.capture",
+            title: "读取唤起前前台应用",
+            status: Status::NotCovered,
+            detail: reason,
+            command: plain(),
+        },
+        Err(error) => CheckResult {
+            id: "focus.capture",
+            title: "读取唤起前前台应用",
+            status: Status::MeasuredFail,
+            detail: error.to_string(),
+            command: plain(),
+        },
+    });
+
+    // 6. 辅助功能权限：决定自动粘贴能否工作，也决定用户该去哪个设置面板。
+    let granted = accessibility_granted();
+    checks.push(CheckResult {
+        id: "accessibility.permission",
+        title: "辅助功能（Accessibility）权限",
+        status: if granted {
+            Status::MeasuredPass
+        } else {
+            Status::NotCovered
+        },
+        detail: if granted {
+            format!("AXIsProcessTrusted() = true；{ACCESSIBILITY_SETTINGS_LABEL}")
+        } else {
+            format!(
+                "AXIsProcessTrusted() = false，注入按键不可用；需要用户手动授权：\
+                 {ACCESSIBILITY_SETTINGS_LABEL}（UI 可调用 open_accessibility_settings() 直接打开该面板）"
+            )
+        },
+        command: plain(),
+    });
+
+    // 7. 全局快捷键注册：真实的 Carbon RegisterEventHotKey 注册 + 注销。
+    let hotkeys = MacosHotkeyManager::new();
+    let spec = MacosHotkeySpec::parse("Ctrl+Alt+F12").expect("固定检查用快捷键必须可解析");
+    checks.push(match MacosHotkeyManagerTrait::register(&hotkeys, &spec, MacosArc::new(|| {})) {
+        Ok(handle) => {
+            let _ = MacosHotkeyManagerTrait::unregister(&hotkeys, &handle);
+            CheckResult {
+                id: "hotkey.register",
+                title: "全局快捷键注册",
+                status: Status::MeasuredPass,
+                detail: format!("注册并注销 {} 成功", spec.canonical()),
+                command: plain(),
+            }
+        }
+        Err(MacosHotkeyError::BackendUnavailable { reason }) => CheckResult {
+            id: "hotkey.register",
+            title: "全局快捷键注册",
+            status: Status::NotCovered,
+            detail: reason,
+            command: plain(),
+        },
+        Err(error) => CheckResult {
+            id: "hotkey.register",
+            title: "全局快捷键注册",
+            status: Status::MeasuredFail,
+            detail: error.to_string(),
+            command: plain(),
+        },
+    });
+
+    // 8. 剪贴板与自动粘贴：适配由 ticket 08/09/10 提供，这里只报告真实前提。
+    for (id, title, support) in [
+        (
+            "clipboard.text",
+            "剪贴板文字读写",
+            capabilities.clipboard.clone(),
+        ),
+        (
+            "paste.auto",
+            "自动粘贴到唤起前应用",
+            capabilities.auto_paste.clone(),
+        ),
+    ] {
+        let (status, detail) = match &support {
+            MacosSupport::Supported => (Status::MeasuredPass, "支持".to_string()),
+            MacosSupport::Unsupported { reason } => (Status::MeasuredFail, reason.clone()),
+            MacosSupport::Unknown { reason } => (Status::NotCovered, reason.clone()),
+        };
+        checks.push(CheckResult {
+            id,
+            title,
+            status,
+            detail,
+            command: plain(),
+        });
+    }
+
+    checks
+}
+
+/// 既非 Linux 也非 macOS 的目标上的检查列表。
 ///
 /// id 与标题和 Linux 侧保持一致，状态一律为「未覆盖」，并写明原因：
-/// 这些能力的真实实现由后续的 Windows / macOS ticket 提供，本平台目前只保证能编译。
-#[cfg(not(target_os = "linux"))]
+/// 这些能力的真实实现由后续的 Windows ticket 提供，本平台目前只保证能编译。
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn uncovered_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
     let os = capabilities.os.as_str();
     let unchecked = |id: &'static str, title: &'static str, what: &str| CheckResult {
