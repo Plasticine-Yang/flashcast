@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { Settings, WorkspaceStatus } from "../types";
+import type { Settings, WorkspaceChanges, WorkspaceStatus } from "../types";
+import { ChangesPanel } from "./ChangesPanel";
 
 /** 设置页里显示的一条反馈。 */
 export interface SettingsMessage {
@@ -14,10 +15,21 @@ interface Props {
   message: SettingsMessage | null;
   /** 正在执行工作区操作，按钮暂时禁用。 */
   busy: boolean;
+  /** 当前工作区的 Git 变更；`null` 表示尚未读取。 */
+  changes: WorkspaceChanges | null;
+  commitMessage: string;
+  selectedPaths: string[];
+  diffPath: string | null;
   onBack: () => void;
   onSelectWorkspace: (path: string) => void;
   onInitWorkspace: (path: string) => void;
   onSaveHotkey: (hotkey: string) => void;
+  onTogglePath: (path: string) => void;
+  onToggleAllPaths: () => void;
+  onSelectDiff: (path: string) => void;
+  onCommitMessageChange: (value: string) => void;
+  onCommit: () => void;
+  onRefreshChanges: () => void;
 }
 
 /**
@@ -33,10 +45,20 @@ export function SettingsScreen({
   hotkey,
   message,
   busy,
+  changes,
+  commitMessage,
+  selectedPaths,
+  diffPath,
   onBack,
   onSelectWorkspace,
   onInitWorkspace,
   onSaveHotkey,
+  onTogglePath,
+  onToggleAllPaths,
+  onSelectDiff,
+  onCommitMessageChange,
+  onCommit,
+  onRefreshChanges,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
@@ -154,6 +176,20 @@ export function SettingsScreen({
             并会一并建立 Git 仓库，不会覆盖已有文件。
           </p>
         </section>
+
+        <ChangesPanel
+          changes={changes}
+          message={commitMessage}
+          selected={selectedPaths}
+          diffPath={diffPath}
+          busy={busy}
+          onToggle={onTogglePath}
+          onToggleAll={onToggleAllPaths}
+          onSelectDiff={onSelectDiff}
+          onMessageChange={onCommitMessageChange}
+          onCommit={onCommit}
+          onRefresh={onRefreshChanges}
+        />
 
         <section className="settings-section" data-testid="hotkey-section">
           <h2 className="settings-section-title">全局快捷键</h2>

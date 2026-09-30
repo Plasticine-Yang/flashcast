@@ -37,6 +37,10 @@ const WORKSPACE_PATH_INPUT = '[data-testid="workspace-path-input"]';
 const WORKSPACE_PATH_VALUE = '[data-testid="workspace-path-value"]';
 const WORKSPACE_VALIDITY = '[data-testid="workspace-validity"]';
 const SETTINGS_MESSAGE = '[data-testid="settings-message"]';
+const CHANGE_ROW = '[data-testid="change-row"]';
+const CHANGE_DIFF = '[data-testid="change-diff"]';
+const COMMIT_MESSAGE = '[data-testid="commit-message"]';
+const COMMIT_SUBMIT = '[data-testid="commit-submit"]';
 const HOTKEY_INPUT = '[data-testid="hotkey-input"]';
 const HOTKEY_STATUS = '[data-testid="hotkey-status"]';
 
@@ -177,6 +181,36 @@ async function main() {
         results.push({ name, ok: false, detail: error.message });
         log(`FAIL ${name} — ${error.message}`);
       }
+    };
+
+    /** 变更为某个仓库相对路径的勾选框。 */
+    const changeCheck = (path) =>
+      page.locator(`${CHANGE_ROW}[data-path="${path}"] [data-testid="change-check"]`);
+
+    /** 读取当前变更列表的关键状态。 */
+    const changeRows = () =>
+      page.$$eval(CHANGE_ROW, (nodes) =>
+        nodes.map((node) => ({
+          path: node.dataset.path,
+          code: node.dataset.code,
+          selected: node.dataset.selected === "true",
+          staged: node.dataset.staged === "true",
+          untracked: node.dataset.untracked === "true",
+          status: node.querySelector('[data-testid="change-status"]')?.textContent ?? "",
+        })),
+      );
+
+    /** 进入设置页并关联浏览器模拟宿主的工作区（每次 goto 后模拟宿主会重置）。 */
+    const linkMockWorkspace = async () => {
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await page.fill(WORKSPACE_PATH_INPUT, MOCK_REPO);
+      await page.click('[data-testid="workspace-select"]');
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: WORKSPACE_VALIDITY, expected: "已关联 Git 仓库" },
+      );
+      await page.waitForSelector(CHANGE_ROW);
     };
 
     // 1. 空查询显示快速访问项。
@@ -501,9 +535,201 @@ async function main() {
         box && box.x >= 0 && box.x + box.width <= 640,
         `保存按钮超出窗口宽度：${JSON.stringify(box)}`,
       );
+
+      // 变更与提交区段同样必须在真实窗口尺寸下可见、可操作。
+      await page.locator('[data-testid="changes-section"]').scrollIntoViewIfNeeded();
+      assert(await page.isVisible('[data-testid="changes-section"]'), "变更区段不可见");
+      assert(await page.isVisible(CHANGE_ROW), "变更列表不可见");
+      await page.locator(COMMIT_MESSAGE).scrollIntoViewIfNeeded();
+      assert(await page.isVisible(COMMIT_MESSAGE), "提交说明输入框不可见");
+      const commitButton = await page.locator(COMMIT_SUBMIT).boundingBox();
+      assert(
+        commitButton && commitButton.x >= 0 && commitButton.x + commitButton.width <= 640,
+        `创建提交按钮超出窗口宽度：${JSON.stringify(commitButton)}`,
+      );
       const file = await shot(page, "13-settings-compact-window.png");
       await page.setViewportSize({ width: 900, height: 620 });
       return `640×420 下工作区与快捷键区段均可见可操作，截图 ${file}`;
+    });
+
+    // 13. 变更区展示分支、差异基准、每个文件的状态与真实差异。
+    await check("变更区展示分支、基准、状态与真实差异", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await linkMockWorkspace();
+
+      const branch = (await page.textContent('[data-testid="changes-branch"]')).trim();
+      assert(branch === "main", `必须显示当前分支，实际 ${branch}`);
+      const base = (await page.textContent('[data-testid="changes-diff-base"]')).trim();
+      assert(
+        base.includes("HEAD") && base.includes("工作区"),
+        `差异基准必须透明呈现，实际 ${base}`,
+      );
+      const count = (await page.textContent('[data-testid="changes-count"]')).trim();
+      assert(count.includes("3 个文件"), `待提交数量不对：${count}`);
+
+      const list = await changeRows();
+      assert(list.length === 3, `应有 3 个变更文件，实际 ${list.length}`);
+      const byPath = Object.fromEntries(list.map((row) => [row.path, row]));
+      assert(byPath["settings.toml"].code === " M", JSON.stringify(byPath["settings.toml"]));
+      assert(byPath["settings.toml"].staged === false, "settings.toml 不应标记为已暂存");
+      assert(
+        byPath["settings.toml"].status.includes("未暂存"),
+        `未暂存状态必须点明：${byPath["settings.toml"].status}`,
+      );
+      assert(byPath["theme.json"].code === "MM", JSON.stringify(byPath["theme.json"]));
+      assert(byPath["theme.json"].staged === true, "已暂存改动必须单独标记");
+      assert(
+        byPath["theme.json"].status.includes("已暂存"),
+        `已暂存状态必须点明：${byPath["theme.json"].status}`,
+      );
+      assert(byPath["memos/2026-10-01.md"].untracked === true, "未跟踪文件必须被识别");
+      const stagedShot = await shot(page, "14-settings-changes.png");
+
+      // 点击某个文件，展示它的真实差异内容（不是命令字符串）。
+      await page.click(`${CHANGE_ROW}[data-path="settings.toml"] [data-testid="change-path"]`);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: CHANGE_DIFF, expected: '+hotkey = "Super+Space"' },
+      );
+      const diff = (await page.textContent(CHANGE_DIFF)).trim();
+      assert(
+        diff.includes('-hotkey = "Ctrl+Alt+Space"') && diff.includes("+++ b/settings.toml"),
+        `必须展示真实补丁：${diff}`,
+      );
+
+      // 已暂存 + 未暂存的文件：差异必须是 HEAD → 工作区的最终内容。
+      await page.click(`${CHANGE_ROW}[data-path="theme.json"] [data-testid="change-path"]`);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: CHANGE_DIFF, expected: "serif" },
+      );
+      const stagedDiff = (await page.textContent(CHANGE_DIFF)).trim();
+      assert(
+        !stagedDiff.includes("contrast"),
+        `差异不得只显示已暂存的中间内容：${stagedDiff}`,
+      );
+      const diffShot = await shot(page, "15-settings-diff.png");
+      return `分支 ${branch}，基准「${base}」，${list.length} 个文件；真实补丁含新旧两行与最终内容，截图 ${stagedShot} / ${diffShot}`;
+    });
+
+    // 14. 显式范围提交：只提交勾选的路径，未勾选的已暂存改动原样保留。
+    await check("只提交勾选的路径，未勾选的暂存改动保留", async () => {
+      await changeCheck("settings.toml").check();
+      await page.fill(COMMIT_MESSAGE, "提交设置改动");
+      const scope = (await page.textContent('[data-testid="commit-scope"]')).trim();
+      assert(scope.includes("勾选的 1 / 3"), `提交范围必须透明：${scope}`);
+
+      await page.click(COMMIT_SUBMIT);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "已创建提交" },
+      );
+      const message = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      assert(message.includes("1 个文件"), `结果说明必须点明文件数：${message}`);
+
+      const list = await changeRows();
+      const remaining = list.map((row) => row.path);
+      assert(
+        !remaining.includes("settings.toml"),
+        `已提交的路径必须从列表消失：${remaining}`,
+      );
+      assert(
+        remaining.includes("theme.json") && remaining.includes("memos/2026-10-01.md"),
+        `未勾选的改动必须保留：${remaining}`,
+      );
+      const theme = list.find((row) => row.path === "theme.json");
+      assert(theme.staged === true, "未勾选的已暂存改动不得被吞掉");
+      const file = await shot(page, "16-settings-commit-partial.png");
+      return `「${message}」，剩余 ${remaining.join("、")}（theme.json 仍为已暂存），截图 ${file}`;
+    });
+
+    // 15. 未勾选任何路径时提交被拒绝，改动不丢。
+    await check("未勾选路径时提交被拒绝且改动不丢", async () => {
+      const before = (await changeRows()).length;
+      // 先把提交说明填好，确认失败原因确实来自「没有勾选路径」而不是空说明。
+      await page.fill(COMMIT_MESSAGE, "空范围检查");
+      await page.click(COMMIT_SUBMIT);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "没有选择" },
+      );
+      const message = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      assert(message.includes("勾选"), `必须点明提交范围由勾选决定：${message}`);
+      const after = await changeRows();
+      assert(after.length === before, `失败不得改动仓库状态：${before} → ${after.length}`);
+      return `显示「${message}」，变更列表仍为 ${after.length} 项`;
+    });
+
+    // 16. 身份未配置 / 索引被占用 / 工作区异常：失败原因明确，改动保留。
+    await check("提交失败时给出明确的中文原因且改动保留", async () => {
+      await changeCheck("memos/2026-10-01.md").check();
+      await page.fill(COMMIT_MESSAGE, "会失败的提交");
+
+      await page.evaluate(() => window.__flashcastMock.simulateCommitError("identity"));
+      await page.click(COMMIT_SUBMIT);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "user.name" },
+      );
+      const identity = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      assert(
+        identity.includes("user.email"),
+        `必须点明缺哪两项身份配置：${identity}`,
+      );
+
+      await page.evaluate(() => {
+        window.__flashcastMock.clearCommitError();
+        window.__flashcastMock.simulateCommitError("locked");
+      });
+      await page.click(COMMIT_SUBMIT);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "index.lock" },
+      );
+      const locked = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      const rows = await changeRows();
+      assert(
+        rows.some((row) => row.path === "memos/2026-10-01.md"),
+        "提交失败后改动不得消失",
+      );
+      const errorShot = await shot(page, "17-settings-commit-error.png");
+
+      await page.evaluate(() => window.__flashcastMock.clearCommitError());
+      return `身份「${identity}」、索引「${locked}」，改动仍在，截图 ${errorShot}`;
+    });
+
+    // 17. 不是 Git 仓库 / 无变更：明确说明而不是空白或报错。
+    await check("不是 Git 仓库与无变更都有明确说明", async () => {
+      await page.evaluate(() => window.__flashcastMock.simulateGitUnavailable(true));
+      await page.click('[data-testid="changes-refresh"]');
+      await page.waitForSelector('[data-testid="changes-unavailable"]');
+      const unavailable = (await page.textContent('[data-testid="changes-unavailable"]')).trim();
+      assert(
+        unavailable.includes("不是 Git 仓库"),
+        `必须说明工作区不是 Git 仓库：${unavailable}`,
+      );
+      const unavailableShot = await shot(page, "18-settings-git-unavailable.png");
+
+      await page.evaluate(() => window.__flashcastMock.simulateGitUnavailable(false));
+      await page.click('[data-testid="changes-refresh"]');
+      await page.waitForSelector(CHANGE_ROW);
+
+      await page.click('[data-testid="changes-select-all"]');
+      await page.fill(COMMIT_MESSAGE, "提交全部改动");
+      await page.click(COMMIT_SUBMIT);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "已创建提交" },
+      );
+      await page.waitForSelector('[data-testid="changes-empty"]');
+      const empty = (await page.textContent('[data-testid="changes-empty"]')).trim();
+      const count = (await page.textContent('[data-testid="changes-count"]')).trim();
+      assert(empty.includes("没有可提交"), `应说明没有可提交的变更：${empty}`);
+      assert(count.includes("没有可提交"), `待提交说明不对：${count}`);
+      const emptyShot = await shot(page, "19-settings-changes-empty.png");
+
+      return `不是仓库时「${unavailable}」；全部提交后「${empty}」，截图 ${unavailableShot} / ${emptyShot}`;
     });
 
     const failed = results.filter((result) => !result.ok).length;
