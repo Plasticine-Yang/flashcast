@@ -129,6 +129,166 @@ body {
   white-space: nowrap;
 }
 
+/* ---------------------------------------------------------------------------
+ * 设置页与通用小按钮。沿用同一组设计令牌：无 CSS 框架、无动画。
+ * ------------------------------------------------------------------------- */
+
+.ghost-button,
+.primary-button,
+.secondary-button {
+  flex: none;
+  font-family: inherit;
+  font-size: var(--fc-font-aux);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: default;
+  transition: none;
+}
+
+.ghost-button {
+  background: transparent;
+  color: var(--fc-text-muted);
+  border: 1px solid var(--fc-border);
+}
+
+.ghost-button:hover {
+  color: var(--fc-text);
+  border-color: var(--fc-border-strong);
+}
+
+.primary-button {
+  background: var(--fc-selection-bg);
+  color: var(--fc-text);
+  border: 1px solid var(--fc-selection-border);
+}
+
+.secondary-button {
+  background: var(--fc-surface);
+  color: var(--fc-text);
+  border: 1px solid var(--fc-border-strong);
+}
+
+.ghost-button:focus-visible,
+.primary-button:focus-visible,
+.secondary-button:focus-visible {
+  outline: 2px solid var(--fc-focus-ring);
+  outline-offset: 2px;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
+  opacity: 0.5;
+}
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--fc-border);
+}
+
+.settings-title {
+  margin: 0;
+  font-size: var(--fc-font-body);
+  font-weight: 600;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 14px 16px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-item);
+  background: var(--fc-surface);
+}
+
+.settings-section-title {
+  margin: 0;
+  font-size: var(--fc-font-aux);
+  font-weight: 600;
+  color: var(--fc-text-muted);
+  letter-spacing: 0.02em;
+}
+
+.settings-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-fact {
+  display: flex;
+  gap: 8px;
+  font-size: var(--fc-font-aux);
+}
+
+.settings-fact dt {
+  flex: none;
+  width: 76px;
+  color: var(--fc-text-muted);
+}
+
+.settings-fact dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-all;
+}
+
+.settings-label {
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-hint {
+  margin: 0;
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+}
+
+.path-input {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: var(--fc-font-body);
+  color: inherit;
+  background: var(--fc-page-bg);
+  border: 1px solid var(--fc-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  transition: none;
+}
+
+.path-input:focus-visible {
+  outline: 2px solid var(--fc-focus-ring);
+  outline-offset: 1px;
+}
+
 .banners {
   display: flex;
   flex-direction: column;

@@ -13,6 +13,8 @@ import type {
   Settings,
   StatusView,
   UnlistenFn,
+  WorkspaceEvent,
+  WorkspaceStatus,
 } from "./types";
 
 const inTauri =
@@ -32,6 +34,12 @@ export interface HostApi {
   get_settings(): Promise<Settings>;
   set_settings(settings: Settings): Promise<{ label: string; error: string | null; registered: boolean }>;
   get_status(): Promise<StatusView>;
+  /** 当前配置工作区与它的有效性。 */
+  get_workspace(): Promise<WorkspaceStatus>;
+  /** 关联已存在的本地仓库 / 目录。失败时 reject，原因为中文。 */
+  select_workspace(path: string): Promise<WorkspaceStatus>;
+  /** 在空目录初始化工作区与 Git 仓库。失败时 reject，原因为中文。 */
+  init_workspace(path: string): Promise<WorkspaceStatus>;
   hide_window(): Promise<void>;
   on(event: string, handler: Handler): Promise<UnlistenFn>;
   readonly kind: "tauri" | "browser";
@@ -55,6 +63,9 @@ const tauriApi: HostApi = {
   get_settings: () => tauriInvoke("get_settings"),
   set_settings: (settings) => tauriInvoke("set_settings", { settings }),
   get_status: () => tauriInvoke("get_status"),
+  get_workspace: () => tauriInvoke("get_workspace"),
+  select_workspace: (path) => tauriInvoke("select_workspace", { path }),
+  init_workspace: (path) => tauriInvoke("init_workspace", { path }),
   hide_window: () => tauriInvoke("hide_window"),
   on: async (event, handler) => {
     const { listen } = await import("@tauri-apps/api/event");
@@ -99,6 +110,18 @@ const MOCK_CAPABILITIES: Capabilities = {
   notes: ["当前运行在浏览器模拟宿主中，不代表真实桌面行为。"],
 };
 
+// 浏览器模拟宿主的工作区：只模拟 UI 需要区分的几种结果。
+// 真实行为（校验、拒绝覆盖、真实 Git 仓库、真实文件）由
+// `crates/flashcast-core/tests/workspace*.rs` 的集成测试验证。
+const MOCK_REPO = "/home/user/.config/flashcast";
+const MOCK_BROKEN_REPO = "/home/user/broken-repo";
+const MOCK_NON_EMPTY_DIR = "/home/user/Documents";
+
+/** 模拟宿主认得的快捷键写法：至少一个「+」，且只有字母、数字与「+」。 */
+function looksLikeHotkey(value: string): boolean {
+  return /^[A-Za-z0-9+]+$/.test(value.trim()) && value.includes("+");
+}
+
 class MockHost implements HostApi {
   readonly kind = "browser" as const;
   private seq = 0;
@@ -113,6 +136,14 @@ class MockHost implements HostApi {
     quickAccessLimit: 6,
     pluginTimeoutMs: 400,
     disabledPlugins: [],
+  };
+  private workspace: WorkspaceStatus = {
+    path: null,
+    gitDir: null,
+    valid: false,
+    settingsFile: null,
+    persisted: false,
+    error: null,
   };
   /** 最近一次请求启动的条目 id（含失败样例），供浏览器交互检查脚本断言「是否真的执行了」。 */
   lastLaunched: string | null = null;
@@ -277,6 +308,10 @@ class MockHost implements HostApi {
   }
 
   async set_settings(settings: Settings): Promise<{ label: string; error: string | null; registered: boolean }> {
+    // 与宿主一致：无效设置被拒绝，保留上一次有效状态。
+    if (!looksLikeHotkey(settings.hotkey)) {
+      throw `快捷键无效：无法识别的写法「${settings.hotkey}」`;
+    }
     this.settings = settings;
     return { label: settings.hotkey, error: null, registered: true };
   }
@@ -288,6 +323,75 @@ class MockHost implements HostApi {
       capabilities: MOCK_CAPABILITIES,
       plugins: [],
     };
+  }
+
+  async get_workspace(): Promise<WorkspaceStatus> {
+    return this.workspace;
+  }
+
+  async select_workspace(path: string): Promise<WorkspaceStatus> {
+    const target = path.trim();
+    if (target.length === 0) {
+      throw "目录不存在：路径为空";
+    }
+    if (target === MOCK_BROKEN_REPO) {
+      throw "配置无效：settings.toml 解析失败：unknown field `quick_access_limit`";
+    }
+    if (target !== MOCK_REPO) {
+      throw `目录不存在：${target}`;
+    }
+    return this.link(target);
+  }
+
+  async init_workspace(path: string): Promise<WorkspaceStatus> {
+    const target = path.trim();
+    if (target.length === 0) {
+      throw "目标目录非空，已拒绝初始化以免覆盖已有文件：路径为空";
+    }
+    if (target === MOCK_NON_EMPTY_DIR) {
+      throw `目标目录非空，已拒绝初始化以免覆盖已有文件：${target}`;
+    }
+    return this.link(target);
+  }
+
+  private link(path: string): WorkspaceStatus {
+    this.workspace = {
+      path,
+      gitDir: `${path}/.git`,
+      valid: true,
+      settingsFile: `${path}/settings.toml`,
+      persisted: true,
+      error: null,
+    };
+    return this.workspace;
+  }
+
+  /**
+   * 模拟外部编辑设置文件后宿主重载：有效则立即生效，无效则保留上次有效设置
+   * 并给出原因。与 `Host::reload_from_workspace` 的语义一致。
+   */
+  simulateExternalEdit(hotkey: string): void {
+    const reload = {
+      path: `${this.workspace.path ?? MOCK_REPO}/settings.toml`,
+      applied: false,
+      settings: this.settings,
+      error: null as string | null,
+    };
+    if (!looksLikeHotkey(hotkey)) {
+      reload.error = `配置无效：settings.toml 内容不合法：快捷键无效：无法识别的主键：${hotkey}`;
+    } else if (hotkey === this.settings.hotkey) {
+      // 幂等：内容没变就不做任何事。
+    } else {
+      this.settings = { ...this.settings, hotkey };
+      reload.applied = true;
+      reload.settings = this.settings;
+    }
+    const payload: WorkspaceEvent = {
+      status: this.workspace,
+      settings: this.settings,
+      reload,
+    };
+    this.emit("flashcast://workspace", payload);
   }
 
   async hide_window(): Promise<void> {
