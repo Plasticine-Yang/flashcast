@@ -3,7 +3,7 @@
 //! Flashcast 的平台适配层。按能力拆分的 trait 定义在这里，各平台实现按
 //! `#[cfg(target_os)]` 分模块，测试替身只在 [`fake`]（feature `fake`）中。
 //!
-//! v0.1.0 ticket 01 只实现 Linux；Windows 与 macOS 由后续 ticket 提供，
+//! v0.1.0 ticket 01 实现 Linux，ticket 03 实现 macOS；Windows 由后续 ticket 提供，
 //! 在此之前由 [`unsupported`] 中的桩实现报告「不支持」，保证宿主能在三个
 //! 平台上编译并如实报告能力状态。
 
@@ -14,6 +14,7 @@ pub mod freedesktop;
 pub mod hotkey;
 pub mod launch;
 pub mod launch_request;
+pub mod macos;
 pub mod shortcut;
 pub mod unsupported;
 

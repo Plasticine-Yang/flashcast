@@ -13,6 +13,9 @@ fake = []
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+# macOS `.app` 包的 Info.plist 解析。该 crate 是纯 Rust、跨平台的，因此不按目标
+# 条件编译：`src/macos/bundle.rs` 的遍历与字段映射逻辑要在 Linux 上也能被夹具测试。
+plist = "1.10.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 global-hotkey = "0.8.0"

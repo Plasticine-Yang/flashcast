@@ -1045,6 +1045,7 @@ name = "flashcast-platform"
 version = "0.1.0"
 dependencies = [
  "global-hotkey",
+ "plist",
  "serde",
  "thiserror 2.0.21",
  "x11rb",
