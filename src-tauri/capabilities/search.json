@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "search",
+  "description": "Flashcast 搜索窗口的能力集合。core:window:default 只包含读取类命令，show/hide/set_focus 必须显式授予。",
+  "windows": ["search"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-visible",
+    "core:window:allow-center",
+    "core:window:allow-start-dragging",
+    "core:event:default"
+  ]
+}

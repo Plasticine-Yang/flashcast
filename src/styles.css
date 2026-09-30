@@ -1,0 +1,320 @@
+/*
+ * Flashcast 设计令牌与紧凑列表样式。
+ *
+ * 约定（ADR / spec §Implementation Decisions）：
+ * - 窗口基准宽约 640px，约 14px 圆角，中性背景、细边框、轻阴影；
+ * - 搜索输入约 16px，正文约 14px，辅助信息约 12px；
+ * - 唤起、关闭、键盘选择、查询更新**无动画**：这些元素统一 `transition: none`；
+ * - 选中、焦点与错误状态视觉可区分；
+ * - 低分辨率与系统缩放下保持可用（列表滚动，极小高度下压缩内边距）。
+ *
+ * 主题在 ticket 06 落地；这里只提供默认（浅色）令牌。
+ */
+
+:root {
+  --fc-radius-window: 14px;
+  --fc-radius-item: 8px;
+  --fc-page-bg: rgba(250, 250, 251, 0.98);
+  --fc-surface: #ffffff;
+  --fc-border: rgba(15, 23, 42, 0.12);
+  --fc-border-strong: rgba(15, 23, 42, 0.24);
+  --fc-text: #16181d;
+  --fc-text-muted: #6b7280;
+  --fc-selection-bg: rgba(37, 99, 235, 0.12);
+  --fc-selection-border: rgba(37, 99, 235, 0.55);
+  --fc-focus-ring: rgba(37, 99, 235, 0.65);
+  --fc-error-bg: rgba(220, 38, 38, 0.1);
+  --fc-error-border: rgba(220, 38, 38, 0.5);
+  --fc-error-text: #991b1b;
+  --fc-warning-bg: rgba(217, 119, 6, 0.12);
+  --fc-warning-border: rgba(217, 119, 6, 0.45);
+  --fc-warning-text: #92400e;
+  --fc-info-bg: rgba(15, 23, 42, 0.05);
+  --fc-shadow: 0 8px 28px rgba(15, 23, 42, 0.16);
+  --fc-font-body: 14px;
+  --fc-font-input: 16px;
+  --fc-font-aux: 12px;
+  --fc-row-height: 44px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* 透明窗口：webview 自身不得画出不透明底色。 */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--fc-text);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
+  font-size: var(--fc-font-body);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  height: 100%;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  background: var(--fc-page-bg);
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-window);
+  box-shadow: var(--fc-shadow);
+  overflow: hidden;
+  /* 高频操作无动画。 */
+  transition: none;
+  animation: none;
+}
+
+/* 窗口被隐藏（Escape 关闭 / 启动成功后）时不再显示内容。 */
+.app[data-window-visible="false"] {
+  visibility: hidden;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--fc-border);
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font-size: var(--fc-font-input);
+  font-family: inherit;
+  padding: 4px 2px;
+  /* 焦点状态可辨识，但不用动画。 */
+  transition: none;
+}
+
+.search-input::placeholder {
+  color: var(--fc-text-muted);
+}
+
+.search-input:focus-visible {
+  outline: 2px solid var(--fc-focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.scope-label {
+  flex: none;
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+  padding: 2px 8px;
+  border: 1px solid var(--fc-border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.banners {
+  display: flex;
+  flex-direction: column;
+}
+
+.banner {
+  font-size: var(--fc-font-aux);
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--fc-border);
+  transition: none;
+}
+
+.banner-error {
+  background: var(--fc-error-bg);
+  color: var(--fc-error-text);
+  border-bottom-color: var(--fc-error-border);
+  font-weight: 600;
+}
+
+.banner-warning {
+  background: var(--fc-warning-bg);
+  color: var(--fc-warning-text);
+  border-bottom-color: var(--fc-warning-border);
+}
+
+.banner-info {
+  background: var(--fc-info-bg);
+  color: var(--fc-text-muted);
+}
+
+.banner-hint {
+  display: block;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.result-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.result-list.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: var(--fc-text-muted);
+}
+
+.empty-title {
+  margin: 0;
+  font-size: var(--fc-font-body);
+}
+
+.empty-hint {
+  margin: 0;
+  font-size: var(--fc-font-aux);
+}
+
+.result-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--fc-row-height);
+  padding: 6px 10px;
+  border-radius: var(--fc-radius-item);
+  border: 1px solid transparent;
+  cursor: default;
+  user-select: none;
+  transition: none;
+}
+
+/* 鼠标悬停只做视觉反馈，绝不改变宿主持有的键盘选择。 */
+.result-item:hover {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.result-item[data-selected="true"] {
+  background: var(--fc-selection-bg);
+  border-color: var(--fc-selection-border);
+}
+
+.icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.08);
+  color: var(--fc-text);
+  font-size: var(--fc-font-aux);
+  font-weight: 600;
+}
+
+.result-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.result-title {
+  font-size: var(--fc-font-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-subtitle {
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--fc-border);
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+  transition: none;
+}
+
+.action-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.action-count {
+  margin-left: auto;
+}
+
+kbd {
+  font-family: inherit;
+  font-size: var(--fc-font-aux);
+  padding: 1px 5px;
+  border: 1px solid var(--fc-border-strong);
+  border-radius: 4px;
+  background: var(--fc-surface);
+}
+
+/* 系统缩放与低分辨率：窗口很矮时压缩行高与内边距，保证仍可操作。 */
+@media (max-height: 380px) {
+  :root {
+    --fc-row-height: 36px;
+  }
+
+  .search-row {
+    padding: 8px 12px 6px;
+  }
+
+  .action-bar {
+    padding: 6px 12px;
+  }
+}
+
+@media (max-width: 520px) {
+  :root {
+    --fc-radius-window: 10px;
+  }
+
+  .scope-label {
+    display: none;
+  }
+}
+
+/* 尊重系统的「减少动态效果」设置；本版本高频操作本来就没有动画。 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

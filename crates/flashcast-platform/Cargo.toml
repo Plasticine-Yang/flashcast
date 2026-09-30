@@ -1,0 +1,24 @@
+[package]
+name = "flashcast-platform"
+description = "Flashcast 平台适配层：软件发现、启动、焦点、快捷键与能力探测"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# 仅在需要确定性测试替身时启用；替身只存在于本 crate 的 `fake` 模块。
+fake = []
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+global-hotkey = "0.8.0"
+# 与 global-hotkey 依赖的 x11rb 保持同一版本，避免重复编译两份。
+x11rb = "0.13.2"
+
+[[bin]]
+name = "flashcast-platform-check"
+path = "src/bin/platform_check.rs"

@@ -1,0 +1,18 @@
+[package]
+name = "flashcast-core"
+description = "Flashcast 无头宿主：查询入口、命令入口、排序、插件注册表与设置"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flashcast-platform = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+# 测试替身由 flashcast-platform 的 `fake` feature 提供（ADR §5）。
+flashcast-platform = { workspace = true, features = ["fake"] }

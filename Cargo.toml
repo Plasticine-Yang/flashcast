@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "src-tauri"]
+
+[workspace.package]
+# 版本单一来源：`src-tauri/tauri.conf.json` 与 `package.json` 必须与本值一致。
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/flashcast-app/flashcast"
+
+[workspace.dependencies]
+flashcast-core = { path = "crates/flashcast-core" }
+flashcast-platform = { path = "crates/flashcast-platform" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.21"
+toml = "1.1.6"
+tracing = "0.1.41"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

@@ -1,0 +1,89 @@
+//! Flashcast 宿主外壳。
+//!
+//! 外壳只负责：窗口与唤起、全局快捷键、托盘、唤起前应用身份的采集时机、
+//! Tauri command 转发与事件推送。业务判断全部在 `flashcast_core::Host`。
+
+mod commands;
+mod hotkey;
+mod icon;
+mod state;
+mod summon;
+mod tray;
+
+use std::sync::Arc;
+
+use flashcast_core::{Host, HostDeps, PluginRegistry, Settings};
+use tauri::{Manager, WindowEvent};
+
+use crate::state::AppState;
+use crate::summon::SUMMON_GRACE;
+
+/// 启动应用。
+pub fn run() {
+    let platform = flashcast_platform::current();
+    let settings = Settings::default();
+
+    // 插件注册表：ticket 01 只有注册表本身，官方插件在 ticket 07/09/13 加入。
+    let plugins = Arc::new(PluginRegistry::new());
+    for plugin_id in &settings.disabled_plugins {
+        plugins.set_enabled(plugin_id, false);
+    }
+
+    let deps = HostDeps {
+        catalog: Arc::clone(&platform.catalog),
+        launcher: Arc::clone(&platform.launcher),
+        capabilities: Arc::clone(&platform.capabilities),
+        plugins,
+    };
+    let host = Arc::new(Host::new(deps, settings));
+    let state = AppState::new(host, platform);
+
+    tauri::Builder::default()
+        // 单实例守卫：必须最先注册。第二次启动会唤起已运行的实例。
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            summon::summon(app);
+        }))
+        .manage(state)
+        .invoke_handler(tauri::generate_handler![
+            commands::query,
+            commands::execute,
+            commands::move_selection,
+            commands::set_selection,
+            commands::back,
+            commands::rescan,
+            commands::refresh_state,
+            commands::get_capabilities,
+            commands::get_settings,
+            commands::set_settings,
+            commands::get_status,
+            commands::hide_window,
+        ])
+        .setup(|app| {
+            let handle = app.handle().clone();
+            // 托盘是 Linux 上的必需备用入口（Wayland 下快捷键注册会失败）。
+            tray::create(&handle)?;
+            // 注册全局快捷键；失败只会产生可展示的错误，不影响托盘入口。
+            hotkey::apply_from_settings(&handle);
+            Ok(())
+        })
+        .on_window_event(|window, event| match event {
+            // 失焦即隐藏。刚唤起后的短暂时间内忽略，避免窗口显示后被立刻隐藏。
+            WindowEvent::Focused(false) => {
+                let app = window.app_handle();
+                let state = app.state::<AppState>();
+                if !state.is_recent_summon(SUMMON_GRACE) {
+                    let _ = window.hide();
+                    let _ = tauri::Emitter::emit(app, "flashcast://dismissed", ());
+                }
+            }
+            // 关闭按钮不退出应用，只隐藏；托盘与快捷键仍可唤起。
+            WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = window.hide();
+                let _ = tauri::Emitter::emit(window.app_handle(), "flashcast://dismissed", ());
+            }
+            _ => {}
+        })
+        .run(tauri::generate_context!())
+        .expect("启动 Flashcast 失败");
+}

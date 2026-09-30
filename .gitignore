@@ -5,3 +5,4 @@ dist-ssr/
 *.log
 .DS_Store
 .vite/
+artifacts/

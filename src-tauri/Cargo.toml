@@ -1,0 +1,27 @@
+[package]
+name = "flashcast"
+description = "Flashcast 桌面宿主外壳：窗口、托盘、全局快捷键与命令转发"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "flashcast"
+
+[lib]
+name = "flashcast_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.0", features = [] }
+
+[dependencies]
+flashcast-core = { workspace = true }
+flashcast-platform = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tauri = { version = "2.12.0", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2.5.1"
+base64 = "0.22.1"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-log = "2"
