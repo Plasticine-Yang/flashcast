@@ -60,6 +60,14 @@ fi
 # 3. 解压到前缀。用 stamp 记录已解压的包，重复执行时跳过。
 stamp="$PREFIX/.extracted"
 touch "$stamp"
+# 先删除上一次建立的数据目录链接（见步骤 6），避免 dpkg-deb -x 顺着链接写进系统目录。
+linkstamp="$PREFIX/.data-dir-links"
+if [ -f "$linkstamp" ]; then
+  while IFS= read -r created; do
+    [ -n "$created" ] && [ -L "$created" ] && rm -f "$created"
+  done <"$linkstamp"
+fi
+: >"$linkstamp"
 new=0
 for uri in "${URIS[@]}"; do
   base="$(basename "${uri%%\?*}")"
@@ -80,7 +88,14 @@ find "$PREFIX/usr/lib" "$PREFIX/usr/share" -name '*.pc' -type f -print0 2>/dev/n
     -e "s|^prefix=/usr\$|prefix=$PREFIX/usr|" \
     -e "s|=/usr/lib/$multiarch|=$libdir|g" \
     -e "s|=/usr/lib\$|=$PREFIX/usr/lib|" \
-    -e "s|=/usr/include|=$PREFIX/usr/include|g"
+    -e "s|=/usr/include|=$PREFIX/usr/include|g" \
+    -e "s|^libdir=.*|libdir=/usr/lib/$multiarch|" \
+    -e "s|^libdir64=.*|libdir64=/usr/lib/$multiarch|"
+#    最后两条把 libdir 还原成系统路径，是有意为之：`tauri build` 打包 AppImage 时，
+#    linuxdeploy 的 gtk 插件会把 pkg-config 报出的 libdir 直接当成 AppDir 内的相对路径
+#    做字符串替换，而前缀路径本身包含 `/usr/lib/<triplet>`，会让它的替换错位并中断打包。
+#    让 pkg-config 回答系统路径后，插件的表现与 CI 上 apt 安装时一致。链接所需的
+#    `libfoo.so` 开发链接来自前缀，由步骤 7 导出的 LIBRARY_PATH 提供给链接器。
 
 # 5. 修复指向运行库的断裂符号链接：-dev 包提供 libfoo.so -> libfoo.so.N，
 #    而 libfoo.so.N 来自运行库包。把断链改为指向系统运行库的绝对路径，供链接器使用。
@@ -103,10 +118,32 @@ while IFS= read -r link; do
   fi
 done < <(find "$PREFIX/usr/lib" -type l -name '*.so' 2>/dev/null)
 
-# 6. 输出环境变量。若 rustup 安装在默认的非 root 位置，一并加入 PATH。
+# 6. 数据目录：`.pc` 里的目录变量（例如 gio-2.0 的 giomoduledir）在步骤 4 也被改写到前缀，
+#    但 -dev 包并不提供这些目录。`tauri build` 打包 AppImage 时，linuxdeploy 的 gtk 插件会
+#    对 giomoduledir 做 realpath，失败后以「Failed to run plugin: gtk」中断打包。
+#    为「前缀里不存在、系统里存在」的数据目录建立链接，使前缀与真实 -dev 安装等价。
+#    链接记录在 linkstamp 里，下次运行会在解压前删除，避免 dpkg-deb -x 写穿链接。
+link_data_dir() {
+  local prefixed=$1 system=$2
+  [ -e "$prefixed" ] && return 0
+  [ -e "$system" ] || return 0
+  mkdir -p "$(dirname "$prefixed")"
+  ln -sfn "$system" "$prefixed"
+  echo "$prefixed" >>"$linkstamp"
+}
+link_data_dir "$libdir/gio/modules" "/usr/lib/$multiarch/gio/modules"
+link_data_dir "$libdir/girepository-1.0" "/usr/lib/$multiarch/girepository-1.0"
+# linuxdeploy 的 gtk 插件还会从 gtk+-3.0.pc / gdk-pixbuf-2.0.pc 拼出这两个目录。
+link_data_dir "$libdir/gtk-3.0" "/usr/lib/$multiarch/gtk-3.0"
+link_data_dir "$libdir/gdk-pixbuf-2.0" "/usr/lib/$multiarch/gdk-pixbuf-2.0"
+
+# 7. 输出环境变量。若 rustup 安装在默认的非 root 位置，一并加入 PATH。
 cat <<ENV
 export FLASHCAST_NATIVE_DEPS_PREFIX="$PREFIX"
 export PKG_CONFIG_PATH="$libdir/pkgconfig:$PREFIX/usr/share/pkgconfig\${PKG_CONFIG_PATH:+:\$PKG_CONFIG_PATH}"
+# 步骤 4 让 pkg-config 报出系统 libdir，链接器就找不到只存在于前缀里的 \`libfoo.so\`，
+# 因此把前缀的库目录交给 LIBRARY_PATH（ld 在 -L 之后、默认目录之前搜索它）。
+export LIBRARY_PATH="$libdir\${LIBRARY_PATH:+:\$LIBRARY_PATH}"
 if [ -x "\$HOME/.local/share/cargo/bin/cargo" ]; then
   export CARGO_HOME="\$HOME/.local/share/cargo"
   export RUSTUP_HOME="\$HOME/.local/share/rustup"
