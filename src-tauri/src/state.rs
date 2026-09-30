@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use flashcast_core::Host;
 use flashcast_platform::shortcut::HotkeyHandle;
-use flashcast_platform::{FocusTracker, FocusedApp, PlatformAdapters};
+use flashcast_platform::{FocusedApp, PlatformAdapters};
 
 /// 全局快捷键的注册状态，UI 用它显示冲突或不支持的原因。
 #[derive(Default)]

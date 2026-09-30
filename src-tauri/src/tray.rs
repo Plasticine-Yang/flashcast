@@ -6,12 +6,16 @@
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Runtime};
+// `TrayIconBuilder::<R>::build<M: Manager<R>>` 要求构建器与传入的句柄使用同一个运行时，
+// 而 `on_menu_event` 中调用的 `commands::rescan_and_push` 签名为具体的
+// `&AppHandle<Wry>`，会把构建器的 `R` 固定为 `Wry`。因此这里直接使用具体运行时，
+// 与 `lib.rs` 中 `tauri::Builder::default()` 的运行时保持一致。
+use tauri::{AppHandle, Wry};
 
 use crate::summon;
 
 /// 创建托盘图标与菜单。
-pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+pub fn create(app: &AppHandle<Wry>) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开 Flashcast", true, None::<&str>)?;
     let rescan = MenuItem::with_id(app, "rescan", "重新扫描软件", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "hide", "隐藏窗口", true, None::<&str>)?;
