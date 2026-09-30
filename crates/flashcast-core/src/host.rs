@@ -202,11 +202,17 @@ impl Host {
         };
         inner.input = entry.input;
         inner.scope = entry.scope;
-        inner.selection = entry.selection;
         inner.plugin_scopes.clear();
         // 恢复历史后按恢复的输入重新计算结果，保证列表与输入一致。
         let input = inner.input.clone();
-        let response = self.search(&mut inner, &input, SearchMode::UserInput, None, seq);
+        let mut response = self.search(&mut inner, &input, SearchMode::UserInput, None, seq);
+        // `search` 会把「新输入」的选择归零；返回上一范围必须恢复历史选择。
+        let max = inner.items.len().saturating_sub(1);
+        inner.selection = entry.selection.min(max);
+        response.selection = inner.selection;
+        response.items = inner.items.clone();
+        response.input = inner.input.clone();
+        response.scope = inner.scope.clone();
         BackOutcome {
             restored: true,
             response,

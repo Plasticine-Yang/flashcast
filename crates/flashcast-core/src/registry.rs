@@ -146,16 +146,17 @@ fn run_isolated(
     timeout: Duration,
 ) -> Result<Vec<SearchItem>, PluginFailure> {
     let plugin_id = plugin.manifest().id;
-    let (sender, receiver) = mpsc::channel::<Result<Vec<SearchItem>, PluginError>>();
+    let (sender, receiver) = mpsc::channel::<PluginOutcome>();
     let thread_plugin = Arc::clone(&plugin);
     let thread_ctx = ctx.clone();
     let spawn_result = std::thread::Builder::new()
         .name(format!("flashcast-plugin-{plugin_id}"))
         .spawn(move || {
-            let result = catch_unwind(AssertUnwindSafe(|| thread_plugin.search(&thread_ctx)));
-            let payload = match result {
-                Ok(value) => value,
-                Err(_) => Err(PluginError::failed("插件在搜索时发生 panic")),
+            let payload = match catch_unwind(AssertUnwindSafe(|| thread_plugin.search(&thread_ctx))) {
+                Ok(Ok(items)) => PluginOutcome::Items(items),
+                Ok(Err(error)) => PluginOutcome::Failed(error),
+                // panic 与普通错误必须区分，诊断报告才能说明真实原因。
+                Err(_) => PluginOutcome::Panicked,
             };
             // 接收端可能已因超时退出，发送失败无需处理。
             let _ = sender.send(payload);
@@ -170,11 +171,16 @@ fn run_isolated(
     }
 
     match receiver.recv_timeout(timeout) {
-        Ok(Ok(items)) => Ok(items),
-        Ok(Err(error)) => Err(PluginFailure {
+        Ok(PluginOutcome::Items(items)) => Ok(items),
+        Ok(PluginOutcome::Failed(error)) => Err(PluginFailure {
             plugin_id,
             reason: error.to_string(),
             kind: PluginFailureKind::Error,
+        }),
+        Ok(PluginOutcome::Panicked) => Err(PluginFailure {
+            plugin_id,
+            reason: "插件在搜索时发生 panic，已隔离，本轮结果中不包含该插件".to_string(),
+            kind: PluginFailureKind::Panic,
         }),
         Err(mpsc::RecvTimeoutError::Timeout) => Err(PluginFailure {
             plugin_id,
@@ -187,4 +193,11 @@ fn run_isolated(
             kind: PluginFailureKind::Panic,
         }),
     }
+}
+
+/// 插件搜索线程的返回值。
+enum PluginOutcome {
+    Items(Vec<SearchItem>),
+    Failed(PluginError),
+    Panicked,
 }
