@@ -82,6 +82,29 @@ find "$PREFIX/usr/lib" "$PREFIX/usr/share" -name '*.pc' -type f -print0 2>/dev/n
     -e "s|=/usr/lib\$|=$PREFIX/usr/lib|" \
     -e "s|=/usr/include|=$PREFIX/usr/include|g"
 
+# 4b. 补齐多架构头文件（Debian/Ubuntu 的 opensslconf.h 在
+#     usr/include/<multiarch>/openssl/，而 openssl.pc 的 Cflags 只给 usr/include）。
+#     系统构建时 gcc 默认搜索多架构目录，前缀内构建不会；把多架构目录下的头文件
+#     软链到常规 include 目录（已存在的不覆盖），这样只需一个 -I 就能找到全部头文件。
+#     注意：不能改成往 Cflags 追加多架构 -I —— 依赖 openssl-sys 的
+#     `cargo:include` 只透出**一个**目录（cargo 取最后一个），libssh2-sys 拿到那个
+#     目录后仍要能解析 `<openssl/macros.h>`。
+if [ -d "$PREFIX/usr/include/$multiarch" ]; then
+  # 先清掉早期版本脚本追加过的多架构 -I（openssl-sys 只透出最后一个 include
+  # 目录，libssh2-sys 拿它解析不到 `<openssl/macros.h>`）。
+  find "$PREFIX/usr/lib" "$PREFIX/usr/share" -name '*.pc' -type f -print0 2>/dev/null |
+    xargs -0 -r sed -i "s| -I$PREFIX/usr/include/$multiarch||g"
+  while IFS= read -r dir; do
+    pkg="$(basename "$dir")"
+    mkdir -p "$PREFIX/usr/include/$pkg"
+    find "$dir" -maxdepth 1 -type f -print0 |
+      while IFS= read -r -d '' header; do
+        link="$PREFIX/usr/include/$pkg/$(basename "$header")"
+        [ -e "$link" ] || ln -s "$header" "$link"
+      done
+  done < <(find "$PREFIX/usr/include/$multiarch" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+fi
+
 # 5. 修复指向运行库的断裂符号链接：-dev 包提供 libfoo.so -> libfoo.so.N，
 #    而 libfoo.so.N 来自运行库包。把断链改为指向系统运行库的绝对路径，供链接器使用。
 while IFS= read -r link; do

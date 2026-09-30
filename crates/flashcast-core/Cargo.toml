@@ -12,11 +12,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
-# 配置工作区的 Git 操作（ADR §9）。ticket 05 只用到 init / open；远端克隆、提交与
-# 同步由 ticket 14/15/16 补齐，那时按研究记录改为：
-#   git2 = { version = "0.21.0", default-features = false,
-#            features = ["https", "ssh", "vendored-libgit2", "vendored-openssl"] }
-git2 = { version = "0.21.0", default-features = false }
+# 配置工作区的 Git 操作（ADR §9）。ticket 05 只用到 init / open；ticket 14 起需要真实
+# 远端，因此打开 `https` 与 `ssh`（git2 0.21 默认两者都不开）：`https` 同时引入
+# `openssl-sys` —— git2 的 TLS 唯一后端，没有 schannel / security-framework 可选。
+#
+# 刻意**不**启用 `vendored-libgit2` / `vendored-openssl`：两者都要在四条 CI 腿上现场
+# 编译 C（Windows 还要 Perl 与 NASM），且本机无法验证；当前各腿自带系统 libgit2 与
+# OpenSSL 开发包（Linux 由 `scripts/dev/linux-native-deps.sh` 提供 libssl-dev）。
+git2 = { version = "0.21.0", default-features = false, features = ["https", "ssh"] }
 # 工作区文件监听（ADR §8；设计见 notes/research/git-workspace.md §6）。
 notify-debouncer-full = "0.7.0"
 

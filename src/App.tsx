@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type {
   ActionOutcome,
+  CloneProgress,
   ItemView,
   QueryView,
   Settings,
@@ -48,6 +49,7 @@ export default function App() {
   const [settingsMessage, setSettingsMessage] = useState<SettingsMessage | null>(null);
   const [workspaceAlert, setWorkspaceAlert] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
   // 变更与提交状态。提交范围完全由用户勾选的路径决定。
   const [changes, setChanges] = useState<WorkspaceChanges | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
@@ -275,6 +277,62 @@ export default function App() {
     );
   };
 
+  /**
+   * 从远端克隆配置工作区：克隆在宿主侧阻塞执行，这里轮询进度快照，
+   * 完成后刷新工作区与设置；失败、取消都只显示中文原因，不动当前工作区。
+   */
+  const handleCloneWorkspace = (
+    url: string,
+    target: string,
+    token: { username: string; token: string } | null,
+  ) => {
+    setSettingsBusy(true);
+    setCloneProgress(null);
+    const timer = window.setInterval(() => {
+      void api
+        .clone_progress()
+        .then((progress) => setCloneProgress(progress))
+        .catch(() => {});
+    }, 120);
+    void api
+      .clone_workspace(url, target, token)
+      .then((outcome) => {
+        setWorkspace(outcome.workspace);
+        setWorkspaceAlert(outcome.workspace.error);
+        void api.get_settings().then(setSettings);
+        const notes: string[] = [];
+        if (outcome.recordedTheme) {
+          notes.push(`工作区记录的主题：${outcome.recordedTheme}（主题支持由后续版本提供）`);
+        }
+        if (outcome.unavailablePlugins.length > 0) {
+          notes.push(`本机没有这些插件：${outcome.unavailablePlugins.join("、")}`);
+        }
+        setSettingsMessage({
+          level: "info",
+          text:
+            `已从远端克隆并关联工作区：${outcome.workspace.path}` +
+            `（远端 ${outcome.remote.name}，分支 ${outcome.remote.branch}` +
+            `${outcome.remote.upstream ? `，上游 ${outcome.remote.upstream}` : ""}）` +
+            (notes.length > 0 ? `。${notes.join("；")}` : ""),
+        });
+      })
+      .catch((error) => {
+        setSettingsMessage({ level: "error", text: String(error) });
+      })
+      .finally(() => {
+        window.clearInterval(timer);
+        void api
+          .clone_progress()
+          .then((progress) => setCloneProgress(progress))
+          .catch(() => {});
+        setSettingsBusy(false);
+      });
+  };
+
+  const handleCancelClone = () => {
+    void api.cancel_clone();
+  };
+
   const handleSaveHotkey = (hotkey: string) => {
     if (!settings) {
       setSettingsMessage({ level: "error", text: "设置尚未加载完成" });
@@ -431,6 +489,7 @@ export default function App() {
           hotkey={status?.hotkey ?? null}
           message={settingsMessage}
           busy={settingsBusy}
+          cloneProgress={cloneProgress}
           onBack={closeSettings}
           changes={changes}
           commitMessage={commitMessage}
@@ -439,6 +498,8 @@ export default function App() {
           onSelectWorkspace={handleSelectWorkspace}
           onInitWorkspace={handleInitWorkspace}
           onSaveHotkey={handleSaveHotkey}
+          onCloneWorkspace={handleCloneWorkspace}
+          onCancelClone={handleCancelClone}
           onTogglePath={handleTogglePath}
           onToggleAllPaths={handleToggleAllPaths}
           onSelectDiff={setDiffPath}

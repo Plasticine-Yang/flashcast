@@ -43,12 +43,22 @@ const COMMIT_MESSAGE = '[data-testid="commit-message"]';
 const COMMIT_SUBMIT = '[data-testid="commit-submit"]';
 const HOTKEY_INPUT = '[data-testid="hotkey-input"]';
 const HOTKEY_STATUS = '[data-testid="hotkey-status"]';
+const CLONE_URL_INPUT = '[data-testid="clone-url-input"]';
+const CLONE_BUTTON = '[data-testid="workspace-clone"]';
+const CLONE_CANCEL = '[data-testid="workspace-clone-cancel"]';
+const CLONE_PROGRESS = '[data-testid="clone-progress"]';
+const WORKSPACE_REMOTE = '[data-testid="workspace-remote"]';
 
 // 浏览器模拟宿主认得的路径（见 src/api.ts）。
 const MOCK_REPO = "/home/user/.config/flashcast";
 const MOCK_BROKEN_REPO = "/home/user/broken-repo";
 const MOCK_NEW_DIR = "/home/user/flashcast-config";
 const MOCK_NON_EMPTY_DIR = "/home/user/Documents";
+// 克隆用的模拟地址（见 src/api.ts 的 MockHost.clone_workspace）。
+const MOCK_CLONE_TARGET = "/home/user/flashcast-clone";
+const MOCK_CLONE_URL = "https://github.com/me/flashcast-config.git";
+const MOCK_CLONE_BAD_URL = "https://github.com/me/not-found-config.git";
+const MOCK_CLONE_SECRET_URL = "https://alice:sekret@github.com/me/flashcast-config.git";
 
 const lines = [];
 function log(line) {
@@ -518,6 +528,120 @@ async function main() {
       return `重载 ${applied}；错误「${error}」后仍为 ${status}，Escape 返回首屏，截图 ${file}`;
     });
 
+    // 13. 从远端克隆：进度、完成状态、远端关系与恢复内容都可见。
+    await check("从远端克隆并显示进度与完成状态", async () => {
+      // 上一项检查用 Escape 回到了首屏，这里重新进入设置页。
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      const before = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      await page.fill(WORKSPACE_PATH_INPUT, MOCK_CLONE_TARGET);
+      await page.fill(CLONE_URL_INPUT, MOCK_CLONE_URL);
+      await page.click(CLONE_BUTTON);
+      await page.waitForFunction(
+        ({ sel }) => /正在/.test(document.querySelector(sel)?.textContent ?? ""),
+        { sel: CLONE_PROGRESS },
+      );
+      // 尽量截到带真实计数的中间态（已接收对象 / 已检出文件）。
+      await page
+        .waitForFunction(
+          ({ sel }) => /已接收|已检出/.test(document.querySelector(sel)?.textContent ?? ""),
+          { sel: CLONE_PROGRESS },
+          { timeout: 5000 },
+        )
+        .catch(() => {});
+      const during = (await page.textContent(CLONE_PROGRESS)).trim();
+      const progressShot = await shot(page, "20-clone-progress.png");
+
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "已从远端克隆并关联工作区" },
+      );
+      const linked = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      assert(linked === MOCK_CLONE_TARGET, `克隆后应关联 ${MOCK_CLONE_TARGET}，实际 ${linked}`);
+      const remote = (await page.textContent(WORKSPACE_REMOTE)).trim();
+      assert(remote.includes("origin") && remote.includes("main"), `远端信息不对：${remote}`);
+      const message = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      assert(
+        message.includes("origin") && message.includes("主题") && message.includes("插件"),
+        `完成说明应报告远端与本机覆盖情况：${message}`,
+      );
+      const doneShot = await shot(page, "21-clone-completed.png");
+      return `${before} → ${during} → ${linked}（${remote}），截图 ${progressShot} / ${doneShot}`;
+    });
+
+    // 14. 克隆失败：显示中文原因，保留当前工作区。
+    await check("克隆失败显示中文原因且不切换工作区", async () => {
+      const before = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      await page.fill(WORKSPACE_PATH_INPUT, "/home/user/flashcast-clone-failed");
+      await page.fill(CLONE_URL_INPUT, MOCK_CLONE_BAD_URL);
+      await page.click(CLONE_BUTTON);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "克隆失败" },
+      );
+      const message = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      const current = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      assert(current === before, `失败后必须保留当前工作区，实际 ${current}`);
+      const file = await shot(page, "22-clone-failed.png");
+      return `显示「${message}」，当前工作区仍为 ${current}，截图 ${file}`;
+    });
+
+    // 15. 克隆中取消：显示已取消，保留当前工作区。
+    await check("克隆过程中取消并保留当前工作区", async () => {
+      const before = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      await page.fill(WORKSPACE_PATH_INPUT, "/home/user/flashcast-clone-cancelled");
+      await page.fill(CLONE_URL_INPUT, MOCK_CLONE_URL);
+      await page.click(CLONE_BUTTON);
+      await page.waitForFunction(
+        ({ sel }) => /正在/.test(document.querySelector(sel)?.textContent ?? ""),
+        { sel: CLONE_PROGRESS },
+      );
+      await page.click(CLONE_CANCEL);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "取消" },
+      );
+      const message = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      const current = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      assert(current === before, `取消后必须保留当前工作区，实际 ${current}`);
+      const file = await shot(page, "23-clone-cancelled.png");
+      return `显示「${message}」，当前工作区仍为 ${current}，截图 ${file}`;
+    });
+
+    // 16. 目标目录已有文件：拒绝克隆，不覆盖。
+    await check("目标目录非空时拒绝克隆且不覆盖", async () => {
+      const before = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      await page.fill(WORKSPACE_PATH_INPUT, MOCK_NON_EMPTY_DIR);
+      await page.fill(CLONE_URL_INPUT, MOCK_CLONE_URL);
+      await page.click(CLONE_BUTTON);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "非空" },
+      );
+      const message = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      const current = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      assert(current === before, `拒绝后必须保留当前工作区，实际 ${current}`);
+      const file = await shot(page, "24-clone-non-empty.png");
+      return `显示「${message}」，当前工作区仍为 ${current}，截图 ${file}`;
+    });
+
+    // 17. 克隆地址里带口令：拒绝，并且口令不出现在界面文本里。
+    await check("克隆地址包含密码时拒绝且不泄露", async () => {
+      await page.fill(WORKSPACE_PATH_INPUT, "/home/user/flashcast-clone-secret");
+      await page.fill(CLONE_URL_INPUT, MOCK_CLONE_SECRET_URL);
+      await page.click(CLONE_BUTTON);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "密码" },
+      );
+      const message = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      assert(!message.includes("sekret"), `界面文本不得含口令：${message}`);
+      const body = await page.textContent("body");
+      assert(!body.includes("sekret"), "页面任何位置都不得出现口令");
+      const file = await shot(page, "25-clone-secret-refused.png");
+      return `显示「${message}」，页面无口令文本，截图 ${file}`;
+    });
+
     // 12. 真实窗口尺寸（640×420）下设置页仍可操作。
     await check("设置页在 640×420 窗口内可操作", async () => {
       await page.setViewportSize({ width: 640, height: 420 });
@@ -536,6 +660,16 @@ async function main() {
         `保存按钮超出窗口宽度：${JSON.stringify(box)}`,
       );
 
+      // 克隆区段同样必须可用：滚动到克隆按钮，检查可见且不超出窗口宽度。
+      await page.locator(CLONE_URL_INPUT).scrollIntoViewIfNeeded();
+      assert(await page.isVisible(CLONE_URL_INPUT), "克隆远端地址输入框不可见");
+      assert(await page.isVisible(CLONE_BUTTON), "克隆按钮不可见");
+      const cloneBox = await page.locator(CLONE_BUTTON).boundingBox();
+      assert(
+        cloneBox && cloneBox.x >= 0 && cloneBox.x + cloneBox.width <= 640,
+        `克隆按钮超出窗口宽度：${JSON.stringify(cloneBox)}`,
+      );
+
       // 变更与提交区段同样必须在真实窗口尺寸下可见、可操作。
       await page.locator('[data-testid="changes-section"]').scrollIntoViewIfNeeded();
       assert(await page.isVisible('[data-testid="changes-section"]'), "变更区段不可见");
@@ -549,7 +683,7 @@ async function main() {
       );
       const file = await shot(page, "13-settings-compact-window.png");
       await page.setViewportSize({ width: 900, height: 620 });
-      return `640×420 下工作区与快捷键区段均可见可操作，截图 ${file}`;
+      return `640×420 下工作区、快捷键与克隆区段均可见可操作，截图 ${file}`;
     });
 
     // 13. 变更区展示分支、差异基准、每个文件的状态与真实差异。

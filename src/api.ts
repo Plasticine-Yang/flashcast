@@ -10,6 +10,8 @@ import type {
   BackView,
   Capabilities,
   ChangedFile,
+  CloneOutcome,
+  CloneProgress,
   CommitOutcome,
   QueryView,
   Settings,
@@ -43,6 +45,19 @@ export interface HostApi {
   select_workspace(path: string): Promise<WorkspaceStatus>;
   /** 在空目录初始化工作区与 Git 仓库。失败时 reject，原因为中文。 */
   init_workspace(path: string): Promise<WorkspaceStatus>;
+  /**
+   * 从远端克隆配置工作区。失败、取消或目标非空时 reject，原因为中文。
+   * `token` 只在填写时提供：宿主把它存进**设备本地**目录，不写入工作区。
+   */
+  clone_workspace(
+    url: string,
+    target: string,
+    token: { username: string; token: string } | null,
+  ): Promise<CloneOutcome>;
+  /** 最近一次克隆的进度快照；UI 轮询它显示进度。 */
+  clone_progress(): Promise<CloneProgress>;
+  /** 请求取消正在进行的克隆。 */
+  cancel_clone(): Promise<void>;
   /** 当前工作区的 Git 变更：状态分类、分支与逐文件真实差异。 */
   get_git_changes(): Promise<WorkspaceChanges>;
   /** 创建提交；提交范围只包含显式传入的路径。失败时 reject，原因为中文。 */
@@ -73,6 +88,10 @@ const tauriApi: HostApi = {
   get_workspace: () => tauriInvoke("get_workspace"),
   select_workspace: (path) => tauriInvoke("select_workspace", { path }),
   init_workspace: (path) => tauriInvoke("init_workspace", { path }),
+  clone_workspace: (url, target, token) =>
+    tauriInvoke("clone_workspace", { url, target, token }),
+  clone_progress: () => tauriInvoke("clone_progress"),
+  cancel_clone: () => tauriInvoke("cancel_clone"),
   get_git_changes: () => tauriInvoke("get_git_changes"),
   commit_changes: (message, paths) => tauriInvoke("commit_changes", { message, paths }),
   hide_window: () => tauriInvoke("hide_window"),
@@ -125,6 +144,25 @@ const MOCK_CAPABILITIES: Capabilities = {
 const MOCK_REPO = "/home/user/.config/flashcast";
 const MOCK_BROKEN_REPO = "/home/user/broken-repo";
 const MOCK_NON_EMPTY_DIR = "/home/user/Documents";
+// 克隆用的模拟地址（见 MockHost.clone_workspace）。
+export const MOCK_CLONE_TARGET = "/home/user/flashcast-clone";
+export const MOCK_CLONE_URL = "https://github.com/me/flashcast-config.git";
+export const MOCK_CLONE_BAD_URL = "https://github.com/me/not-found-config.git";
+export const MOCK_CLONE_SECRET_URL = "https://alice:sekret@github.com/me/flashcast-config.git";
+
+const IDLE_CLONE_PROGRESS: CloneProgress = {
+  phase: "idle",
+  receivedObjects: 0,
+  totalObjects: 0,
+  indexedObjects: 0,
+  receivedBytes: 0,
+  checkoutPath: null,
+  checkoutCompleted: 0,
+  checkoutTotal: 0,
+  checkoutNotified: 0,
+  updates: 0,
+  message: null,
+};
 
 /** 模拟宿主认得的快捷键写法：至少一个「+」，且只有字母、数字与「+」。 */
 function looksLikeHotkey(value: string): boolean {
@@ -221,10 +259,16 @@ class MockHost implements HostApi {
     settingsFile: null,
     persisted: false,
     error: null,
+    remote: null,
   };
   /** 最近一次请求启动的条目 id（含失败样例），供浏览器交互检查脚本断言「是否真的执行了」。 */
   lastLaunched: string | null = null;
   hidden = false;
+  /** 模拟的克隆进度与取消请求。 */
+  private cloneState: CloneProgress = IDLE_CLONE_PROGRESS;
+  private cloneCancelled = false;
+  /** 模拟设备本地保存过令牌的主机（令牌本身不出现在 UI 状态里）。 */
+  storedTokenHost: string | null = null;
 
   // ---- Git 变更与提交（浏览器模拟） ----
   private gitChanges: ChangedFile[] = MOCK_CHANGES.map((file) => ({ ...file }));
@@ -438,7 +482,88 @@ class MockHost implements HostApi {
     return this.link(target);
   }
 
-  private link(path: string): WorkspaceStatus {
+  async clone_workspace(
+    url: string,
+    target: string,
+    token: { username: string; token: string } | null,
+  ): Promise<CloneOutcome> {
+    const address = url.trim();
+    const destination = target.trim();
+    // 与宿主同序：地址校验 → 目标目录校验 → 传输 / 检出 → 校验并关联。
+    if (address.length === 0) {
+      throw "克隆地址不能为空";
+    }
+    if (/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]*:[^/@\s]*@/i.test(address)) {
+      throw "克隆地址包含密码，已拒绝：请改用访问令牌（保存在本机设备目录）或系统 git 的凭证管理，不要把口令写在地址里";
+    }
+    if (destination.length === 0) {
+      throw "目录不存在：路径为空";
+    }
+    if (destination === MOCK_NON_EMPTY_DIR) {
+      throw `目标目录非空，已拒绝克隆以免覆盖已有文件：${destination}`;
+    }
+    if (token && token.token.trim().length > 0) {
+      // 与宿主一致：令牌只写进设备本地目录，不进入工作区。
+      this.storedTokenHost = "github.com";
+    }
+
+    this.cloneCancelled = false;
+    const stages: CloneProgress[] = [
+      { ...IDLE_CLONE_PROGRESS, phase: "connecting", updates: 1 },
+      { ...IDLE_CLONE_PROGRESS, phase: "receiving", receivedObjects: 42, totalObjects: 100, indexedObjects: 30, receivedBytes: 65536, updates: 8 },
+      { ...IDLE_CLONE_PROGRESS, phase: "resolving", receivedObjects: 100, totalObjects: 100, indexedObjects: 100, receivedBytes: 131072, updates: 12 },
+      { ...IDLE_CLONE_PROGRESS, phase: "checkingOut", receivedObjects: 100, totalObjects: 100, indexedObjects: 100, receivedBytes: 131072, checkoutTotal: 4, checkoutCompleted: 2, checkoutNotified: 3, checkoutPath: "settings.toml", updates: 14 },
+    ];
+    for (const stage of stages) {
+      if (this.cloneCancelled) {
+        this.cloneState = { ...IDLE_CLONE_PROGRESS, phase: "cancelled", updates: stage.updates, message: "克隆已取消，未留下任何目录" };
+        throw "克隆已取消，未留下任何目录";
+      }
+      this.cloneState = stage;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    if (address === MOCK_CLONE_BAD_URL) {
+      const message = "克隆失败：Could not resolve host: github.com（请检查网络、代理与远端地址是否正确）";
+      this.cloneState = { ...IDLE_CLONE_PROGRESS, phase: "failed", updates: 15, message };
+      throw message;
+    }
+    const remote = {
+      name: "origin",
+      url: address,
+      branch: "main",
+      upstream: "origin/main",
+    };
+    const status = this.link(destination, remote);
+    this.cloneState = {
+      ...IDLE_CLONE_PROGRESS,
+      phase: "done",
+      receivedObjects: 100,
+      totalObjects: 100,
+      indexedObjects: 100,
+      receivedBytes: 131072,
+      checkoutTotal: 4,
+      checkoutCompleted: 4,
+      checkoutNotified: 4,
+      updates: 16,
+      message: "克隆完成",
+    };
+    return {
+      workspace: status,
+      remote,
+      unavailablePlugins: ["unavailable-plugin"],
+      recordedTheme: "dark",
+    };
+  }
+
+  async clone_progress(): Promise<CloneProgress> {
+    return this.cloneState;
+  }
+
+  async cancel_clone(): Promise<void> {
+    this.cloneCancelled = true;
+  }
+
+  private link(path: string, remote: WorkspaceStatus["remote"] = null): WorkspaceStatus {
     this.workspace = {
       path,
       gitDir: `${path}/.git`,
@@ -446,6 +571,7 @@ class MockHost implements HostApi {
       settingsFile: `${path}/settings.toml`,
       persisted: true,
       error: null,
+      remote,
     };
     return this.workspace;
   }
