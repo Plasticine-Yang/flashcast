@@ -360,6 +360,31 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # OpenSSL 随包编译（`vendored-openssl`），必须为目标架构构建：macOS 的 x86_64
+      # 在 arm64 runner 上交叉编译，那里只有 arm64 的 Homebrew OpenSSL。与 verify 矩阵
+      # 同样显式给出 clang 的目标架构，否则 openssl 的 Configure 会编出 arm64 的库。
+      - name: Cross-compile flags for macOS x86_64
+        if: matrix.target == 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          {
+            echo "CC_x86_64_apple_darwin=clang"
+            echo "CXX_x86_64_apple_darwin=clang++"
+            echo "CFLAGS_x86_64_apple_darwin=-arch x86_64"
+            echo "CXXFLAGS_x86_64_apple_darwin=-arch x86_64"
+          } >> "$GITHUB_ENV"
+
+      # vendored OpenSSL 在 Windows 上需要 Perl 与 NASM；缺少时给出可读原因。
+      - name: Assert Perl and NASM (Windows, for vendored OpenSSL)
+        if: startsWith(matrix.os, 'windows')
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=1
+          if ! perl -v >/dev/null 2>&1; then echo "::error::缺少 Perl，无法编译 vendored OpenSSL。"; ok=0; fi
+          if ! nasm -v >/dev/null 2>&1; then echo "::error::缺少 NASM，无法编译 vendored OpenSSL。"; ok=0; fi
+          [ "$ok" = "1" ] || exit 1
+
       - name: Install Linux dependencies
         if: startsWith(matrix.os, 'ubuntu')
         run: |
