@@ -135,3 +135,62 @@ gitdir 变动不触发重载、Git 操作忙标志丢弃事件、工作区被删
 - `DeviceStore`（应用数据目录）供凭证、缓存与索引使用；工作区只放可迁移偏好。
 - 远端克隆（ticket 14）应把「校验目标目录 → 克隆 → 激活」串起来，激活沿用
   `Host::init_workspace` 的「创建后回滚」模式，避免在失败时留下半成品目录。
+
+### 2026-10-01：跨平台文件监听缺陷修复（CI 36772554598）
+
+CI run `36772554598`（提交 `4b6f76b`）在 **Windows x64** 与 **两条 macOS 腿** 上失败，
+Linux 通过，失败全部在 `crates/flashcast-core/tests/workspace_watch.rs`：
+
+- macOS arm64：`external_edit_of_settings_is_reloaded` 在 62 行断言
+  「一次外部修改不得产生持续的事件流」处 panic。
+- macOS x86_64：同一用例 62 行 panic，且 `the_applications_own_write_does_not_form_a_reload_loop`
+  在 136 行「自身写入 Ctrl+Shift+F2 触发了重载」处失败。
+- Windows x64：`the_applications_own_write_does_not_form_a_reload_loop` 136 行失败，测试二进制 abort。
+
+两个缺陷（都在 `crates/flashcast-core/src/watch.rs` 的 `ChangeFilter`）：
+
+1. **账本条目命中即删。** `accept` 在第一条记录命中内容哈希后 `ledger.remove(path)`。
+   inotify 对一次 `rename` 基本只上报一条记录，而 FSEvents / `ReadDirectoryChangesW` 常把
+   同一次逻辑写入拆成多条，相邻记录可能相隔数百毫秒到 1 秒；后续记录只能落到 600ms 的
+   每路径静默窗口上，晚于它到达时被当成外部修改，产生一次内容并未变化的多余重载。
+   **修复**：条目保留到 `LEDGER_TTL`（10s）到期，命中只刷新静默时间戳；不在命中时续期，
+   TTL 从记录内容那一刻起算，保证抑制不会无限延长、内存有界。
+2. **重载自己的读被当成修改。** macOS 的 FSEvents 经常不给更细的事件类型，`is_modification`
+   必须接受 `EventKind::Any`，于是重载时读 `settings.toml` 会被上报成一次「修改」，
+   形成「重载 → 读 → 事件 → 重载」。**修复**：宿主先读原始字节再解析
+   （`Workspace::read_settings_bytes` / `parse_settings`），把读到的字节哈希记进同一账本
+   （`ChangeFilter::record_own_read`、`Host::record_own_read`），内容字节相同的后续事件一律
+   被吞掉，与平台上报的事件类型无关。记账**不**开静默窗口：重载是一次读，不该顺带屏蔽内容
+   确实变了的紧随修改。解析失败的（无效配置）字节同样记账。
+
+`QUIET_WINDOW` 保持 600ms，**未**做平台化：它只是第 3 层兜底，真正的判据是内容哈希；放宽到
+1 秒以上会把「自身写入后紧接着的第二次真实外部修改」也一起吞掉。理由已写进 `watch.rs` 模块文档。
+
+**回归测试**（`crates/flashcast-core/tests/workspace_watch.rs`，均经由宿主入口，不碰内部 API）：
+
+- `a_duplicate_event_with_unchanged_content_is_suppressed`：自身写入 → 等第一条记录被处理且
+  静默窗口过期 → 用完全相同的字节再写一次 → 断言无重载。Linux 的 inotify 只上报一条记录，
+  用例手工补齐 macOS/Windows 上那条重复记录。
+- `a_reload_does_not_repeat_itself_from_its_own_read`：外部修改触发重载 → 用相同字节再写一次
+  → 断言仍然只有一次重载。
+
+两处修复各自在 Linux 上临时还原后，对应用例均失败（红→绿验证过），因此这两个用例在 Linux 上
+就能挡住这两个缺陷。
+
+**验证结果（Linux x64，本机）**
+
+- `cargo test -p flashcast-core --test workspace_watch`：8 → 10 通过。
+- `cargo test --workspace`：95 → **97 通过，0 失败**。
+- `cargo build -p flashcast`：成功（只有既有的 2 条 `dead_code` 警告）。
+- `CARGO_TARGET_DIR=/tmp/wcheck-wf cargo check -p flashcast-platform --target x86_64-pc-windows-msvc`：通过。
+- `CARGO_TARGET_DIR=/tmp/mcheck-wf cargo check -p flashcast-platform --target x86_64-apple-darwin`：通过。
+
+**仍未验证（只能由真实 CI 确认）**
+
+- Windows / macOS 上的**运行时**行为：本机是 Linux，无法运行 FSEvents / `ReadDirectoryChangesW`
+  路径。多记录上报与「读被上报为 `Any`」的推理来自 CI 失败现象与平台文档，未在本机实测。
+- `flashcast-core` 本身的跨目标**类型检查**做不了：`-p flashcast-core` 会触发 `libz-sys` /
+  `libgit2-sys` 的 C 构建（本机没有 Windows/macOS C 工具链，与第 115-118 行的既有说明一致；
+  该失败发生在第三方 build script 里，与本次改动无关）。任务要求的 `-p flashcast-platform`
+  两条交叉检查已通过。本次改动只用 `std`（`fs::read` / `str::from_utf8` / `Vec<u8>`），
+  没有任何 `#[cfg]` 分支，因此跨平台类型风险很低，但仍需 CI 实测为准。

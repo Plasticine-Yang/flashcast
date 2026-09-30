@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import type { ClonePhase, CloneProgress, Settings, WorkspaceStatus } from "../types";
+import type {
+  ClonePhase,
+  CloneProgress,
+  Settings,
+  WorkspaceChanges,
+  WorkspaceStatus,
+} from "../types";
+import { ChangesPanel } from "./ChangesPanel";
 
 /** 克隆阶段的中文说明。 */
 const PHASE_LABEL: Record<ClonePhase, string> = {
@@ -45,6 +52,11 @@ interface Props {
   busy: boolean;
   /** 最近一次克隆的进度快照（另一线程轮询宿主）。 */
   cloneProgress: CloneProgress | null;
+  /** 当前工作区的 Git 变更；`null` 表示尚未读取。 */
+  changes: WorkspaceChanges | null;
+  commitMessage: string;
+  selectedPaths: string[];
+  diffPath: string | null;
   onBack: () => void;
   onSelectWorkspace: (path: string) => void;
   onInitWorkspace: (path: string) => void;
@@ -55,6 +67,12 @@ interface Props {
     token: { username: string; token: string } | null,
   ) => void;
   onCancelClone: () => void;
+  onTogglePath: (path: string) => void;
+  onToggleAllPaths: () => void;
+  onSelectDiff: (path: string) => void;
+  onCommitMessageChange: (value: string) => void;
+  onCommit: () => void;
+  onRefreshChanges: () => void;
 }
 
 /**
@@ -71,12 +89,22 @@ export function SettingsScreen({
   message,
   busy,
   cloneProgress,
+  changes,
+  commitMessage,
+  selectedPaths,
+  diffPath,
   onBack,
   onSelectWorkspace,
   onInitWorkspace,
   onSaveHotkey,
   onCloneWorkspace,
   onCancelClone,
+  onTogglePath,
+  onToggleAllPaths,
+  onSelectDiff,
+  onCommitMessageChange,
+  onCommit,
+  onRefreshChanges,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
@@ -288,6 +316,20 @@ export function SettingsScreen({
             不会写入工作区或日志；ssh 复用 ssh-agent 与 ~/.ssh 下的密钥。
           </p>
         </section>
+
+        <ChangesPanel
+          changes={changes}
+          message={commitMessage}
+          selected={selectedPaths}
+          diffPath={diffPath}
+          busy={busy}
+          onToggle={onTogglePath}
+          onToggleAll={onToggleAllPaths}
+          onSelectDiff={onSelectDiff}
+          onMessageChange={onCommitMessageChange}
+          onCommit={onCommit}
+          onRefresh={onRefreshChanges}
+        />
 
         <section className="settings-section" data-testid="hotkey-section">
           <h2 className="settings-section-title">全局快捷键</h2>

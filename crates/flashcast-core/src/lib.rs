@@ -8,6 +8,7 @@
 
 pub mod clone;
 pub mod device;
+pub mod git;
 pub mod host;
 pub mod model;
 pub mod plugin;
@@ -25,6 +26,7 @@ pub use device::{
     CredentialStore, DeviceError, DeviceStore, StoredToken, DEVICE_STATE_FILE,
     GIT_CREDENTIALS_FILE, KEY_WORKSPACE_PATH,
 };
+pub use git::{ChangedFile, CommitOutcome, GitError, WorkspaceChanges, MAX_DIFF_CHARS};
 pub use host::{quick_access_commands, Host, HostDeps};
 pub use model::{
     ActionOutcome, ActionStatus, BackOutcome, DefaultAction, ItemKind, MatchTier, Notice,

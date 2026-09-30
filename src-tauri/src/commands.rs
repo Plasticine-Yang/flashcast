@@ -7,8 +7,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use flashcast_core::{
-    ActionOutcome, BackOutcome, CloneOutcome, CloneProgress, DefaultAction, ItemKind, Notice,
-    PluginFailure, QueryResponse, QueryScope, Score, SearchItem, Settings, WorkspaceStatus,
+    ActionOutcome, BackOutcome, CloneOutcome, CloneProgress, CommitOutcome, DefaultAction,
+    ItemKind, Notice, PluginFailure, QueryResponse, QueryScope, Score, SearchItem, Settings,
+    WorkspaceChanges, WorkspaceStatus,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -279,6 +280,31 @@ pub fn clone_progress(state: State<'_, AppState>) -> CloneProgress {
 #[tauri::command(rename_all = "snake_case")]
 pub fn cancel_clone(state: State<'_, AppState>) {
     state.host.cancel_clone();
+}
+
+/// 当前工作区的 Git 变更：状态分类、分支与逐文件真实差异。
+///
+/// 只读入口，不修改仓库；工作区不是 Git 仓库或读取失败时，
+/// 结果里的 `error` 给出中文原因（ADR §3 的补充入口）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_git_changes(state: State<'_, AppState>) -> WorkspaceChanges {
+    state.host.workspace_changes()
+}
+
+/// 创建 Git 提交。提交范围**只包含** `paths` 里显式给出的路径。
+///
+/// 失败（空提交说明、没有选择、身份未配置、工作区异常、索引被占用）时返回中文原因；
+/// 宿主保证此时不产生提交，也不改动工作区文件与用户已有的暂存状态。
+#[tauri::command(rename_all = "snake_case")]
+pub fn commit_changes(
+    state: State<'_, AppState>,
+    message: String,
+    paths: Vec<String>,
+) -> Result<CommitOutcome, String> {
+    state
+        .host
+        .commit_workspace(&message, &paths)
+        .map_err(|error| error.to_string())
 }
 
 /// 重新读取工作区配置（外部修改未触发监听时的兜底入口）。

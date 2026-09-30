@@ -211,8 +211,13 @@ impl Workspace {
 
         let mut opts = git2::RepositoryInitOptions::new();
         opts.no_reinit(false).initial_head("main");
-        let repo = git2::Repository::init_opts(&root, &opts)
-            .map_err(|error| rollback_created(&root, created, WorkspaceError::Git(error.message().to_string())))?;
+        let repo = git2::Repository::init_opts(&root, &opts).map_err(|error| {
+            rollback_created(
+                &root,
+                created,
+                WorkspaceError::Git(error.message().to_string()),
+            )
+        })?;
         let git_dir = Some(repo.path().to_path_buf());
         drop(repo);
 
@@ -238,19 +243,37 @@ impl Workspace {
 
     /// 读取设置。文件不存在返回 `None`；文件存在但无效时返回错误。
     pub fn read_settings(&self) -> Result<Option<Settings>, WorkspaceError> {
-        let path = self.settings_path();
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(WorkspaceError::Io(error.to_string())),
-        };
-        let settings = Settings::from_toml(&text).map_err(|error| {
+        match self.read_settings_bytes()? {
+            Some(bytes) => Ok(Some(self.parse_settings(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 读取设置文件的**原始字节**。文件不存在返回 `None`。
+    ///
+    /// 宿主重载时先取字节、再解析，而不是直接读成 `Settings`：无论解析成功与否，读到的
+    /// 内容都要记进监听层的账本，否则 macOS / Windows 会把这次读上报成一次修改事件
+    /// （见 [`crate::watch`] 模块文档「重载自己的读也必须记账」）。
+    pub fn read_settings_bytes(&self) -> Result<Option<Vec<u8>>, WorkspaceError> {
+        match fs::read(self.settings_path()) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(WorkspaceError::Io(error.to_string())),
+        }
+    }
+
+    /// 把设置文件的原始字节解析并校验为设置。
+    pub fn parse_settings(&self, bytes: &[u8]) -> Result<Settings, WorkspaceError> {
+        let text = std::str::from_utf8(bytes).map_err(|error| {
+            WorkspaceError::Io(format!("{SETTINGS_FILE} 不是有效文本：{error}"))
+        })?;
+        let settings = Settings::from_toml(text).map_err(|error| {
             WorkspaceError::InvalidSettings(format!("{SETTINGS_FILE} 解析失败：{error}"))
         })?;
         settings.validate().map_err(|error| {
             WorkspaceError::InvalidSettings(format!("{SETTINGS_FILE} 内容不合法：{error}"))
         })?;
-        Ok(Some(settings))
+        Ok(settings)
     }
 
     /// 原子写入设置文件。
@@ -384,7 +407,8 @@ fn rollback_created(root: &Path, created: bool, error: WorkspaceError) -> Worksp
     error
 }
 
-fn detect_git_dir(root: &Path) -> Result<Option<PathBuf>, WorkspaceError> {    match git2::Repository::open(root) {
+fn detect_git_dir(root: &Path) -> Result<Option<PathBuf>, WorkspaceError> {
+    match git2::Repository::open(root) {
         Ok(repo) => Ok(Some(repo.path().to_path_buf())),
         // 目录里没有仓库是正常情况：工作区可以是普通目录，克隆由 ticket 14 提供。
         Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),

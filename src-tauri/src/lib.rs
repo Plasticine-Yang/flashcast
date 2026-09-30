@@ -45,6 +45,8 @@ pub fn run() {
             commands::clone_progress,
             commands::cancel_clone,
             commands::reload_workspace,
+            commands::get_git_changes,
+            commands::commit_changes,
             commands::hide_window,
         ])
         .setup(|app| {
