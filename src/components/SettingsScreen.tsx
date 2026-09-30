@@ -65,19 +65,23 @@ export function SettingsScreen({
     }
   }, [settings?.hotkey]);
 
+  // Escape 返回搜索首屏。挂在 window 上而不是容器上：点击主题按钮后按钮会变成
+  // 禁用状态并失去焦点，此时焦点在 body 上，容器上的 onKeyDown 不会再触发。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onBack();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onBack]);
+
   const linked = workspace?.path != null;
 
   return (
-    <div
-      className="settings"
-      data-testid="settings-screen"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          onBack();
-        }
-      }}
-    >
+    <div className="settings" data-testid="settings-screen">
       <header className="settings-header">
         <h1 className="settings-title">设置</h1>
         <button
