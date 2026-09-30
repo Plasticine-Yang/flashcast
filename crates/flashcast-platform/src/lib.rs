@@ -66,11 +66,11 @@ pub fn current() -> PlatformAdapters {
     #[cfg(target_os = "windows")]
     {
         PlatformAdapters {
-            catalog: Arc::new(unsupported::UnsupportedCatalog),
-            launcher: Arc::new(unsupported::UnsupportedLauncher),
-            focus: Arc::new(unsupported::UnsupportedFocusTracker),
-            hotkeys: Arc::new(windows::hotkeys::WindowsHotkeyManager::new()),
-            capabilities: Arc::new(unsupported::UnsupportedCapabilityProbe),
+            catalog: Arc::new(windows::WindowsAppCatalog::new()),
+            launcher: Arc::new(windows::WindowsLauncher::new()),
+            focus: Arc::new(windows::WindowsFocusTracker::new()),
+            hotkeys: Arc::new(windows::WindowsHotkeyManager::new()),
+            capabilities: Arc::new(windows::WindowsCapabilityProbe::new()),
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]

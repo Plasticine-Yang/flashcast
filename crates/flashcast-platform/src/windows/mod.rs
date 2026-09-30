@@ -22,9 +22,25 @@ pub mod uwp;
 pub mod version;
 
 #[cfg(target_os = "windows")]
+pub mod cap;
+#[cfg(target_os = "windows")]
+pub mod catalog;
+#[cfg(target_os = "windows")]
+pub mod focus;
+#[cfg(target_os = "windows")]
 pub mod hotkeys;
+#[cfg(target_os = "windows")]
+pub mod launcher;
 #[cfg(target_os = "windows")]
 pub mod session;
 
 #[cfg(target_os = "windows")]
+pub use cap::WindowsCapabilityProbe;
+#[cfg(target_os = "windows")]
+pub use catalog::WindowsAppCatalog;
+#[cfg(target_os = "windows")]
+pub use focus::WindowsFocusTracker;
+#[cfg(target_os = "windows")]
 pub use hotkeys::WindowsHotkeyManager;
+#[cfg(target_os = "windows")]
+pub use launcher::WindowsLauncher;
