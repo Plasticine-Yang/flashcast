@@ -1,0 +1,163 @@
+# Flashcast 三平台 CI（ticket 01 建立，尚未在 GitHub 上实际运行过）。
+# 编译结果与桌面交互结果分开汇报，见末尾的 summarise 步骤。
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# 同一 ref 上的新提交取消旧的运行。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # 统一用 bash：Windows runner 自带 Git Bash，避免 PowerShell 与 POSIX 命令的差异。
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            slug: linux-x64
+            os: ubuntu-22.04
+            target: ""
+            cargo_args: ""
+            rust_targets: ""
+          - name: Windows x64
+            slug: windows-x64
+            os: windows-latest
+            target: ""
+            cargo_args: ""
+            rust_targets: ""
+          # macOS Apple Silicon：原生构建，不传 --target。
+          - name: macOS arm64 (native)
+            slug: macos-arm64
+            os: macos-latest
+            target: ""
+            cargo_args: ""
+            rust_targets: ""
+          # macOS Intel：在 arm64 runner 上交叉编译（不使用已下线的 macos-13）。
+          - name: macOS x86_64 (cross-compiled)
+            slug: macos-x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            cargo_args: "--target x86_64-apple-darwin"
+            rust_targets: "x86_64-apple-darwin"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            xdg-utils
+
+      # Tauri 2 需要 WebKitGTK 4.1（libsoup 3）。Ubuntu 22.04 上 4.0 的 dev 包同样存在，
+      # 误链 4.0 也能编译通过、只在运行时出问题，所以这里显式断言 4.1 可被 pkg-config 解析。
+      - name: Assert WebKitGTK 4.1 is what pkg-config resolves
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          set -euo pipefail
+          if ! version="$(pkg-config --modversion webkit2gtk-4.1 2>/dev/null)"; then
+            echo "::error::pkg-config 找不到 webkit2gtk-4.1；构建可能静默链接到 4.0 ABI。"
+            exit 1
+          fi
+          echo "webkit2gtk-4.1 = ${version}"
+          if legacy="$(pkg-config --modversion webkit2gtk-4.0 2>/dev/null)"; then
+            echo "::warning::镜像里同时存在 webkit2gtk-4.0 (${legacy})；以 4.1 断言为准。"
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.slug }}
+
+      # 交叉编译出来的 x86_64 测试二进制要在 arm64 runner 上运行，需要 Rosetta 2。
+      # 已安装时该命令本身是幂等的，因此容忍它的退出码。
+      - name: Ensure Rosetta 2 (macOS x86_64 cross-compile only)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: sudo softwareupdate --install-rosetta --agree-to-license || true
+
+      - name: Test workspace (cargo test --workspace)
+        id: test
+        run: cargo test --workspace ${{ matrix.cargo_args }}
+
+      - name: Build desktop host (cargo build -p flashcast)
+        id: build
+        run: cargo build -p flashcast ${{ matrix.cargo_args }}
+
+      # 真实平台检查：热键、焦点读取、软件发现、X11 诊断。
+      # 结果可能是「实测失败」或「未覆盖」（无头 runner 上没有 X11 会话），
+      # 但这属于桌面交互结论，不应与编译结果混为一谈，因此本步骤单独记录、不掩盖。
+      - name: Run real platform check (stdout captured to artifacts/)
+        id: platform_check
+        continue-on-error: true
+        run: |
+          mkdir -p artifacts
+          cargo run -p flashcast-platform --bin flashcast-platform-check \
+            ${{ matrix.cargo_args }} | tee "artifacts/platform-check-${{ matrix.slug }}.log"
+          cargo run -p flashcast-platform --bin flashcast-platform-check \
+            ${{ matrix.cargo_args }} -- --json \
+            --output "artifacts/platform-check-${{ matrix.slug }}.json"
+
+      # 把「编译结果」与「桌面交互结果」分别写进 job summary，避免绿色编译被误读为
+      # 热键/托盘/粘贴检查通过。
+      - name: Summarise compilation vs desktop interaction
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            echo ""
+            echo "| 项目 | 步骤结果 |"
+            echo "| --- | --- |"
+            echo "| 编译：\`cargo test --workspace\` | ${{ steps.test.outcome }} |"
+            echo "| 编译：\`cargo build -p flashcast\` | ${{ steps.build.outcome }} |"
+            echo "| 桌面交互：\`flashcast-platform-check\` | ${{ steps.platform_check.outcome }} |"
+            echo ""
+            echo "编译成功**不代表**全局快捷键、托盘入口或自动粘贴可用；那三项只以上表第三行"
+            echo "报告里的「实测通过 / 实测失败 / 未覆盖」为准（无头 runner 通常为「未覆盖」）。"
+            echo ""
+            if [ -f "artifacts/platform-check-${{ matrix.slug }}.log" ]; then
+              echo '```'
+              grep -E '^\[|^汇总' "artifacts/platform-check-${{ matrix.slug }}.log" || true
+              echo '```'
+            else
+              echo "_未取得 platform_check 输出。_"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload diagnostics (and screenshots when present)
+        if: always()
+        uses: actions/upload-artifact@v8
+        with:
+          name: diagnostics-${{ matrix.slug }}
+          path: |
+            artifacts/platform-check-*.log
+            artifacts/platform-check-*.json
+            artifacts/ui/**
+          if-no-files-found: ignore
+          retention-days: 14
