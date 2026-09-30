@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flashcast_platform::catalog::AppSource;
 use flashcast_platform::macos::bundle::{
-    default_roots, entry_from_bundle, finalize_bundles, read_bundle, scan, SkipReason, MAX_SCAN_DEPTH,
+    default_roots, entry_from_bundle, finalize_bundles, read_bundle, scan, SkipReason,
+    MAX_SCAN_DEPTH,
 };
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -123,9 +124,8 @@ fn default_roots_cover_system_and_user_locations() {
 fn default_roots_without_home_skip_the_user_directory() {
     let roots = default_roots(None);
     assert!(
-        !roots
-            .iter()
-            .any(|root| root.starts_with("/Users") || root.ends_with("Applications") && root.is_relative()),
+        !roots.iter().any(|root| root.starts_with("/Users")
+            || root.ends_with("Applications") && root.is_relative()),
         "没有 HOME 时不应推断用户应用目录：{roots:?}"
     );
     assert_eq!(roots.len(), 4);
@@ -451,16 +451,8 @@ fn non_ascii_bundle_names_are_preserved() {
 #[test]
 fn duplicate_bundle_ids_keep_both_bundles_with_distinct_names_and_ids() {
     let dir = TempDir::new("duplicates");
-    dir.app(
-        "Applications/Acme.app",
-        "com.example.Acme",
-        "Acme",
-    );
-    dir.app(
-        "Applications/Beta/Acme.app",
-        "com.example.Acme",
-        "Acme",
-    );
+    dir.app("Applications/Acme.app", "com.example.Acme", "Acme");
+    dir.app("Applications/Beta/Acme.app", "com.example.Acme", "Acme");
 
     let outcome = scan(&flashcast_platform::macos::bundle::ScanOptions {
         roots: vec![dir.path().join("Applications")],
@@ -481,7 +473,10 @@ fn duplicate_bundle_ids_keep_both_bundles_with_distinct_names_and_ids() {
         2,
         "重复 bundle id 的条目 id 必须互不相同：{ids:?}"
     );
-    assert!(ids.contains(&"com.example.Acme"), "主副本使用纯 bundle id：{ids:?}");
+    assert!(
+        ids.contains(&"com.example.Acme"),
+        "主副本使用纯 bundle id：{ids:?}"
+    );
 }
 
 #[test]
@@ -564,4 +559,222 @@ fn scan_reports_missing_roots_without_failing() {
     assert!(outcome.entries.is_empty());
     assert!(outcome.skipped.is_empty());
     assert!(outcome.warnings.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// 启动计划（纯逻辑，macOS 上按同一份计划执行）
+// ---------------------------------------------------------------------------
+
+use flashcast_platform::macos::launcher::{is_bundle_path, launch_plan, LaunchPlan};
+
+fn plan(program: &str, args: &[&str], terminal: bool, is_bundle: bool) -> LaunchPlan {
+    let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+    launch_plan(program, &args, terminal, is_bundle).expect("计划应可生成")
+}
+
+#[test]
+fn bundle_launch_uses_the_path_not_the_bundle_id() {
+    // 重复 bundle id 真实存在，按路径打开才不会命中另一份副本。
+    let plan = plan("/Applications/Acme.app", &[], false, true);
+    assert_eq!(
+        plan,
+        LaunchPlan::Open {
+            argv: vec![
+                "/usr/bin/open".into(),
+                "-a".into(),
+                "/Applications/Acme.app".into()
+            ]
+        }
+    );
+}
+
+#[test]
+fn bundle_launch_passes_arguments_after_the_args_separator() {
+    let plan = plan("/Applications/Acme.app", &["--flag", "值"], false, true);
+    assert_eq!(
+        plan,
+        LaunchPlan::Open {
+            argv: vec![
+                "/usr/bin/open".into(),
+                "-a".into(),
+                "/Applications/Acme.app".into(),
+                "--args".into(),
+                "--flag".into(),
+                "值".into(),
+            ]
+        }
+    );
+}
+
+#[test]
+fn non_bundle_program_is_executed_directly() {
+    let plan = plan("/opt/tool/bin/tool", &["--x"], false, false);
+    assert_eq!(
+        plan,
+        LaunchPlan::Exec {
+            program: "/opt/tool/bin/tool".into(),
+            args: vec!["--x".into()]
+        }
+    );
+}
+
+#[test]
+fn terminal_request_goes_through_terminal_app() {
+    let plan = plan("/opt/tool/bin/tool", &[], true, false);
+    assert_eq!(
+        plan,
+        LaunchPlan::Open {
+            argv: vec![
+                "/usr/bin/open".into(),
+                "-a".into(),
+                "Terminal".into(),
+                "/opt/tool/bin/tool".into()
+            ]
+        }
+    );
+}
+
+#[test]
+fn terminal_request_with_arguments_fails_instead_of_dropping_them() {
+    let args = vec!["--x".to_string()];
+    let error =
+        launch_plan("/opt/tool/bin/tool", &args, true, false).expect_err("不能静默丢弃参数");
+    assert!(
+        error.to_string().contains("无法传递额外参数"),
+        "错误说明应指出参数无法传递：{error}"
+    );
+}
+
+#[test]
+fn empty_program_is_rejected() {
+    assert!(launch_plan("   ", &[], false, false).is_err());
+}
+
+#[test]
+fn bundle_detection_requires_an_existing_app_directory() {
+    let dir = TempDir::new("bundle-detect");
+    let app = dir.app("Applications/Acme.app", "com.example.Acme", "Acme");
+    assert!(is_bundle_path(&app));
+    assert!(!is_bundle_path(
+        &dir.path().join("Applications/Missing.app")
+    ));
+    assert!(!is_bundle_path(&dir.path().join("Applications/plain.txt")));
+}
+
+// ---------------------------------------------------------------------------
+// 焦点恢复策略、辅助功能结论与图标缓存路径
+// ---------------------------------------------------------------------------
+
+use flashcast_platform::capability::{OsKind, SessionType, Support};
+use flashcast_platform::focus::FocusedApp;
+use flashcast_platform::macos::cap::{capabilities_for, MacosEnvironment};
+use flashcast_platform::macos::focus::restore_target;
+use flashcast_platform::macos::icons::{icon_cache_dir, icon_cache_path};
+
+fn focused(pid: Option<u32>, bundle_id: Option<&str>) -> FocusedApp {
+    FocusedApp {
+        id: bundle_id.unwrap_or("unknown").to_string(),
+        name: "唤起前应用".to_string(),
+        wm_class: bundle_id.map(str::to_string),
+        pid,
+        window: None,
+    }
+}
+
+#[test]
+fn restore_prefers_pid_then_falls_back_to_bundle_id() {
+    assert_eq!(
+        restore_target(&focused(Some(4321), Some("com.example.Acme"))),
+        Some(flashcast_platform::macos::focus::RestoreTarget::Pid(4321))
+    );
+    assert_eq!(
+        restore_target(&focused(None, Some("com.example.Acme"))),
+        Some(flashcast_platform::macos::focus::RestoreTarget::BundleId(
+            "com.example.Acme".to_string()
+        ))
+    );
+    // 两者都没有时如实返回 None，由调用方报「无法恢复」。
+    assert_eq!(restore_target(&focused(Some(0), None)), None);
+}
+
+#[test]
+fn capability_snapshot_reports_macos_without_claiming_unimplemented_features() {
+    let caps = capabilities_for(
+        MacosEnvironment {
+            desktop_available: true,
+            accessibility_granted: false,
+        },
+        Some("Version 14.5 (Build 23F79)".to_string()),
+        "aarch64".to_string(),
+    );
+    assert_eq!(caps.os, OsKind::Macos);
+    assert_eq!(caps.session, SessionType::NotApplicable);
+    assert!(caps.desktop_available);
+    assert_eq!(caps.hotkey, Support::Supported);
+    // 剪贴板适配属于后续 ticket：只能报「未覆盖」，不得写成支持。
+    assert!(matches!(caps.clipboard, Support::Unknown { .. }));
+    // 没有辅助功能权限时自动粘贴必须如实报「不支持」，并给出设置入口。
+    let reason = caps.auto_paste.reason().expect("应有原因");
+    assert!(
+        reason.contains("辅助功能"),
+        "原因应指向辅助功能权限：{reason}"
+    );
+    assert!(reason.contains("系统设置"), "原因应给出设置入口：{reason}");
+    assert!(caps
+        .notes
+        .iter()
+        .any(|note| note.contains("辅助功能权限：未授权")));
+}
+
+#[test]
+fn granted_accessibility_still_does_not_claim_auto_paste_works() {
+    let caps = capabilities_for(
+        MacosEnvironment {
+            desktop_available: true,
+            accessibility_granted: true,
+        },
+        None,
+        "x86_64".to_string(),
+    );
+    assert_eq!(caps.hotkey, Support::Supported);
+    assert!(
+        matches!(caps.auto_paste, Support::Unknown { .. }),
+        "适配未实现时只能是未覆盖：{:?}",
+        caps.auto_paste
+    );
+    assert!(caps
+        .notes
+        .iter()
+        .any(|note| note.contains("辅助功能权限：已授权")));
+}
+
+#[test]
+fn headless_environment_reports_hotkey_unsupported() {
+    let caps = capabilities_for(
+        MacosEnvironment {
+            desktop_available: false,
+            accessibility_granted: false,
+        },
+        None,
+        "aarch64".to_string(),
+    );
+    assert!(!caps.desktop_available);
+    assert!(matches!(caps.hotkey, Support::Unsupported { .. }));
+}
+
+#[test]
+fn icon_cache_paths_are_stable_and_distinct() {
+    let cache = Path::new("/tmp/flashcast-icon-cache");
+    let first = icon_cache_path(Path::new("/Applications/Acme.app"), cache);
+    let again = icon_cache_path(Path::new("/Applications/Acme.app"), cache);
+    let other = icon_cache_path(Path::new("/Applications/Other.app"), cache);
+    assert_eq!(first, again, "同一路径必须得到同一缓存文件");
+    assert_ne!(first, other, "不同路径必须得到不同缓存文件");
+    assert_eq!(first.extension().and_then(|e| e.to_str()), Some("png"));
+    assert_eq!(first.parent(), Some(cache));
+
+    assert_eq!(
+        icon_cache_dir(Some(Path::new("/Users/tester"))),
+        Path::new("/Users/tester/Library/Caches/Flashcast/icons")
+    );
 }

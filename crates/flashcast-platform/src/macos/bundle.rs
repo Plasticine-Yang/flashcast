@@ -151,7 +151,8 @@ pub fn read_bundle(path: &Path) -> Result<BundleInfo, SkipReason> {
     if !plist_path.is_file() {
         return Err(SkipReason::MissingInfoPlist);
     }
-    let value = plist::Value::from_file(&plist_path).map_err(|_| SkipReason::UnreadableInfoPlist)?;
+    let value =
+        plist::Value::from_file(&plist_path).map_err(|_| SkipReason::UnreadableInfoPlist)?;
     let mut info = bundle_from_plist(path, &value)?;
     // 单独读取时没有全局视图，先按「bundle id 唯一」填入 id；
     // `finalize_bundles` 会在发现重复 bundle id 时改写。
@@ -306,12 +307,12 @@ pub fn entry_from_bundle(info: &BundleInfo) -> AppEntry {
     AppEntry {
         id,
         name: info.name.clone(),
-        comment: info.version.as_ref().map(|version| format!("版本 {version}")),
+        comment: info
+            .version
+            .as_ref()
+            .map(|version| format!("版本 {version}")),
         icon: Some(IconRef {
-            name: info
-                .icon_file
-                .clone()
-                .unwrap_or_else(|| info.name.clone()),
+            name: info.icon_file.clone().unwrap_or_else(|| info.name.clone()),
             path: info.icon_path.clone(),
         }),
         exec: vec![info.path.to_string_lossy().into_owned()],
@@ -417,7 +418,10 @@ fn bundle_stem(path: &Path) -> String {
 ///
 /// `CFBundleExecutable` 指向的文件必须存在，否则包已损坏；缺少该键时，
 /// `Contents/MacOS` 下恰好一个可执行文件才被接受。
-fn resolve_executable(bundle: &Path, executable: Option<&str>) -> Result<Option<PathBuf>, SkipReason> {
+fn resolve_executable(
+    bundle: &Path,
+    executable: Option<&str>,
+) -> Result<Option<PathBuf>, SkipReason> {
     let macos_dir = bundle.join("Contents/MacOS");
     if let Some(executable) = executable {
         let candidate = macos_dir.join(executable);
