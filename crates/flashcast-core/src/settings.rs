@@ -5,8 +5,21 @@ use flashcast_platform::hotkey::{HotkeySpec, DEFAULT_HOTKEY};
 use serde::{Deserialize, Serialize};
 
 /// 宿主设置。
+///
+/// 这是配置工作区里 `settings.toml` 的格式，键名与 UI / JSON 一致使用 camelCase：
+///
+/// ```toml
+/// hotkey = "Ctrl+Alt+Space"
+/// launchAtStartup = false
+/// quickAccessLimit = 6
+/// pluginTimeoutMs = 400
+/// disabledPlugins = []
+/// ```
+///
+/// `deny_unknown_fields` 让拼错的键名直接报错，而不是被静默忽略成默认值：
+/// 「无效配置保留上次有效状态并指出问题」要求错误可见。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Settings {
     /// 全局快捷键，采用 `Ctrl+Alt+Space` 这类写法。
     pub hotkey: String,
