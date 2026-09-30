@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -29,6 +29,9 @@ use crate::plugin::{PluginKind, PluginScope, SearchContext};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
 use crate::registry::PluginRegistry;
 use crate::settings::{Settings, SettingsError};
+use crate::sync::{
+    self, PullOutcome, PushOutcome, SyncControl, SyncError, SyncProgress, SyncStatus,
+};
 use crate::theme::{
     Appearance, ThemeDocument, ThemeEntry, ThemeError, ThemeLibrary, ThemeSelection, ThemeState,
     ThemeTokens, THEME_LIGHT,
@@ -130,6 +133,10 @@ pub struct Host {
     watch: Mutex<Option<WorkspaceWatcher>>,
     /// 最近一次克隆操作的进度与取消信号（UI 轮询，另一线程执行克隆）。
     clone: Mutex<CloneControl>,
+    /// 最近一次同步（拉取 / 推送）的进度与取消信号。
+    sync: Mutex<SyncControl>,
+    /// 是否有 Git 操作正在进行（网络操作期间为 `true`）。
+    git_busy: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -187,6 +194,8 @@ impl Host {
             credentials,
             watch: Mutex::new(None),
             clone: Mutex::new(CloneControl::new()),
+            sync: Mutex::new(SyncControl::new()),
+            git_busy: AtomicBool::new(false),
         };
         host.rescan_catalog();
         host.restore_workspace();
@@ -466,9 +475,15 @@ impl Host {
     /// ticket 15/16 的 status / commit / pull 用它包住整个 Git 操作，操作结束后按
     /// Git 状态显式重建界面（见 [`crate::watch`] 的模块文档）。
     pub fn set_git_busy(&self, busy: bool) {
+        self.git_busy.store(busy, Ordering::SeqCst);
         if let Some(watcher) = lock(&self.watch).as_ref() {
             watcher.set_git_busy(busy);
         }
+    }
+
+    /// 是否有 Git 操作正在进行（同步状态里如实呈现）。
+    pub fn git_busy(&self) -> bool {
+        self.git_busy.load(Ordering::SeqCst)
     }
 
     /// 当前工作区的 Git 变更：状态分类、分支与逐文件真实差异（ADR §3 的补充入口）。
@@ -503,6 +518,145 @@ impl Host {
         let result = crate::git::commit(&workspace, message, paths);
         self.set_git_busy(false);
         result
+    }
+
+    /// 当前工作区的同步状态（ADR §3 的补充入口）。
+    ///
+    /// **只读**：不发网络请求、不写 `.git/index`、也不改变宿主状态。设置页据此展示
+    /// 分支、远端、领先 / 落后、未提交改动、能否同步、是否有操作进行中，以及
+    /// 拉取 / 推送的阻塞原因与中文指引。
+    pub fn sync_status(&self) -> SyncStatus {
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return SyncStatus::unlinked(),
+        };
+        // 设备本地记录的远端关系（ticket 14）作为仓库内无远端时的兜底展示。
+        let recorded = self
+            .device
+            .workspace_remote(workspace.root())
+            .ok()
+            .flatten();
+        let mut status = sync::status(&workspace, recorded.as_ref());
+        status.busy = self.git_busy();
+        status
+    }
+
+    /// 重新检测同步状态（UI 的「重新检测」入口）。
+    ///
+    /// 用户在应用外部解决阻塞（提交、合并、中止变基、`git remote add`…）之后调用它：
+    /// 重新读取并脱敏远端关系，然后按真实 Git 状态重建状态与指引。
+    pub fn redetect_sync_state(&self) -> SyncStatus {
+        let _ = self.workspace_remote();
+        self.sync_status()
+    }
+
+    /// 仅快进拉取当前工作区（ADR §3 的补充入口）。
+    ///
+    /// - 拉取前先判脏：未提交修改、冲突、进行中的 Git 操作、分离 HEAD 都在
+    ///   网络操作之前返回，工作区与索引逐字节不变；
+    /// - 只接受快进；分叉一律拒绝，绝不自动合并、不强推；
+    /// - 成功后重新加载生效设置，并重新读取主题与备忘录（见 [`PullOutcome`]）。
+    ///
+    /// 阻塞调用：Tauri 外壳把它放到后台线程，UI 用 [`Host::sync_progress`] 轮询进度、
+    /// 用 [`Host::cancel_sync`] 取消。
+    pub fn pull_workspace(&self) -> Result<PullOutcome, SyncError> {
+        self.pull_workspace_with_control(&SyncControl::new())
+    }
+
+    /// 用调用方提供的进度 / 取消信号执行拉取。`control` 会登记为「最近一次同步」。
+    pub fn pull_workspace_with_control(
+        &self,
+        control: &SyncControl,
+    ) -> Result<PullOutcome, SyncError> {
+        *lock(&self.sync) = control.clone();
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return Err(SyncError::NoWorkspace),
+        };
+        let provider = self.sync_credentials(&workspace)?;
+
+        self.set_git_busy(true);
+        let report = sync::pull(&workspace, &provider, control);
+        self.set_git_busy(false);
+
+        let report = report?;
+        // 拉取后按 Git 状态显式重建视图：重新加载生效设置与主题（`reload_from_workspace`
+        // 会重新解析 settings.toml 与 theme.json，并应用插件清单里的主题包），
+        // 再重新读取备忘录列表。
+        let reload = self.reload_from_workspace(&workspace.settings_path());
+        let theme = reload.theme.selected.clone();
+        Ok(PullOutcome {
+            result: report.result,
+            message: report.message,
+            reload,
+            theme: Some(theme),
+            memos: workspace.memo_files(),
+            status: self.sync_status(),
+        })
+    }
+
+    /// 显式推送当前分支到它的上游（ADR §3 的补充入口）。
+    ///
+    /// refspec 不带 `+`，因此永不 force：远端拒绝非快进时如实报告并让用户先拉取。
+    /// 「没有需要推送的提交」「未配置上游」「鉴权失败」是三个独立分类。
+    /// 未提交修改不阻塞推送（推送只搬运已提交对象），但会在状态里如实呈现。
+    pub fn push_workspace(&self) -> Result<PushOutcome, SyncError> {
+        self.push_workspace_with_control(&SyncControl::new())
+    }
+
+    /// 用调用方提供的进度 / 取消信号执行推送。
+    pub fn push_workspace_with_control(
+        &self,
+        control: &SyncControl,
+    ) -> Result<PushOutcome, SyncError> {
+        *lock(&self.sync) = control.clone();
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return Err(SyncError::NoWorkspace),
+        };
+        let provider = self.sync_credentials(&workspace)?;
+
+        self.set_git_busy(true);
+        let report = sync::push(&workspace, &provider, control);
+        self.set_git_busy(false);
+
+        let report = report?;
+        Ok(PushOutcome {
+            branch: report.branch,
+            remote: report.remote,
+            updated: report.updated,
+            message: report.message,
+            status: self.sync_status(),
+        })
+    }
+
+    /// 最近一次同步的进度快照（UI 轮询）。
+    pub fn sync_progress(&self) -> SyncProgress {
+        lock(&self.sync).progress()
+    }
+
+    /// 请求取消正在进行的同步。fetch 在下次进度回调中断，push 在协商阶段中止。
+    pub fn cancel_sync(&self) {
+        lock(&self.sync).cancel();
+    }
+
+    /// 同步（克隆之外的 fetch / push）用的凭证来源：设备本地为该主机保存的令牌，
+    /// 其余交给 ssh-agent / `~/.ssh` / 系统 git 的凭证 helper。
+    fn sync_credentials(&self, workspace: &Workspace) -> Result<CredentialProvider, SyncError> {
+        let url = self
+            .workspace_remote()
+            .map(|remote| remote.url)
+            .or_else(|| workspace.remote().map(|remote| remote.url));
+        Ok(match url.as_deref().and_then(clone::host_of) {
+            Some(host) => {
+                let token = self
+                    .credentials
+                    .token(&host)
+                    .map_err(|error| SyncError::Git(error.to_string()))?;
+                CredentialProvider::with_token(token)
+            }
+            None => CredentialProvider::new(),
+        })
     }
 
     /// 已应用的外部重载次数。
@@ -758,8 +912,8 @@ impl Host {
                 Err(error) => reason = Some(format!("插件清单无效：{error}")),
             },
             Ok(None) if activation => {
-                let (merged, _) = PluginManifestFile::defaults()
-                    .merged_with(self.expected_manifest_extras());
+                let (merged, _) =
+                    PluginManifestFile::defaults().merged_with(self.expected_manifest_extras());
                 if merged != inner.manifest {
                     inner.manifest = merged;
                     changed = true;
@@ -841,10 +995,9 @@ impl Host {
                 Ok(None) => inner
                     .theme_library
                     .mark_broken(id, format!("主题包文件不存在：{}", path.display())),
-                Err(error) => inner.theme_library.mark_broken(
-                    id,
-                    format!("无法读取主题包 {}：{error}", path.display()),
-                ),
+                Err(error) => inner
+                    .theme_library
+                    .mark_broken(id, format!("无法读取主题包 {}：{error}", path.display())),
             }
         }
         // 清单里已经不存在的本地主题从库里清掉。
@@ -936,8 +1089,8 @@ impl Host {
     fn bootstrap_workspace_files(&self, workspace: &Workspace) {
         let manifest_path = workspace.manifest_path();
         if let Ok(None) = workspace.read_config_text(&manifest_path) {
-            let (merged, _) = PluginManifestFile::defaults()
-                .merged_with(self.expected_manifest_extras());
+            let (merged, _) =
+                PluginManifestFile::defaults().merged_with(self.expected_manifest_extras());
             if let Ok(bytes) = merged.to_json().map(String::into_bytes) {
                 if self
                     .persist_workspace_file(|_| manifest_path.clone(), &bytes)
@@ -1112,9 +1265,7 @@ impl Host {
         if document.is_builtin() {
             return Err(ThemeError::Builtin("覆盖", document.id.clone()));
         }
-        let workspace = self
-            .workspace()?
-            .ok_or(ThemeError::NoWorkspace("安装"))?;
+        let workspace = self.workspace()?.ok_or(ThemeError::NoWorkspace("安装"))?;
         let package = workspace.theme_package_path(&document.id);
         let bytes = document.to_json()?.into_bytes();
         self.persist_workspace_file(|_| package.clone(), &bytes)
@@ -1132,7 +1283,8 @@ impl Host {
             )
         };
         let _ = entry;
-        self.persist_manifest(&manifest).map_err(|error| ThemeError::Workspace(error.to_string()))?;
+        self.persist_manifest(&manifest)
+            .map_err(|error| ThemeError::Workspace(error.to_string()))?;
         Ok(self.theme_state())
     }
 
@@ -1150,9 +1302,7 @@ impl Host {
         if !entry.origin.removable() {
             return Err(ThemeError::Builtin("移除", entry.name.clone()));
         }
-        let workspace = self
-            .workspace()?
-            .ok_or(ThemeError::NoWorkspace("移除"))?;
+        let workspace = self.workspace()?.ok_or(ThemeError::NoWorkspace("移除"))?;
         let dir = workspace.theme_package_dir(id);
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => {}
@@ -1177,10 +1327,11 @@ impl Host {
             };
             (inner.manifest.clone(), fallback)
         };
-        self.persist_manifest(&manifest).map_err(|error| ThemeError::Workspace(error.to_string()))?;
-        let notice = fallback.as_ref().map(|_| {
-            format!("主题「{}」已移除，已切换回「浅色」", entry.name)
-        });
+        self.persist_manifest(&manifest)
+            .map_err(|error| ThemeError::Workspace(error.to_string()))?;
+        let notice = fallback
+            .as_ref()
+            .map(|_| format!("主题「{}」已移除，已切换回「浅色」", entry.name));
         if let Some(selection) = fallback {
             let bytes = selection.to_json()?.into_bytes();
             self.persist_workspace_file(|workspace| workspace.theme_path(), &bytes)
@@ -1199,25 +1350,24 @@ impl Host {
     pub fn set_plugin_enabled(&self, id: &str, enabled: bool) -> Result<(), ManifestError> {
         let (manifest, selection, notice) = {
             let mut inner = lock(&self.inner);
-            let entry = inner.manifest.get(id).cloned().ok_or_else(|| {
-                ManifestError::invalid(format!("插件清单里没有这个标识：{id}"))
-            })?;
+            let entry =
+                inner.manifest.get(id).cloned().ok_or_else(|| {
+                    ManifestError::invalid(format!("插件清单里没有这个标识：{id}"))
+                })?;
             inner.manifest.set_enabled(id, enabled);
             if entry.kind == PluginKind::Feature {
                 self.deps.plugins.set_enabled(id, enabled);
             }
             let mut notice = None;
-            let selection = if entry.kind == PluginKind::Theme
-                && !enabled
-                && inner.selected_theme == id
-            {
-                inner.selected_theme = THEME_LIGHT.to_string();
-                inner.theme_error = None;
-                notice = Some(format!("主题「{}」已停用，已切换回「浅色」", entry.name));
-                Some(ThemeSelection::new(THEME_LIGHT))
-            } else {
-                None
-            };
+            let selection =
+                if entry.kind == PluginKind::Theme && !enabled && inner.selected_theme == id {
+                    inner.selected_theme = THEME_LIGHT.to_string();
+                    inner.theme_error = None;
+                    notice = Some(format!("主题「{}」已停用，已切换回「浅色」", entry.name));
+                    Some(ThemeSelection::new(THEME_LIGHT))
+                } else {
+                    None
+                };
             (inner.manifest.clone(), selection, notice)
         };
         self.persist_manifest(&manifest)?;
@@ -1271,10 +1421,12 @@ impl Host {
                     entry.name
                 ))
             }
-            Some(entry) if !entry.enabled => error = Some(format!(
-                "主题「{}」已停用，继续使用上一次可用外观",
-                entry.name
-            )),
+            Some(entry) if !entry.enabled => {
+                error = Some(format!(
+                    "主题「{}」已停用，继续使用上一次可用外观",
+                    entry.name
+                ))
+            }
             Some(_) => {
                 let resolved = inner
                     .theme_library
@@ -1286,7 +1438,8 @@ impl Host {
                     });
                 match resolved {
                     Ok((document, tokens)) => {
-                        inner.theme_appearance = document.resolved_appearance(inner.system_appearance);
+                        inner.theme_appearance =
+                            document.resolved_appearance(inner.system_appearance);
                         inner.theme_tokens = tokens;
                     }
                     Err(failure) => error = Some(failure.to_string()),
@@ -1326,7 +1479,9 @@ impl Host {
                     enabled: entry.enabled,
                     selected: entry.id == selected,
                     builtin: entry.origin == crate::manifest::PluginOrigin::Builtin,
-                    appearance: entry.appearance.unwrap_or(crate::theme::ThemeAppearance::Light),
+                    appearance: entry
+                        .appearance
+                        .unwrap_or(crate::theme::ThemeAppearance::Light),
                     usable,
                     error: theme_error,
                 }

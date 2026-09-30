@@ -124,7 +124,9 @@ impl CloneProgress {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// 一次克隆操作的进度与取消信号。克隆调用与 UI 轮询分属不同线程。
@@ -203,7 +205,9 @@ impl CredentialProvider {
     }
 
     /// git2 的凭证回调。`secrets` 收集本次交给 libgit2 的明文口令，供脱敏使用。
-    fn credential(
+    ///
+    /// ticket 16 的 fetch / push 复用同一实现，保证凭证来源与脱敏策略只有一份。
+    pub(crate) fn credential(
         &self,
         url: &str,
         username_from_url: Option<&str>,
@@ -311,9 +315,9 @@ fn probe_ssh_agent_socket() -> Option<PathBuf> {
         }
     }
     // ~/.ssh/agent/s.*（部分发行版的 systemd 用户会话把套接字放这里）
-    let home = std::env::var_os("HOME").map(PathBuf::from).or_else(|| {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    })?;
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))?;
     let dir = home.join(".ssh/agent");
     let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
@@ -411,14 +415,12 @@ pub fn clone_repository(
     if target.is_dir() {
         let mut entries = std::fs::read_dir(&target)?;
         if entries.next().is_some() {
-            return Err(failed(
-                control,
-                WorkspaceError::CloneTargetNotEmpty(target),
-            ));
+            return Err(failed(control, WorkspaceError::CloneTargetNotEmpty(target)));
         }
     }
     let created = !target.exists();
-    std::fs::create_dir_all(&target).map_err(|error| failed(control, WorkspaceError::from(error)))?;
+    std::fs::create_dir_all(&target)
+        .map_err(|error| failed(control, WorkspaceError::from(error)))?;
 
     let result = run_clone(url, &target, control, provider);
     match result {
@@ -449,10 +451,7 @@ fn cancelled(control: &CloneControl) -> WorkspaceError {
 /// 记录失败阶段（取消时不覆盖「已取消」），并把中文原因脱敏后交给 UI。
 fn failed(control: &CloneControl, error: WorkspaceError) -> WorkspaceError {
     if !control.is_cancelled() {
-        control.finish(
-            ClonePhase::Failed,
-            Some(redact(&error.to_string())),
-        );
+        control.finish(ClonePhase::Failed, Some(redact(&error.to_string())));
     }
     error
 }
@@ -633,9 +632,7 @@ pub fn error_hint(error: &git2::Error) -> Option<String> {
     ];
 
     if error.code() == ErrorCode::Certificate || error.class() == ErrorClass::Ssl {
-        return Some(
-            "TLS 证书校验失败：请检查系统时间与根证书；自签名证书不受支持".to_string(),
-        );
+        return Some("TLS 证书校验失败：请检查系统时间与根证书；自签名证书不受支持".to_string());
     }
     if error.code() == ErrorCode::Timeout {
         return Some("连接远端超时：请稍后重试".to_string());
@@ -651,9 +648,7 @@ pub fn error_hint(error: &git2::Error) -> Option<String> {
             );
         }
     }
-    if error.class() == ErrorClass::Ssh
-        || message.contains("publickey")
-        || message.contains("ssh")
+    if error.class() == ErrorClass::Ssh || message.contains("publickey") || message.contains("ssh")
     {
         return Some(
             "鉴权失败：请确认 ssh-agent 正在运行（SSH_AUTH_SOCK），或把私钥放在 ~/.ssh 下；\
@@ -684,7 +679,8 @@ pub fn redact_secrets(input: &str, secrets: &[String]) -> String {
     let mut out = input.to_string();
     for secret in secrets {
         // 太短的串替换会误伤正常文本。
-        if secret.len() < 3 || secret.eq_ignore_ascii_case("git") || !out.contains(secret.as_str()) {
+        if secret.len() < 3 || secret.eq_ignore_ascii_case("git") || !out.contains(secret.as_str())
+        {
             continue;
         }
         out = out.replace(secret.as_str(), "***");
@@ -761,7 +757,9 @@ fn strip_url_userinfo(input: &str) -> String {
     let mut rest = input;
     while let Some(scheme_at) = rest.find("://") {
         let scheme_start = rest[..scheme_at]
-            .rfind(|character: char| !(character.is_ascii_alphanumeric() || "+-.".contains(character)))
+            .rfind(|character: char| {
+                !(character.is_ascii_alphanumeric() || "+-.".contains(character))
+            })
             .map(|index| index + 1)
             .unwrap_or(0);
         out.push_str(&rest[..scheme_start]);
@@ -786,7 +784,15 @@ fn strip_url_userinfo(input: &str) -> String {
 /// 抹掉常见令牌形状（GitHub / GitLab）与 `key=value` 形式的秘密值。
 fn redact_token_shapes(input: &str) -> String {
     let lowered = redact_key_values(input);
-    const PREFIXES: [&str; 7] = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "glpat-"];
+    const PREFIXES: [&str; 7] = [
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "ghr_",
+        "github_pat_",
+        "glpat-",
+    ];
     let bytes = lowered.as_bytes();
     let mut out = String::with_capacity(lowered.len());
     let mut index = 0usize;
@@ -799,7 +805,9 @@ fn redact_token_shapes(input: &str) -> String {
                 let start = index;
                 let mut end = start + prefix.len();
                 while end < bytes.len()
-                    && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_' || bytes[end] == b'-')
+                    && (bytes[end].is_ascii_alphanumeric()
+                        || bytes[end] == b'_'
+                        || bytes[end] == b'-')
                 {
                     end += 1;
                 }

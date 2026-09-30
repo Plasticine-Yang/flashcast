@@ -8,6 +8,8 @@ import type {
   QueryView,
   Settings,
   StatusView,
+  SyncProgress,
+  SyncStatus,
   ThemeState,
   WorkspaceChanges,
   WorkspaceEvent,
@@ -80,6 +82,8 @@ export default function App() {
   const [commitMessage, setCommitMessage] = useState("");
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [diffPath, setDiffPath] = useState<string | null>(null);
+  const [sync, setSync] = useState<SyncStatus | null>(null);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const appliedSeq = useRef(0);
@@ -159,6 +163,7 @@ export default function App() {
           setWorkspaceAlert(event.status.error);
           // 工作区被外部改动后，变更视图必须按仓库真实状态重新读取。
           void loadChanges();
+          void loadSync();
           if (event.reload?.error) {
             setSettingsMessage({ level: "error", text: event.reload.error });
           } else if (event.reload?.applied) {
@@ -210,6 +215,7 @@ export default function App() {
     void api.get_settings().then(setSettings);
     void api.get_theme().then(setTheme);
     void loadChanges();
+    void loadSync();
   };
 
   /**
@@ -257,6 +263,119 @@ export default function App() {
     void runSettingsAction(loadChanges, () => {
       setSettingsMessage({ level: "info", text: "已按仓库当前状态重新读取变更" });
     });
+  };
+
+  /** 读取同步状态。失败只影响这一区段，不影响设置与备忘录。 */
+  const loadSync = async () => {
+    try {
+      setSync(await api.get_sync_status());
+    } catch (error) {
+      setSettingsMessage({ level: "error", text: String(error) });
+    }
+  };
+
+  /**
+   * 重新检测同步状态：用户在应用外部处理完阻塞（提交、合并、中止变基、
+   * git remote add…）之后点击它，宿主按真实 Git 状态重建状态与指引。
+   */
+  const handleRedetectSync = () => {
+    void runSettingsAction(
+      () => api.redetect_sync_state(),
+      (next) => {
+        setSync(next);
+        setSettingsMessage({
+          level: "info",
+          text: next.blocking
+            ? `重新检测完成，仍有阻塞：${next.blocking.label}`
+            : "重新检测完成：可以进行无冲突的快进拉取与推送",
+        });
+      },
+    );
+    // 外部也可能顺带改了配置：一并重新读取设置与变更，避免界面停留在旧值。
+    void api.get_settings().then(setSettings);
+    void loadChanges();
+  };
+
+  /** 轮询同步进度快照（网络操作在宿主侧阻塞执行）。 */
+  const pollSyncProgress = () => {
+    setSyncProgress(null);
+    return window.setInterval(() => {
+      void api
+        .sync_progress()
+        .then(setSyncProgress)
+        .catch(() => {});
+    }, 100);
+  };
+
+  const stopSyncPolling = (timer: number) => {
+    window.clearInterval(timer);
+    void api
+      .sync_progress()
+      .then(setSyncProgress)
+      .catch(() => {});
+  };
+
+  /**
+   * 拉取（仅快进）：成功后宿主已重新加载设置、主题与备忘录，这里重新读取
+   * 设置与变更视图；阻塞与失败都只展示中文原因与指引，不改动任何内容。
+   */
+  const handlePull = () => {
+    setSettingsBusy(true);
+    const timer = pollSyncProgress();
+    void api
+      .pull_workspace()
+      .then((outcome) => {
+        setSync(outcome.status);
+        setTheme(outcome.reload.theme);
+        const notes = [outcome.message];
+        if (outcome.theme) {
+          notes.push(`生效主题：${outcome.reload.theme.selectedName}`);
+        }
+        if (outcome.memos.length > 0) {
+          notes.push(`备忘录 ${outcome.memos.length} 篇（已重新读取）`);
+        }
+        setSettingsMessage({ level: "info", text: notes.join("；") });
+      })
+      .catch((error) => {
+        setSettingsMessage({ level: "error", text: String(error) });
+      })
+      .finally(() => {
+        stopSyncPolling(timer);
+        setSettingsBusy(false);
+        void api.get_settings().then(setSettings);
+        void api.get_theme().then(setTheme);
+        void loadChanges();
+        void loadSync();
+      });
+  };
+
+  /** 推送：只搬运已提交对象；「没有需要推送的提交」与鉴权失败分别提示。 */
+  const handlePush = () => {
+    setSettingsBusy(true);
+    const timer = pollSyncProgress();
+    void api
+      .push_workspace()
+      .then((outcome) => {
+        setSync(outcome.status);
+        setSettingsMessage({
+          level: "info",
+          text: `${outcome.message}（${outcome.updated
+            .map((update) => `${update.local} → ${update.remote}`)
+            .join("、")}）`,
+        });
+      })
+      .catch((error) => {
+        setSettingsMessage({ level: "error", text: String(error) });
+      })
+      .finally(() => {
+        stopSyncPolling(timer);
+        setSettingsBusy(false);
+        void loadSync();
+      });
+  };
+
+  const handleCancelSync = () => {
+    void api.cancel_sync();
   };
 
   /**
@@ -314,6 +433,7 @@ export default function App() {
             : `已关联目录（不是 Git 仓库）：${next.path}`,
         });
         void loadChanges();
+        void loadSync();
       },
     );
   };
@@ -329,6 +449,7 @@ export default function App() {
           text: `已初始化工作区与 Git 仓库：${next.path}`,
         });
         void loadChanges();
+        void loadSync();
       },
     );
   };
@@ -356,6 +477,8 @@ export default function App() {
         setWorkspace(outcome.workspace);
         setWorkspaceAlert(outcome.workspace.error);
         void api.get_settings().then(setSettings);
+        void loadChanges();
+        void loadSync();
         const notes: string[] = [];
         if (outcome.recordedTheme) {
           notes.push(`工作区记录的主题：${outcome.recordedTheme}（主题支持由后续版本提供）`);
@@ -603,6 +726,8 @@ export default function App() {
           cloneProgress={cloneProgress}
           onBack={closeSettings}
           changes={changes}
+          sync={sync}
+          syncProgress={syncProgress}
           commitMessage={commitMessage}
           selectedPaths={selectedPaths}
           diffPath={diffPath}
@@ -621,6 +746,10 @@ export default function App() {
           onCommitMessageChange={setCommitMessage}
           onCommit={() => void handleCommit()}
           onRefreshChanges={handleRefreshChanges}
+          onPull={handlePull}
+          onPush={handlePush}
+          onRedetectSync={handleRedetectSync}
+          onCancelSync={handleCancelSync}
         />
       ) : (
         <>

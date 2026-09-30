@@ -237,7 +237,9 @@ fn branch_name(repo: &git2::Repository, detached: bool) -> Option<String> {
 }
 
 /// 工作区进行中的 Git 操作。用 `Repository::state()` 与 `.git` 标记文件双重复核。
-fn in_progress_state(repo: &git2::Repository) -> Option<String> {
+///
+/// ticket 16 的同步（拉取 / 推送）复用同一份判断：只要有进行中的操作就先阻塞。
+pub(crate) fn in_progress_state(repo: &git2::Repository) -> Option<String> {
     let git_dir = repo.path();
     let marker = |name: &str| git_dir.join(name).exists();
 
@@ -265,8 +267,9 @@ fn in_progress_state(repo: &git2::Repository) -> Option<String> {
             | git2::RepositoryState::RebaseInteractive
             | git2::RepositoryState::RebaseMerge => Some("变基（rebase）"),
             git2::RepositoryState::Bisect => Some("二分查找（bisect）"),
-            git2::RepositoryState::ApplyMailbox
-            | git2::RepositoryState::ApplyMailboxOrRebase => Some("应用补丁"),
+            git2::RepositoryState::ApplyMailbox | git2::RepositoryState::ApplyMailboxOrRebase => {
+                Some("应用补丁")
+            }
         }
     }?;
 
@@ -552,11 +555,18 @@ pub fn commit(
     // 3) 创建提交。任何失败都要还原索引，工作区内容不受影响。
     let created = refreshed.and_then(|()| {
         let tree = repo.find_tree(tree_oid).map_err(git_error)?;
-        repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
-            .map_err(|error| match error.code() {
-                git2::ErrorCode::Locked => GitError::IndexLocked(index_lock_path(&repo)),
-                _ => GitError::Git(error.message().to_string()),
-            })
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parents,
+        )
+        .map_err(|error| match error.code() {
+            git2::ErrorCode::Locked => GitError::IndexLocked(index_lock_path(&repo)),
+            _ => GitError::Git(error.message().to_string()),
+        })
     });
 
     let oid = match created {
@@ -660,11 +670,7 @@ fn stage_workdir_content(
 }
 
 /// 把选中路径记入真实索引并写盘（`git commit -- <path>` 的索引部分）。
-fn update_index(
-    repo: &git2::Repository,
-    workdir: &Path,
-    paths: &[String],
-) -> Result<(), GitError> {
+fn update_index(repo: &git2::Repository, workdir: &Path, paths: &[String]) -> Result<(), GitError> {
     let mut index = repo.index().map_err(git_error)?;
     for path in paths {
         stage_workdir_content(&mut index, workdir, path)?;
@@ -689,8 +695,8 @@ fn restore_index(repo: &git2::Repository, backup: Option<&[u8]>) -> Result<(), G
     }
 }
 
-/// 索引文件路径（通常为 `.git/index`）。
-fn index_path(repo: &git2::Repository) -> PathBuf {
+/// 索引文件路径（通常为 `.git/index`）。ticket 16 的快进拉取同样按字节备份 / 还原它。
+pub(crate) fn index_path(repo: &git2::Repository) -> PathBuf {
     repo.path().join("index")
 }
 
@@ -726,14 +732,20 @@ pub(crate) fn validate_selection(
     if selected.is_empty() {
         return Err(GitError::EmptySelection);
     }
-    let known: BTreeSet<&str> = changes.files.iter().map(|file| file.path.as_str()).collect();
+    let known: BTreeSet<&str> = changes
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect();
     let mut unique: Vec<String> = Vec::new();
     for path in selected {
         let normalized = path.replace('\\', "/");
         let invalid = normalized.is_empty()
             || normalized.starts_with('/')
             || normalized.contains(':')
-            || normalized.split('/').any(|part| part.is_empty() || part == "..");
+            || normalized
+                .split('/')
+                .any(|part| part.is_empty() || part == "..");
         if invalid || !known.contains(normalized.as_str()) {
             return Err(GitError::UnknownPath(path.clone()));
         }

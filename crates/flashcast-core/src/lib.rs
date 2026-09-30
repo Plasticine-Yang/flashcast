@@ -16,6 +16,7 @@ pub mod plugin;
 pub mod ranking;
 pub mod registry;
 pub mod settings;
+pub mod sync;
 pub mod theme;
 pub mod watch;
 pub mod workspace;
@@ -39,12 +40,16 @@ pub use model::{
     SearchItem, SourceId, COMMAND_CAPABILITIES, COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
 pub use plugin::{
-    is_valid_plugin_id, FeaturePlugin, Keyword, PluginError, PluginKind, PluginManifest, PluginScope,
-    SearchContext,
+    is_valid_plugin_id, FeaturePlugin, Keyword, PluginError, PluginKind, PluginManifest,
+    PluginScope, SearchContext,
 };
 pub use ranking::{score_match, sort_ranked, RankedItem};
 pub use registry::{PluginRegistry, PluginSearchOutcome};
 pub use settings::{Settings, SettingsError};
+pub use sync::{
+    DirtyDetail, PullOutcome, PullReport, PullResult, PushOutcome, PushReport, PushUpdateView,
+    SyncBlock, SyncBlockKind, SyncControl, SyncError, SyncPhase, SyncProgress, SyncStatus,
+};
 pub use theme::{
     builtin_themes, dark_tokens, light_tokens, Appearance, ColorTokens, CssVar, DisabledState,
     ErrorState, FocusState, FontTokens, RadiusTokens, Rgba, SelectedState, ShadowTokens,
