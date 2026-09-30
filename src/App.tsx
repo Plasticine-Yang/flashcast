@@ -278,6 +278,32 @@ export default function App() {
     );
   };
 
+  const handleInstallTheme = (path: string) => {
+    void runSettingsAction(
+      () => api.install_theme(path),
+      (next) => {
+        setTheme(next);
+        setSettingsMessage({
+          level: "info",
+          text: `已安装主题包：${next.themes.map((entry) => entry.name).join("、")}`,
+        });
+      },
+    );
+  };
+
+  const handleRemoveTheme = (id: string) => {
+    void runSettingsAction(
+      () => api.remove_theme(id),
+      (next) => {
+        setTheme(next);
+        setSettingsMessage({
+          level: next.error ? "error" : "info",
+          text: next.error ?? `已移除主题：${id}`,
+        });
+      },
+    );
+  };
+
   const handleSaveHotkey = (hotkey: string) => {
     if (!settings) {
       setSettingsMessage({ level: "error", text: "设置尚未加载完成" });
@@ -441,6 +467,8 @@ export default function App() {
           onSaveHotkey={handleSaveHotkey}
           onSelectTheme={handleSelectTheme}
           onToggleTheme={handleToggleTheme}
+          onInstallTheme={handleInstallTheme}
+          onRemoveTheme={handleRemoveTheme}
         />
       ) : (
         <>

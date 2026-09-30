@@ -21,6 +21,8 @@ interface Props {
   onSaveHotkey: (hotkey: string) => void;
   onSelectTheme: (id: string) => void;
   onToggleTheme: (id: string, enabled: boolean) => void;
+  onInstallTheme: (path: string) => void;
+  onRemoveTheme: (id: string) => void;
 }
 
 /**
@@ -43,9 +45,12 @@ export function SettingsScreen({
   onSaveHotkey,
   onSelectTheme,
   onToggleTheme,
+  onInstallTheme,
+  onRemoveTheme,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
+  const [themePackage, setThemePackage] = useState("");
 
   // 工作区或设置在外部被改写（宿主重载）时同步输入框。
   useEffect(() => {
@@ -272,12 +277,49 @@ export function SettingsScreen({
                 >
                   {entry.enabled ? "停用" : "启用"}
                 </button>
+                {entry.builtin ? null : (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    data-testid="theme-remove"
+                    disabled={busy}
+                    onClick={() => onRemoveTheme(entry.id)}
+                  >
+                    移除
+                  </button>
+                )}
               </li>
             ))}
           </ul>
+          <label className="settings-label" htmlFor="theme-package-path">
+            本地主题包
+          </label>
+          <div className="settings-row">
+            <input
+              id="theme-package-path"
+              className="path-input"
+              data-testid="theme-package-input"
+              type="text"
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="/home/用户名/主题包目录"
+              value={themePackage}
+              onChange={(event) => setThemePackage(event.target.value)}
+            />
+            <button
+              type="button"
+              className="primary-button"
+              data-testid="theme-install"
+              disabled={busy}
+              onClick={() => onInstallTheme(themePackage)}
+            >
+              安装主题包
+            </button>
+          </div>
           <p className="settings-hint">
-            主题是声明式数据（颜色、字体、间距、圆角、阴影与状态语义），不执行任何代码；
-            间距与字号由宿主固定，因此切换主题不会移动控件。
+            主题包可以是包含 theme.json 的目录，也可以直接是主题 JSON 文件；校验失败会给出
+            原因并保留当前外观。主题是声明式数据（颜色、字体、间距、圆角、阴影与状态语义），
+            不执行任何代码；间距与字号由宿主固定，因此切换主题不会移动控件。
           </p>
         </section>
 

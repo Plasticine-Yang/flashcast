@@ -244,6 +244,25 @@ pub fn set_system_appearance(
     state.host.set_system_appearance(appearance)
 }
 
+/// 校验并安装一个本地主题包（目录或 JSON 文件）。失败时返回中文原因，
+/// 已安装内容与当前外观保持不变。
+#[tauri::command(rename_all = "snake_case")]
+pub fn install_theme(state: State<'_, AppState>, path: String) -> Result<ThemeState, String> {
+    state
+        .host
+        .install_theme_package(Path::new(&path))
+        .map_err(|error| error.to_string())
+}
+
+/// 移除一个已安装的本地主题包。内置主题会被拒绝。
+#[tauri::command(rename_all = "snake_case")]
+pub fn remove_theme(state: State<'_, AppState>, id: String) -> Result<ThemeState, String> {
+    state
+        .host
+        .remove_theme(&id)
+        .map_err(|error| error.to_string())
+}
+
 /// 当前配置工作区与它的有效性。
 #[tauri::command(rename_all = "snake_case")]
 pub fn get_workspace(state: State<'_, AppState>) -> WorkspaceStatus {

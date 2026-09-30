@@ -42,6 +42,8 @@ pub fn run() {
             commands::select_theme,
             commands::set_plugin_enabled,
             commands::set_system_appearance,
+            commands::install_theme,
+            commands::remove_theme,
             commands::get_workspace,
             commands::select_workspace,
             commands::init_workspace,
