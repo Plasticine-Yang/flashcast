@@ -158,6 +158,43 @@ jobs:
             ${{ matrix.cargo_args }} -- --json \
             --output "artifacts/platform-check-${{ matrix.slug }}.json"
 
+      # Windows 的检查列表比 Linux 多三项（apps.launch / focus.restore / win.shell），
+      # 与 Linux 共有的那些 id 必须一个不少。这一步只证明「Windows 分支跑到了每一个
+      # 检查」，不证明桌面行为通过 —— 后者由报告里的状态行给出（无头 runner 上
+      # 快捷键与焦点通常为「未覆盖」）。缺少 id 是代码问题，因此这一步不 continue-on-error。
+      - name: Assert the Windows platform check reports every required id
+        if: matrix.slug == 'windows-x64'
+        run: |
+          set -euo pipefail
+          report="artifacts/platform-check-${{ matrix.slug }}.json"
+          if [ ! -s "$report" ]; then
+            echo "::error::缺少 $report；Windows 平台检查没有产出 JSON 报告。"
+            exit 1
+          fi
+          missing=0
+          for id in \
+            build.compile \
+            session.detect \
+            apps.discovery \
+            apps.launch \
+            focus.capture \
+            focus.restore \
+            hotkey.register \
+            clipboard.text \
+            paste.auto \
+            win.shell \
+            x11.diagnostics
+          do
+            if ! grep -q "\"id\": \"${id}\"" "$report"; then
+              echo "::error::Windows 平台检查缺少 check id：${id}"
+              missing=1
+            fi
+          done
+          if [ "$missing" != "0" ]; then
+            exit 1
+          fi
+          echo "Windows 平台检查报告包含全部必需 check id：$report"
+
       # 把「编译结果」与「桌面交互结果」分别写进 job summary，避免绿色编译被误读为
       # 热键/托盘/粘贴检查通过。
       - name: Summarise compilation vs desktop interaction
@@ -186,7 +223,8 @@ jobs:
 
       - name: Upload diagnostics (and screenshots when present)
         if: always()
-        uses: actions/upload-artifact@v8
+        # v8 不存在（研究笔记的版本表：upload-artifact 最新大版本是 v7）。
+        uses: actions/upload-artifact@v7
         with:
           name: diagnostics-${{ matrix.slug }}
           path: |
