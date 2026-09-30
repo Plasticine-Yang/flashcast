@@ -7,8 +7,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use flashcast_core::{
-    ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, QueryResponse,
-    QueryScope, Score, SearchItem, Settings, WorkspaceStatus,
+    ActionOutcome, BackOutcome, CloneOutcome, CloneProgress, DefaultAction, ItemKind, Notice,
+    PluginFailure, QueryResponse, QueryScope, Score, SearchItem, Settings, WorkspaceStatus,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -236,6 +236,49 @@ pub fn init_workspace(
         .host
         .init_workspace(Path::new(&path))
         .map_err(|error| error.to_string())
+}
+
+/// 克隆请求里携带的 https 令牌。只写进**设备本地**目录，不进入工作区或日志。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct TokenInput {
+    pub username: String,
+    pub token: String,
+}
+
+/// 从远端克隆配置工作区，成功后关联并恢复其中的设置与插件选择。
+///
+/// libgit2 是阻塞的 C 库，放到阻塞线程池执行，避免卡住 Tauri 运行时；
+/// UI 通过 `clone_progress` 轮询进度、用 `cancel_clone` 取消。
+#[tauri::command(rename_all = "snake_case")]
+pub async fn clone_workspace(
+    state: State<'_, AppState>,
+    url: String,
+    target: String,
+    token: Option<TokenInput>,
+) -> Result<CloneOutcome, String> {
+    let host = host_of(&state);
+    if let Some(token) = token.filter(|token| !token.token.trim().is_empty()) {
+        host.remember_git_token(&url, &token.username, token.token.trim())
+            .map_err(|error| error.to_string())?;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        host.clone_workspace(&url, Path::new(&target))
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 最近一次克隆的进度快照。
+#[tauri::command(rename_all = "snake_case")]
+pub fn clone_progress(state: State<'_, AppState>) -> CloneProgress {
+    state.host.clone_progress()
+}
+
+/// 请求取消正在进行的克隆。
+#[tauri::command(rename_all = "snake_case")]
+pub fn cancel_clone(state: State<'_, AppState>) {
+    state.host.cancel_clone();
 }
 
 /// 重新读取工作区配置（外部修改未触发监听时的兜底入口）。

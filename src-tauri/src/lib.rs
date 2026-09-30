@@ -41,6 +41,9 @@ pub fn run() {
             commands::get_workspace,
             commands::select_workspace,
             commands::init_workspace,
+            commands::clone_workspace,
+            commands::clone_progress,
+            commands::cancel_clone,
             commands::reload_workspace,
             commands::hide_window,
         ])

@@ -1,5 +1,34 @@
 import { useEffect, useState } from "react";
-import type { Settings, WorkspaceStatus } from "../types";
+import type { ClonePhase, CloneProgress, Settings, WorkspaceStatus } from "../types";
+
+/** 克隆阶段的中文说明。 */
+const PHASE_LABEL: Record<ClonePhase, string> = {
+  idle: "尚未开始",
+  connecting: "正在连接远端",
+  receiving: "正在接收数据",
+  resolving: "正在解析数据",
+  checkingOut: "正在检出文件",
+  done: "克隆完成",
+  failed: "克隆失败",
+  cancelled: "已取消",
+};
+
+/** 克隆进度的中文描述（数值全部来自 git2 的真实回调）。 */
+export function describeCloneProgress(progress: CloneProgress): string {
+  const parts = [PHASE_LABEL[progress.phase]];
+  if (progress.phase === "checkingOut" && progress.checkoutTotal > 0) {
+    parts.push(`已检出 ${progress.checkoutCompleted}/${progress.checkoutTotal} 个文件`);
+    if (progress.checkoutPath) {
+      parts.push(`当前：${progress.checkoutPath}`);
+    }
+  } else if (progress.totalObjects > 0) {
+    parts.push(`已接收 ${progress.indexedObjects}/${progress.totalObjects} 个对象`);
+  }
+  if (progress.message && (progress.phase === "failed" || progress.phase === "cancelled")) {
+    parts.push(progress.message);
+  }
+  return parts.join("，");
+}
 
 /** 设置页里显示的一条反馈。 */
 export interface SettingsMessage {
@@ -14,10 +43,18 @@ interface Props {
   message: SettingsMessage | null;
   /** 正在执行工作区操作，按钮暂时禁用。 */
   busy: boolean;
+  /** 最近一次克隆的进度快照（另一线程轮询宿主）。 */
+  cloneProgress: CloneProgress | null;
   onBack: () => void;
   onSelectWorkspace: (path: string) => void;
   onInitWorkspace: (path: string) => void;
   onSaveHotkey: (hotkey: string) => void;
+  onCloneWorkspace: (
+    url: string,
+    target: string,
+    token: { username: string; token: string } | null,
+  ) => void;
+  onCancelClone: () => void;
 }
 
 /**
@@ -33,13 +70,19 @@ export function SettingsScreen({
   hotkey,
   message,
   busy,
+  cloneProgress,
   onBack,
   onSelectWorkspace,
   onInitWorkspace,
   onSaveHotkey,
+  onCloneWorkspace,
+  onCancelClone,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
+  const [remoteUrl, setRemoteUrl] = useState("");
+  const [tokenUser, setTokenUser] = useState("");
+  const [token, setToken] = useState("");
 
   // 工作区或设置在外部被改写（宿主重载）时同步输入框。
   useEffect(() => {
@@ -107,6 +150,18 @@ export function SettingsScreen({
                 <dd data-testid="workspace-settings-file">{workspace.settingsFile}</dd>
               </div>
             ) : null}
+            {workspace?.remote ? (
+              <div className="settings-fact">
+                <dt>远端</dt>
+                <dd data-testid="workspace-remote">
+                  {workspace.remote.name} → {workspace.remote.url}
+                  {`（分支 ${workspace.remote.branch}`}
+                  {workspace.remote.upstream
+                    ? `，上游 ${workspace.remote.upstream}）`
+                    : "，未设置上游）"}
+                </dd>
+              </div>
+            ) : null}
           </dl>
 
           {workspace?.error ? (
@@ -152,6 +207,85 @@ export function SettingsScreen({
           <p className="settings-hint">
             选择现有仓库会读取其中的 settings.toml；初始化新目录要求目录为空，
             并会一并建立 Git 仓库，不会覆盖已有文件。
+          </p>
+
+          <h3 className="settings-section-title">从远端克隆</h3>
+          <label className="settings-label" htmlFor="clone-url">
+            远端地址（克隆到上方的「本地目录」）
+          </label>
+          <div className="settings-row">
+            <input
+              id="clone-url"
+              className="path-input"
+              data-testid="clone-url-input"
+              type="text"
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="https://github.com/用户名/flashcast-config.git"
+              value={remoteUrl}
+              onChange={(event) => setRemoteUrl(event.target.value)}
+            />
+          </div>
+          <div className="settings-row">
+            <input
+              id="clone-user"
+              className="path-input"
+              data-testid="clone-user-input"
+              type="text"
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="令牌用户名（可留空，默认 x-access-token）"
+              value={tokenUser}
+              onChange={(event) => setTokenUser(event.target.value)}
+            />
+            <input
+              id="clone-token"
+              className="path-input"
+              data-testid="clone-token-input"
+              type="password"
+              autoComplete="off"
+              placeholder="访问令牌（只保存在本机设备目录）"
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+            />
+          </div>
+          <div className="settings-row">
+            <button
+              type="button"
+              className="primary-button"
+              data-testid="workspace-clone"
+              disabled={busy}
+              onClick={() =>
+                onCloneWorkspace(
+                  remoteUrl,
+                  path,
+                  token.trim().length > 0
+                    ? { username: tokenUser, token }
+                    : null,
+                )
+              }
+            >
+              从远端克隆
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              data-testid="workspace-clone-cancel"
+              disabled={!busy}
+              onClick={onCancelClone}
+            >
+              取消克隆
+            </button>
+          </div>
+          {cloneProgress ? (
+            <p className="settings-hint" data-testid="clone-progress" role="status">
+              {describeCloneProgress(cloneProgress)}
+            </p>
+          ) : null}
+          <p className="settings-hint">
+            目标目录必须是空目录：已有文件时拒绝克隆，不会覆盖。失败或取消会自动清理
+            本次创建的内容，当前工作区与设置保持不变。https 令牌只保存在本机设备目录，
+            不会写入工作区或日志；ssh 复用 ssh-agent 与 ~/.ssh 下的密钥。
           </p>
         </section>
 
