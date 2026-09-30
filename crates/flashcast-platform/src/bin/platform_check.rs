@@ -12,16 +12,43 @@
 //! 注意：在 Wayland 会话下，全局快捷键与焦点读取会被判定为「未覆盖」，
 //! 这是刻意的：X11 下（含 XWayland）的抓取成功不能证明 Wayland 下可用。
 
-use std::sync::Arc;
+use flashcast_platform::capability::Capabilities;
 
+// 以下都只用于 Linux 的真实检查；非 Linux 目标上这些检查一律报告「未覆盖」。
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
+#[cfg(target_os = "linux")]
 use flashcast_platform::capability::{CapabilityProbe, SessionType, Support};
+#[cfg(target_os = "linux")]
 use flashcast_platform::focus::FocusTracker;
+#[cfg(target_os = "linux")]
 use flashcast_platform::hotkey::HotkeySpec;
-use flashcast_platform::linux::LinuxAppCatalog;
-use flashcast_platform::linux::LinuxCapabilityProbe;
-use flashcast_platform::linux::LinuxFocusTracker;
-use flashcast_platform::linux::LinuxHotkeyManager;
+#[cfg(target_os = "linux")]
 use flashcast_platform::shortcut::HotkeyManager;
+#[cfg(target_os = "linux")]
+use flashcast_platform::linux::{
+    LinuxAppCatalog, LinuxCapabilityProbe, LinuxFocusTracker, LinuxHotkeyManager,
+};
+
+/// 非 Linux 平台上报告「未覆盖」时给出的复现命令提示。
+#[cfg(all(not(target_os = "linux"), target_os = "windows"))]
+const CROSS_CHECK_HINT: &str = "cargo check -p flashcast-platform --target x86_64-pc-windows-msvc";
+#[cfg(all(not(target_os = "linux"), target_os = "macos"))]
+const CROSS_CHECK_HINT: &str = "cargo check -p flashcast-platform --target x86_64-apple-darwin";
+#[cfg(all(not(target_os = "linux"), not(any(target_os = "windows", target_os = "macos"))))]
+const CROSS_CHECK_HINT: &str = "cargo check -p flashcast-platform";
+
+/// 探测当前环境能力。Linux 用真实探测器，其他平台用「不支持」桩实现。
+fn probe_capabilities() -> Capabilities {
+    #[cfg(target_os = "linux")]
+    {
+        LinuxCapabilityProbe::new().probe()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        flashcast_platform::current().capabilities.probe()
+    }
+}
 
 /// 检查结果状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,7 +123,7 @@ fn parse_args() -> Options {
 
 fn main() {
     let options = parse_args();
-    let capabilities = LinuxCapabilityProbe::new().probe();
+    let capabilities = probe_capabilities();
     let mut checks = Vec::new();
 
     // 1. 编译与运行：能执行到这里说明已经编译。
@@ -109,185 +136,196 @@ fn main() {
             capabilities.os.as_str(),
             capabilities.arch
         ),
-        command: "cargo build -p flashcast-platform --bin flashcast-platform-check".to_string(),
+        command: compile_command(),
     });
 
-    // 2. 会话类型判定。
-    checks.push(CheckResult {
-        id: "session.detect",
-        title: "桌面会话类型判定",
-        status: if capabilities.session == SessionType::Unknown {
-            Status::MeasuredFail
-        } else {
-            Status::MeasuredPass
-        },
-        detail: format!(
-            "XDG_SESSION_TYPE={:?}，判定为 {}；有 DISPLAY={}，WAYLAND_DISPLAY={}",
-            std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "<未设置>".to_string()),
-            capabilities.session.label_zh(),
-            std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false),
-            std::env::var("WAYLAND_DISPLAY")
-                .map(|v| !v.is_empty())
-                .unwrap_or(false),
-        ),
-        command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
-    });
-
-    // 3. 软件发现。
-    let catalog = LinuxAppCatalog::new();
-    let dirs = catalog.existing_application_dirs();
-    let scan = catalog.scan_detailed();
-    let app_count = scan.entries.len();
-    let with_icons = scan
-        .entries
-        .iter()
-        .filter(|e| e.icon.as_ref().and_then(|i| i.path.as_ref()).is_some())
-        .count();
-    let (app_status, app_detail) = if dirs.is_empty() {
-        (
-            Status::NotCovered,
-            "未找到任何应用目录（可能不是桌面环境）".to_string(),
-        )
-    } else if app_count == 0 {
-        (
-            Status::MeasuredFail,
-            format!("目录存在但未发现任何可启动软件：{dirs:?}"),
-        )
-    } else {
-        (
-            Status::MeasuredPass,
-            format!(
-                "发现 {app_count} 个可启动软件，其中 {with_icons} 个解析到图标文件；\
-                 扫描 {} 个 .desktop 文件，跳过 {} 个；应用目录 {} 个，图标索引主题 {} 个",
-                scan.files_seen,
-                scan.skipped.len(),
-                dirs.len(),
-                scan.icon_themes_seen,
-            ),
-        )
-    };
-    checks.push(CheckResult {
-        id: "apps.discovery",
-        title: "freedesktop 软件发现",
-        status: app_status,
-        detail: app_detail,
-        command: "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json"
-            .to_string(),
-    });
-
-    // 4. 焦点读取。
-    let focus = LinuxFocusTracker::new();
-    let focus_check = match focus.capture() {
-        Ok(app) => CheckResult {
-            id: "focus.capture",
-            title: "读取唤起前前台应用",
-            status: Status::MeasuredPass,
+    // 2~7 依赖各平台的具体实现，因此按平台分开：
+    // Linux 走真实实现；Windows / macOS 由后续平台 ticket 提供，这里如实报告「未覆盖」。
+    #[cfg(target_os = "linux")]
+    {
+        // 2. 会话类型判定。
+        checks.push(CheckResult {
+            id: "session.detect",
+            title: "桌面会话类型判定",
+            status: if capabilities.session == SessionType::Unknown {
+                Status::MeasuredFail
+            } else {
+                Status::MeasuredPass
+            },
             detail: format!(
-                "读取到 id={} name={} wm_class={:?} pid={:?} window={:?}",
-                app.id, app.name, app.wm_class, app.pid, app.window
+                "XDG_SESSION_TYPE={:?}，判定为 {}；有 DISPLAY={}，WAYLAND_DISPLAY={}",
+                std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "<未设置>".to_string()),
+                capabilities.session.label_zh(),
+                std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false),
+                std::env::var("WAYLAND_DISPLAY")
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false),
             ),
             command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
-        },
-        Err(flashcast_platform::focus::FocusError::Unsupported { reason }) => CheckResult {
-            id: "focus.capture",
-            title: "读取唤起前前台应用",
-            status: Status::NotCovered,
-            detail: reason,
-            command: "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin \
-                      flashcast-platform-check"
-                .to_string(),
-        },
-        Err(error) => CheckResult {
-            id: "focus.capture",
-            title: "读取唤起前前台应用",
-            status: Status::MeasuredFail,
-            detail: error.to_string(),
-            command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
-        },
-    };
-    checks.push(focus_check);
+        });
 
-    // 5. 全局快捷键注册。
-    let hotkeys = LinuxHotkeyManager::new();
-    let spec = HotkeySpec::parse("Ctrl+Alt+F12").expect("固定检查用快捷键必须可解析");
-    let hotkey_check = match hotkeys.register(&spec, Arc::new(|| {})) {
-        Ok(handle) => {
-            let _ = hotkeys.unregister(&handle);
-            CheckResult {
-                id: "hotkey.register",
-                title: "全局快捷键注册",
+        // 3. 软件发现。
+        let catalog = LinuxAppCatalog::new();
+        let dirs = catalog.existing_application_dirs();
+        let scan = catalog.scan_detailed();
+        let app_count = scan.entries.len();
+        let with_icons = scan
+            .entries
+            .iter()
+            .filter(|e| e.icon.as_ref().and_then(|i| i.path.as_ref()).is_some())
+            .count();
+        let (app_status, app_detail) = if dirs.is_empty() {
+            (
+                Status::NotCovered,
+                "未找到任何应用目录（可能不是桌面环境）".to_string(),
+            )
+        } else if app_count == 0 {
+            (
+                Status::MeasuredFail,
+                format!("目录存在但未发现任何可启动软件：{dirs:?}"),
+            )
+        } else {
+            (
+                Status::MeasuredPass,
+                format!(
+                    "发现 {app_count} 个可启动软件，其中 {with_icons} 个解析到图标文件；\
+                     扫描 {} 个 .desktop 文件，跳过 {} 个；应用目录 {} 个，图标索引主题 {} 个",
+                    scan.files_seen,
+                    scan.skipped.len(),
+                    dirs.len(),
+                    scan.icon_themes_seen,
+                ),
+            )
+        };
+        checks.push(CheckResult {
+            id: "apps.discovery",
+            title: "freedesktop 软件发现",
+            status: app_status,
+            detail: app_detail,
+            command: "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json"
+                .to_string(),
+        });
+
+        // 4. 焦点读取。
+        let focus = LinuxFocusTracker::new();
+        let focus_check = match focus.capture() {
+            Ok(app) => CheckResult {
+                id: "focus.capture",
+                title: "读取唤起前前台应用",
                 status: Status::MeasuredPass,
-                detail: format!("注册并注销 {} 成功", spec.canonical()),
-                command: "cargo run -p flashcast-platform --bin flashcast-platform-check"
-                    .to_string(),
-            }
-        }
-        Err(flashcast_platform::shortcut::HotkeyError::BackendUnavailable { reason }) => {
-            CheckResult {
-                id: "hotkey.register",
-                title: "全局快捷键注册",
+                detail: format!(
+                    "读取到 id={} name={} wm_class={:?} pid={:?} window={:?}",
+                    app.id, app.name, app.wm_class, app.pid, app.window
+                ),
+                command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
+            },
+            Err(flashcast_platform::focus::FocusError::Unsupported { reason }) => CheckResult {
+                id: "focus.capture",
+                title: "读取唤起前前台应用",
                 status: Status::NotCovered,
                 detail: reason,
                 command: "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin \
                           flashcast-platform-check"
                     .to_string(),
-            }
-        }
-        Err(error) => CheckResult {
-            id: "hotkey.register",
-            title: "全局快捷键注册",
-            status: Status::MeasuredFail,
-            detail: error.to_string(),
-            command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
-        },
-    };
-    checks.push(hotkey_check);
-
-    // 6. 剪贴板与自动粘贴：ticket 01 只报告环境前提，状态保持未覆盖。
-    for (id, title, support) in [
-        (
-            "clipboard.text",
-            "剪贴板文字读写",
-            capabilities.clipboard.clone(),
-        ),
-        (
-            "paste.auto",
-            "自动粘贴到唤起前应用",
-            capabilities.auto_paste.clone(),
-        ),
-    ] {
-        let (status, detail) = match &support {
-            Support::Supported => (Status::MeasuredPass, "支持".to_string()),
-            Support::Unsupported { reason } => (Status::MeasuredFail, reason.clone()),
-            Support::Unknown { reason } => (Status::NotCovered, reason.clone()),
+            },
+            Err(error) => CheckResult {
+                id: "focus.capture",
+                title: "读取唤起前前台应用",
+                status: Status::MeasuredFail,
+                detail: error.to_string(),
+                command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
+            },
         };
+        checks.push(focus_check);
+
+        // 5. 全局快捷键注册。
+        let hotkeys = LinuxHotkeyManager::new();
+        let spec = HotkeySpec::parse("Ctrl+Alt+F12").expect("固定检查用快捷键必须可解析");
+        let hotkey_check = match hotkeys.register(&spec, Arc::new(|| {})) {
+            Ok(handle) => {
+                let _ = hotkeys.unregister(&handle);
+                CheckResult {
+                    id: "hotkey.register",
+                    title: "全局快捷键注册",
+                    status: Status::MeasuredPass,
+                    detail: format!("注册并注销 {} 成功", spec.canonical()),
+                    command: "cargo run -p flashcast-platform --bin flashcast-platform-check"
+                        .to_string(),
+                }
+            }
+            Err(flashcast_platform::shortcut::HotkeyError::BackendUnavailable { reason }) => {
+                CheckResult {
+                    id: "hotkey.register",
+                    title: "全局快捷键注册",
+                    status: Status::NotCovered,
+                    detail: reason,
+                    command: "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin \
+                              flashcast-platform-check"
+                        .to_string(),
+                }
+            }
+            Err(error) => CheckResult {
+                id: "hotkey.register",
+                title: "全局快捷键注册",
+                status: Status::MeasuredFail,
+                detail: error.to_string(),
+                command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
+            },
+        };
+        checks.push(hotkey_check);
+
+        // 6. 剪贴板与自动粘贴：ticket 01 只报告环境前提，状态保持未覆盖。
+        for (id, title, support) in [
+            (
+                "clipboard.text",
+                "剪贴板文字读写",
+                capabilities.clipboard.clone(),
+            ),
+            (
+                "paste.auto",
+                "自动粘贴到唤起前应用",
+                capabilities.auto_paste.clone(),
+            ),
+        ] {
+            let (status, detail) = match &support {
+                Support::Supported => (Status::MeasuredPass, "支持".to_string()),
+                Support::Unsupported { reason } => (Status::MeasuredFail, reason.clone()),
+                Support::Unknown { reason } => (Status::NotCovered, reason.clone()),
+            };
+            checks.push(CheckResult {
+                id,
+                title,
+                status,
+                detail,
+                command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
+            });
+        }
+
+        // 7. X11 诊断（即便在 Wayland 下也如实报告 XWayland 暴露的内容）。
+        let x11 = flashcast_platform::linux::x11::diagnostics();
         checks.push(CheckResult {
-            id,
-            title,
-            status,
-            detail,
+            id: "x11.diagnostics",
+            title: "X11/EWMH 诊断",
+            status: match x11.availability {
+                flashcast_platform::linux::x11::X11Availability::Available => Status::MeasuredPass,
+                _ => Status::NotCovered,
+            },
+            detail: format!(
+                "可用性={:?}，窗口管理器={:?}，_NET_CLIENT_LIST 窗口数={:?}，前台窗口={:?}",
+                x11.availability,
+                x11.window_manager,
+                x11.client_count,
+                x11.active.as_ref().and_then(|a| a.identifier()),
+            ),
             command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
         });
+
     }
 
-    // 7. X11 诊断（即便在 Wayland 下也如实报告 XWayland 暴露的内容）。
-    let x11 = flashcast_platform::linux::x11::diagnostics();
-    checks.push(CheckResult {
-        id: "x11.diagnostics",
-        title: "X11/EWMH 诊断",
-        status: match x11.availability {
-            flashcast_platform::linux::x11::X11Availability::Available => Status::MeasuredPass,
-            _ => Status::NotCovered,
-        },
-        detail: format!(
-            "可用性={:?}，窗口管理器={:?}，_NET_CLIENT_LIST 窗口数={:?}，前台窗口={:?}",
-            x11.availability,
-            x11.window_manager,
-            x11.client_count,
-            x11.active.as_ref().and_then(|a| a.identifier()),
-        ),
-        command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
-    });
+    #[cfg(not(target_os = "linux"))]
+    {
+        checks.extend(uncovered_checks(&capabilities));
+    }
 
     if options.json {
         print_json(&capabilities, &checks, &options);
@@ -466,4 +504,70 @@ fn print_json(
         },
         None => print!("{out}"),
     }
+}
+
+/// 复现「编译」检查的命令：Linux 是本机构建，其他平台是交叉 `cargo check`。
+fn compile_command() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        "cargo build -p flashcast-platform --bin flashcast-platform-check".to_string()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        CROSS_CHECK_HINT.to_string()
+    }
+}
+
+/// 非 Linux 平台的检查列表。
+///
+/// id 与标题和 Linux 侧保持一致，状态一律为「未覆盖」，并写明原因：
+/// 这些能力的真实实现由后续的 Windows / macOS ticket 提供，本平台目前只保证能编译。
+#[cfg(not(target_os = "linux"))]
+fn uncovered_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
+    let os = capabilities.os.as_str();
+    let unchecked = |id: &'static str, title: &'static str, what: &str| CheckResult {
+        id,
+        title,
+        status: Status::NotCovered,
+        detail: format!("{what}（当前平台：{os}）"),
+        command: CROSS_CHECK_HINT.to_string(),
+    };
+
+    vec![
+        unchecked(
+            "session.detect",
+            "桌面会话类型判定",
+            "该平台的会话类型判定由后续平台 ticket 提供",
+        ),
+        unchecked(
+            "apps.discovery",
+            "软件发现",
+            "该平台的软件发现由后续平台 ticket 提供（Linux 使用 freedesktop 扫描）",
+        ),
+        unchecked(
+            "focus.capture",
+            "读取唤起前前台应用",
+            "该平台的前台应用读取由后续平台 ticket 提供",
+        ),
+        unchecked(
+            "hotkey.register",
+            "全局快捷键注册",
+            "该平台的全局快捷键注册由后续平台 ticket 提供",
+        ),
+        unchecked(
+            "clipboard.text",
+            "剪贴板文字读写",
+            "该平台的剪贴板读写由后续 ticket 提供",
+        ),
+        unchecked(
+            "paste.auto",
+            "自动粘贴到唤起前应用",
+            "该平台的自动粘贴由后续 ticket 提供",
+        ),
+        unchecked(
+            "x11.diagnostics",
+            "X11/EWMH 诊断",
+            "X11 / EWMH 只存在于 Linux 会话，当前平台不适用",
+        ),
+    ]
 }
