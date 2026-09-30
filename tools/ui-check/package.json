@@ -1,0 +1,13 @@
+{
+  "name": "flashcast-ui-check",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Flashcast 的浏览器交互检查：驱动真实 Chrome 走一遍 UI 主流程并截图",
+  "type": "module",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.56.0"
+  }
+}

@@ -42,7 +42,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    void api.refresh_state().then(apply);
+    // 首屏必须是一次空查询：宿主的 snapshot() 只回放当前状态，在还没有查询过时
+    // 它是空的，只有 query("") 才会给出快速访问项。
+    void api.query("").then(apply);
     void api.get_status().then(setStatus);
     const unlisteners: (() => void)[] = [];
     const register = async () => {
@@ -51,7 +53,8 @@ export default function App() {
           setVisible(true);
           setFeedback(null);
           setInput("");
-          void api.refresh_state().then(apply);
+          // 重新唤起同样回到空查询的首屏，否则会出现「输入框为空但列表还是上次过滤结果」。
+          void api.query("").then(apply);
           focusInput();
         }),
       );

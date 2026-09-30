@@ -37,8 +37,10 @@ pnpm install                 # 安装前端依赖
 pnpm dev                     # 仅启动 UI（浏览器交互检查）
 pnpm tauri dev               # 启动完整桌面应用
 pnpm build                   # 构建前端产物
+pnpm ui-check                # 浏览器交互检查（自动起停 Vite + 真实 Chrome）
 cargo test --workspace       # 运行全部无头测试
 cargo build -p flashcast     # 编译 Tauri 宿主
+cargo run -p flashcast-platform --bin flashcast-platform-check   # 真实平台检查
 cargo clippy --workspace --all-targets
 ```
 
@@ -48,6 +50,43 @@ cargo clippy --workspace --all-targets
 - 平台适配层用 `flashcast-platform` 的测试替身；替身通过不证明平台适配通过。
 - UI 不写单元测试，通过浏览器交互或真实桌面手动检查。
 - 真实平台检查在各平台 runner 上运行，输出「通过 / 失败 / 未覆盖」与原因。
+
+## 浏览器交互检查（UI）
+
+UI 没有单元测试，主流程靠浏览器交互检查：`tools/ui-check/` 是**独立**的 npm 项目
+（自己的 `package.json` 与 `node_modules`，不进入应用依赖图），用 `playwright-core`
+驱动系统 Chrome。
+
+```bash
+pnpm ui-check                                        # 仓库根目录，等价于下一行
+pnpm --dir tools/ui-check run check
+FLASHCAST_UI_URL=http://localhost:1420 pnpm ui-check # 复用已启动的 Vite
+CHROME_PATH=/usr/bin/google-chrome pnpm ui-check     # 默认就是这个路径
+```
+
+脚本自己启动 Vite（端口 1420；已在监听则复用）、轮询到可用后再驱动页面，结束时关掉
+自己启动的进程。检查项：空查询的快速访问项、输入过滤、方向键选择、Escape 关闭并在唤起后
+清空查询、输入法组合期间回车不执行（组合结束后回车才执行）、鼠标悬停不改变键盘选择。
+产物在 `artifacts/ui/`（截图 + `ui-check.log`，该目录已被 gitignore）。
+
+**范围**：只覆盖浏览器里的 React UI 与 `src/api.ts` 中的模拟宿主。它不是 Tauri webview，
+因此**不能**证明托盘、全局快捷键、自动粘贴或真实软件启动可用。
+
+## 跨目标类型检查
+
+`cargo check` 不链接，所以可以在 Linux 上检查另外两个目标，不需要 MSVC 或 macOS 工具链：
+
+```bash
+rustup target add x86_64-pc-windows-msvc x86_64-apple-darwin
+CARGO_TARGET_DIR=/tmp/wcheck cargo check -p flashcast-platform --target x86_64-pc-windows-msvc
+CARGO_TARGET_DIR=/tmp/mcheck cargo check -p flashcast-platform --target x86_64-apple-darwin
+```
+
+用独立的 `CARGO_TARGET_DIR`，避免与主目标目录互相干扰。CI 的 `cross-check` 任务跑的就是这两条。
+
+只检查 `flashcast-platform`：Tauri 外壳（`-p flashcast`）无法在 Linux 上交叉 `cargo check`——
+Windows 目标需要 `llvm-rc` 嵌入图标，macOS 目标需要能识别 `-arch` 的 Apple 工具链。
+外壳在三平台上的编译由 CI 主矩阵各自的 runner 覆盖。
 
 ## 本地环境记录
 
