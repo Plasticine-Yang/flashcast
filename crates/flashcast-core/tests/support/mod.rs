@@ -345,6 +345,15 @@ pub fn git_index_oid(repo: &Path, rel: &str) -> Option<git2::Oid> {
     index.get_path(Path::new(rel), 0).map(|entry| entry.id)
 }
 
+/// 索引里某个路径 stage 0 条目的**内容**；不在索引里返回 `None`。
+pub fn git_index_blob(repo: &Path, rel: &str) -> Option<String> {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let index = repository.index().expect("读取索引");
+    let entry = index.get_path(Path::new(rel), 0)?;
+    let blob = repository.find_blob(entry.id).ok()?;
+    Some(String::from_utf8_lossy(blob.content()).into_owned())
+}
+
 /// 当前 HEAD 指向的引用名（例如 `refs/heads/main`）。
 pub fn git_head_ref(repo: &Path) -> String {
     let repository = git2::Repository::open(repo).expect("打开测试仓库");
