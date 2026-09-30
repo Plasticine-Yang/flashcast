@@ -22,6 +22,17 @@ if [ -z "$DIR" ] || [ ! -d "$DIR" ]; then
   echo "用法：$0 <产物目录> [输出目录]" >&2
   exit 2
 fi
+
+# 输出目录先转成绝对路径：脚本随后会 `cd "$DIR"`，相对路径会在新 cwd 下算错
+# （第一次真实 CI 运行就踩到了：SHA256SUMS.txt 被写到 artifacts/artifacts/，等于没产出）。
+abspath() {
+  case "$1" in
+    /*) printf '%s' "$1" ;;
+    *) printf '%s/%s' "$(pwd)" "$1" ;;
+  esac
+}
+DIR=$(abspath "$DIR")
+OUT=$(abspath "$OUT")
 mkdir -p "$OUT"
 
 # 先清掉上一次的汇总，避免把旧提交的产物混进来（ticket 18 明确要求不能混）。
@@ -47,7 +58,10 @@ fi
 
 printf '找到 %d 个安装包：\n' "${#FILES[@]}"
 
-: >"$OUT/SHA256SUMS.txt"
+: >"$OUT/SHA256SUMS.txt" || {
+  echo "::error::无法写入 $OUT/SHA256SUMS.txt。" >&2
+  exit 1
+}
 declare -A HASHES=()
 fail=0
 for f in "${FILES[@]}"; do
@@ -58,8 +72,11 @@ for f in "${FILES[@]}"; do
     continue
   fi
   HASHES["$(basename "$f")"]=$sha
-  printf '%s  %s\n' "$sha" "$(basename "$f")" >>"$OUT/SHA256SUMS.txt"
-  printf '%s\n' "$sha" >"$OUT/$(basename "$f").sha256"
+  if ! printf '%s  %s\n' "$sha" "$(basename "$f")" >>"$OUT/SHA256SUMS.txt"; then
+    echo "::error::写入 $OUT/SHA256SUMS.txt 失败。" >&2
+    fail=1
+  fi
+  printf '%s\n' "$sha" >"$OUT/$(basename "$f").sha256" || fail=1
   printf '  %s  %s（%s 字节）\n' "$sha" "$(basename "$f")" "$(file_size "$f")"
 done
 
@@ -85,6 +102,11 @@ done
 
 printf '\nSHA256SUMS.txt：\n'
 cat "$OUT/SHA256SUMS.txt"
+
+if [ ! -s "$OUT/SHA256SUMS.txt" ]; then
+  echo "::error::$OUT/SHA256SUMS.txt 为空，ticket 18 没有可附加到 Release 的校验和。" >&2
+  exit 1
+fi
 
 if [ "$fail" != "0" ]; then
   exit 1

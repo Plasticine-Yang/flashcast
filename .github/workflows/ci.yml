@@ -436,6 +436,14 @@ jobs:
             exit 0
           fi
           pfx="$RUNNER_TEMP/flashcast-codesign.pfx"
+          # tauri-action 的 args 以空白切分，--config 的路径里不能有空格；有的话直接报错，
+          # 免得退化成「指纹没传进去、包静默未签名」。
+          case "$RUNNER_TEMP" in
+            *" "*)
+              echo "::error::RUNNER_TEMP 含空格，--config 路径无法通过 tauri-action 的 args 传递。"
+              exit 1
+              ;;
+          esac
           echo "${WINDOWS_CERTIFICATE}" | base64 --decode >"$pfx"
           thumbprint="$(powershell.exe -NoProfile -NonInteractive -Command \
             "\$p = ConvertTo-SecureString -String \$env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText; (Import-PfxCertificate -FilePath '$(cygpath -w "$pfx")' -CertStoreLocation Cert:\\CurrentUser\\My -Password \$p).Thumbprint" \
@@ -575,5 +583,7 @@ jobs:
             artifacts/SHA256SUMS.txt
             artifacts/sha256-report.txt
             artifacts/*.sha256
-          if-no-files-found: warn
+          # SHA256SUMS.txt 是 ticket 18 附加到 Release 的必需资产；缺了必须让 job 变红，
+          # 不能只警告——第一次真实运行就是因为相对输出路径而「静默没有产出」。
+          if-no-files-found: error
           retention-days: 30

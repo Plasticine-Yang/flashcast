@@ -577,9 +577,12 @@ check_macos_signing() {
   fi
 
   add_note "macOS：dmg=${dmg}。ad-hoc 签名只避免 Apple Silicon 报「已损坏」，不等于通过 Gatekeeper；安装说明必须给出 xattr -dr com.apple.quarantine 或「隐私与安全性 → 仍要打开」。"
+  add_note "macOS：installer.macos.gatekeeper 记为「实测失败」是 ad-hoc 签名未公证的预期结果，不是打包失败；未配置公证凭证时不应把它当作发布阻断项。"
 }
 
 # ── Windows ─────────────────────────────────────────────────────────────
+# Git Bash 里的路径是 `/d/a/...` 这种形式，bash 的 `[ -f ]` 认，但 PowerShell 不认；
+# 交给 powershell.exe 时要用 `cygpath -w` 的 `D:\a\...` 形式。
 win_path() {
   if command -v cygpath >/dev/null 2>&1; then
     cygpath -u "$1"
@@ -588,17 +591,34 @@ win_path() {
   fi
 }
 
+win_style_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
 check_windows_signature() {
   local exe=$1
-  if ! command -v powershell.exe >/dev/null 2>&1 && ! command -v powershell >/dev/null 2>&1; then
+  local ps=""
+  if command -v powershell.exe >/dev/null 2>&1; then
+    ps=powershell.exe
+  elif command -v powershell >/dev/null 2>&1; then
+    ps=powershell
+  else
     add_signing "windows" "未覆盖" "本机没有 powershell，无法读取 Authenticode 状态"
     return
   fi
-  local ps=()
-  command -v powershell.exe >/dev/null 2>&1 && ps=(powershell.exe) || ps=(powershell)
-  local status
-  status=$("${ps[@]}" -NoProfile -NonInteractive -Command \
-    "(Get-AuthenticodeSignature -LiteralPath '$(win_path "$exe")').Status" 2>/dev/null | tr -d '\r' | head -1)
+  local win_exe out status
+  win_exe=$(win_style_path "$exe")
+  # 连 stderr 一起收：读不到状态时要把 powershell 的原话写进报告，而不是只写「返回空」。
+  # 不用 ^...$ 锚定：powershell.exe 重定向输出时可能带 UTF-8 BOM 或前后空白。
+  out=$("$ps" -NoProfile -NonInteractive -Command \
+    "(Get-AuthenticodeSignature -LiteralPath '$win_exe').Status" 2>&1 | tr -d '\r')
+  status=$(printf '%s' "$out" |
+    grep -oE 'Valid|NotSigned|UnknownError|HashMismatch|NotTrusted|PublisherMismatch|Incompatible' |
+    head -1)
   case "$status" in
     Valid)
       add_signing "windows" "已签名（Authenticode Valid）" "NSIS 安装程序带有效的 Authenticode 签名。"
@@ -608,7 +628,8 @@ check_windows_signature() {
         "没有提供 Windows 代码签名证书，安装程序未签名；Windows SmartScreen 会提示「Windows 已保护你的电脑」，用户需选择「更多信息 → 仍要运行」。"
       ;;
     *)
-      add_signing "windows" "未覆盖" "无法读取 Authenticode 状态（powershell 返回「${status:-空}」）"
+      add_signing "windows" "未覆盖" \
+        "无法读取 Authenticode 状态（powershell 输出：$(printf '%s' "$out" | tr '\n' '|')）"
       ;;
   esac
 }
