@@ -13,11 +13,58 @@ fake = []
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+# macOS `.app` 包的 Info.plist 解析。该 crate 是纯 Rust、跨平台的，因此不按目标
+# 条件编译：`src/macos/bundle.rs` 的遍历与字段映射逻辑要在 Linux 上也能被夹具测试。
+plist = "1.10.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 global-hotkey = "0.8.0"
 # 与 global-hotkey 依赖的 x11rb 保持同一版本，避免重复编译两份。
 x11rb = "0.13.2"
+
+# macOS 适配层。全部经 `cfg(target_os = "macos")` 条件编译，Linux 构建不受影响；
+# 这些 crate 只做 FFI，`cargo check --target x86_64-apple-darwin` 不需要 macOS SDK。
+[target.'cfg(target_os = "macos")'.dependencies]
+# global-hotkey 的 macOS 后端用 Carbon RegisterEventHotKey + 应用事件目标。
+global-hotkey = "0.8.0"
+objc2 = "0.6.4"
+# 每个 feature 都要显式声明：objc2-app-kit 以 default-features = false 引入
+# objc2-foundation，不声明就会缺少 NSString / NSData 等基本类型。
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSString",
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSGeometry",
+    "NSProcessInfo",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    # processIdentifier / runningApplicationWithProcessIdentifier 由 libc feature 提供。
+    "libc",
+    "NSWorkspace",
+    "NSImage",
+    # NSBitmapImageRep 本身由 NSImageRep 提供（其父类）。
+    "NSImageRep",
+    "NSBitmapImageRep",
+    "NSRunningApplication",
+] }
+# AXIsProcessTrusted / AXIsProcessTrustedWithOptions 与 kAXTrustedCheckOptionPrompt。
+objc2-application-services = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "HIServices",
+    "AXUIElement",
+    "objc2",
+] }
+# 辅助功能权限提示字典。CFBoolean 定义在 CFNumber 模块下，feature 名是 CFNumber。
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CFString",
+    "CFNumber",
+    "CFDictionary",
+    "objc2",
+] }
 
 [[bin]]
 name = "flashcast-platform-check"

@@ -9,6 +9,7 @@ mod icon;
 mod state;
 mod summon;
 mod tray;
+mod watch;
 
 use std::sync::Arc;
 
@@ -20,30 +21,11 @@ use crate::summon::SUMMON_GRACE;
 
 /// 启动应用。
 pub fn run() {
-    let platform = flashcast_platform::current();
-    let settings = Settings::default();
-
-    // 插件注册表：ticket 01 只有注册表本身，官方插件在 ticket 07/09/13 加入。
-    let plugins = Arc::new(PluginRegistry::new());
-    for plugin_id in &settings.disabled_plugins {
-        plugins.set_enabled(plugin_id, false);
-    }
-
-    let deps = HostDeps {
-        catalog: Arc::clone(&platform.catalog),
-        launcher: Arc::clone(&platform.launcher),
-        capabilities: Arc::clone(&platform.capabilities),
-        plugins,
-    };
-    let host = Arc::new(Host::new(deps, settings));
-    let state = AppState::new(host, platform);
-
     tauri::Builder::default()
         // 单实例守卫：必须最先注册。第二次启动会唤起已运行的实例。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             summon::summon(app);
         }))
-        .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::query,
             commands::execute,
@@ -56,14 +38,45 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::get_status,
+            commands::get_workspace,
+            commands::select_workspace,
+            commands::init_workspace,
+            commands::reload_workspace,
             commands::hide_window,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+            let platform = flashcast_platform::current();
+            let settings = Settings::default();
+
+            // 插件注册表：ticket 01 只有注册表本身，官方插件在 ticket 07/09/13 加入。
+            let plugins = Arc::new(PluginRegistry::new());
+            for plugin_id in &settings.disabled_plugins {
+                plugins.set_enabled(plugin_id, false);
+            }
+
+            // 设备本地数据目录（应用数据目录）：工作区之外的本机数据都放这里。
+            // 解析失败时退回到系统临时目录下的固定子目录，宿主仍然可用。
+            let device_dir = handle
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("flashcast"));
+            let deps = HostDeps {
+                catalog: Arc::clone(&platform.catalog),
+                launcher: Arc::clone(&platform.launcher),
+                capabilities: Arc::clone(&platform.capabilities),
+                plugins,
+                device_dir,
+            };
+            let host = Arc::new(Host::new(deps, settings));
+            app.manage(AppState::new(host, platform));
+
             // 托盘是 Linux 上的必需备用入口（Wayland 下快捷键注册会失败）。
             tray::create(&handle)?;
             // 注册全局快捷键；失败只会产生可展示的错误，不影响托盘入口。
             hotkey::apply_from_settings(&handle);
+            // 工作区外部修改 → 重载配置 → 推送给 UI。
+            watch::spawn(&handle);
             Ok(())
         })
         .on_window_event(|window, event| match event {

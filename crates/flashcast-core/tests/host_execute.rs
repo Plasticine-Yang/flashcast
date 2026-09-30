@@ -98,6 +98,7 @@ fn launch_failure_produces_chinese_feedback() {
         })),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         plugins: Arc::new(PluginRegistry::new()),
+        device_dir: support::unique_dir("device"),
     };
     let host = Host::new(deps, fast_settings());
     let item = host.query("不存在").selected().expect("应有结果").clone();
