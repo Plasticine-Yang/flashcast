@@ -7,6 +7,7 @@
 
 import type {
   ActionOutcome,
+  Appearance,
   BackView,
   Capabilities,
   ChangedFile,
@@ -21,12 +22,14 @@ import type {
   SyncBlock,
   SyncProgress,
   SyncStatus,
+  ThemeState,
   UnlistenFn,
   WorkspaceChanges,
   WorkspaceEvent,
   WorkspaceRemote,
   WorkspaceStatus,
 } from "./types";
+import { MOCK_INSTALLED_THEME, MOCK_THEMES, buildMockThemeState } from "./mockThemes";
 
 const inTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in (window as object);
@@ -45,6 +48,18 @@ export interface HostApi {
   get_settings(): Promise<Settings>;
   set_settings(settings: Settings): Promise<{ label: string; error: string | null; registered: boolean }>;
   get_status(): Promise<StatusView>;
+  /** 当前主题状态：选中主题、CSS 自定义属性与可选主题列表。 */
+  get_theme(): Promise<ThemeState>;
+  /** 选择主题。失败时 reject，原因为中文，且当前外观不变。 */
+  select_theme(id: string): Promise<ThemeState>;
+  /** 启用或停用插件（功能插件与主题插件共用）。 */
+  set_plugin_enabled(id: string, enabled: boolean): Promise<ThemeState>;
+  /** 校验并安装一个本地主题包（目录或 JSON 文件）。 */
+  install_theme(path: string): Promise<ThemeState>;
+  /** 移除一个已安装的本地主题包；内置主题会被拒绝。 */
+  remove_theme(id: string): Promise<ThemeState>;
+  /** 上报当前系统外观，「跟随系统」的主题据此在运行时切换。 */
+  set_system_appearance(appearance: Appearance): Promise<ThemeState>;
   /** 当前配置工作区与它的有效性。 */
   get_workspace(): Promise<WorkspaceStatus>;
   /** 关联已存在的本地仓库 / 目录。失败时 reject，原因为中文。 */
@@ -103,6 +118,14 @@ const tauriApi: HostApi = {
   get_settings: () => tauriInvoke("get_settings"),
   set_settings: (settings) => tauriInvoke("set_settings", { settings }),
   get_status: () => tauriInvoke("get_status"),
+  get_theme: () => tauriInvoke("get_theme"),
+  select_theme: (id) => tauriInvoke("select_theme", { id }),
+  set_plugin_enabled: (id, enabled) =>
+    tauriInvoke("set_plugin_enabled", { id, enabled }).then(() => tauriInvoke("get_theme")),
+  install_theme: (path) => tauriInvoke("install_theme", { path }),
+  remove_theme: (id) => tauriInvoke("remove_theme", { id }),
+  set_system_appearance: (appearance) =>
+    tauriInvoke("set_system_appearance", { appearance }),
   get_workspace: () => tauriInvoke("get_workspace"),
   select_workspace: (path) => tauriInvoke("select_workspace", { path }),
   init_workspace: (path) => tauriInvoke("init_workspace", { path }),
@@ -364,6 +387,22 @@ class MockHost implements HostApi {
   /** 模拟设备本地保存过令牌的主机（令牌本身不出现在 UI 状态里）。 */
   storedTokenHost: string | null = null;
 
+  /** 浏览器模拟宿主认得的主题包路径。 */
+  static readonly THEME_PACKAGE = "/home/user/themes/solarized";
+  static readonly BROKEN_THEME_PACKAGE = "/home/user/themes/broken";
+  private mockThemes = MOCK_THEMES.map((theme) => ({ ...theme }));
+  private selectedTheme = "flashcast.theme.light";
+  private systemAppearance: Appearance = "light";
+  private themeError: string | null = null;
+
+  private themeState(): ThemeState {
+    return buildMockThemeState({
+      themes: this.mockThemes,
+      selected: this.selectedTheme,
+      system: this.systemAppearance,
+      error: this.themeError,
+    });
+  }
   // ---- Git 变更与提交（浏览器模拟） ----
   private gitChanges: ChangedFile[] = MOCK_CHANGES.map((file) => ({ ...file }));
   private commitCount = 0;
@@ -377,10 +416,9 @@ class MockHost implements HostApi {
   private syncBehind = 0;
   private syncBusy = false;
   private syncProgress: SyncProgress = IDLE_SYNC_PROGRESS;
-  /** 远端记录的主题与备忘录；拉取时按远端内容重新加载。 */
-  private theme: string | null = "dark";
+  /** 工作区记录的备忘录；拉取时按远端内容重新读取。 */
   private memos = ["memos/hello.md"];
-  /** 远端待拉取的内容（设置快捷键、主题、新增备忘录）。 */
+  /** 远端待拉取的内容（设置快捷键、主题 id、新增备忘录）。 */
   private incoming: { hotkey: string; theme: string; memo: string } | null = null;
 
   private emit(event: string, payload?: unknown) {
@@ -563,6 +601,81 @@ class MockHost implements HostApi {
     return this.workspace;
   }
 
+  async get_theme(): Promise<ThemeState> {
+    return this.themeState();
+  }
+
+  async select_theme(id: string): Promise<ThemeState> {
+    const theme = this.mockThemes.find((candidate) => candidate.id === id);
+    if (!theme) {
+      throw `找不到主题：${id}`;
+    }
+    if (!theme.enabled) {
+      throw `主题「${theme.name}」已停用，请先启用后再选择`;
+    }
+    this.selectedTheme = id;
+    this.themeError = null;
+    return this.themeState();
+  }
+
+  async set_plugin_enabled(id: string, enabled: boolean): Promise<ThemeState> {
+    const theme = this.mockThemes.find((candidate) => candidate.id === id);
+    if (!theme) {
+      throw `插件清单里没有这个标识：${id}`;
+    }
+    theme.enabled = enabled;
+    if (!enabled && this.selectedTheme === id) {
+      this.selectedTheme = "flashcast.theme.light";
+      this.themeError = `主题「${theme.name}」已停用，已切换回「浅色」`;
+    }
+    return this.themeState();
+  }
+
+  async install_theme(path: string): Promise<ThemeState> {
+    const target = path.trim();
+    if (target.length === 0) {
+      throw "主题包不存在：路径为空";
+    }
+    if (!this.workspace.path) {
+      throw "尚未关联配置工作区，无法安装主题包";
+    }
+    if (target === MockHost.BROKEN_THEME_PACKAGE) {
+      // 与宿主一致：校验失败给出可读中文原因，且不改动已安装内容与当前外观。
+      throw "主题无效：主题 JSON 解析失败：expected value at line 3 column 1";
+    }
+    if (target !== MockHost.THEME_PACKAGE) {
+      throw `主题包不存在：${target}`;
+    }
+    const existing = this.mockThemes.find(
+      (theme) => theme.id === MOCK_INSTALLED_THEME.id,
+    );
+    if (!existing) {
+      this.mockThemes.push({ ...MOCK_INSTALLED_THEME });
+    }
+    return this.themeState();
+  }
+
+  async remove_theme(id: string): Promise<ThemeState> {
+    const theme = this.mockThemes.find((candidate) => candidate.id === id);
+    if (!theme) {
+      throw `找不到主题：${id}`;
+    }
+    if (theme.builtin) {
+      throw `内置主题不能移除：${theme.name}`;
+    }
+    this.mockThemes = this.mockThemes.filter((candidate) => candidate.id !== id);
+    if (this.selectedTheme === id) {
+      this.selectedTheme = "flashcast.theme.light";
+      this.themeError = `主题「${theme.name}」已移除，已切换回「浅色」`;
+    }
+    return this.themeState();
+  }
+
+  async set_system_appearance(appearance: Appearance): Promise<ThemeState> {
+    this.systemAppearance = appearance;
+    return this.themeState();
+  }
+
   async select_workspace(path: string): Promise<WorkspaceStatus> {
     const target = path.trim();
     if (target.length === 0) {
@@ -697,6 +810,7 @@ class MockHost implements HostApi {
       path: `${this.workspace.path ?? MOCK_REPO}/settings.toml`,
       applied: false,
       settings: this.settings,
+      theme: this.themeState(),
       error: null as string | null,
     };
     if (!looksLikeHotkey(hotkey)) {
@@ -714,6 +828,7 @@ class MockHost implements HostApi {
     const payload: WorkspaceEvent = {
       status: this.workspace,
       settings: this.settings,
+      theme: this.themeState(),
       reload,
     };
     this.emit("flashcast://workspace", payload);
@@ -725,6 +840,35 @@ class MockHost implements HostApi {
         registered: true,
       });
     }
+  }
+
+  /**
+   * 模拟外部编辑工作区里的主题配置：可用则切换，不可用则保留上一次可用外观
+   * 并给出原因。与 `Host::apply_workspace_config` 的语义一致。
+   */
+  simulateExternalThemeEdit(selected: string): void {
+    const theme = this.mockThemes.find((candidate) => candidate.id === selected);
+    let error: string | null = null;
+    if (!theme || !theme.enabled) {
+      error = `主题「${selected}」不可用（不存在、已停用或无法解析），继续使用上一次可用外观`;
+    } else {
+      this.selectedTheme = selected;
+    }
+    this.themeError = error;
+    const reload = {
+      path: `${this.workspace.path ?? MOCK_REPO}/theme.json`,
+      applied: error === null,
+      settings: this.settings,
+      theme: this.themeState(),
+      error,
+    };
+    this.emit("flashcast://theme", this.themeState());
+    this.emit("flashcast://workspace", {
+      status: this.workspace,
+      settings: this.settings,
+      theme: this.themeState(),
+      reload,
+    } as WorkspaceEvent);
   }
 
   async get_git_changes(): Promise<WorkspaceChanges> {
@@ -829,7 +973,11 @@ class MockHost implements HostApi {
    */
   simulateRemoteCommit(hotkey = "Alt+Space"): void {
     this.syncBehind = 1;
-    this.incoming = { hotkey, theme: "solarized", memo: "memos/remote-note.md" };
+    this.incoming = {
+      hotkey,
+      theme: "flashcast.theme.dark",
+      memo: "memos/remote-note.md",
+    };
   }
 
   /** 模拟本地新增一次提交：下一次推送会把远端分支推到新提交。 */
@@ -939,8 +1087,10 @@ class MockHost implements HostApi {
         if (incoming) {
           // 与宿主一致：拉取后重新加载生效设置，并重新读取主题与备忘录。
           this.settings = { ...this.settings, hotkey: incoming.hotkey };
-          this.theme = incoming.theme;
+          this.selectedTheme = incoming.theme;
           this.memos = [...this.memos, incoming.memo];
+          // 主题变化要像宿主一样推送给 UI（`flashcast://theme`）。
+          this.emit("flashcast://theme", this.themeState());
         }
         this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "done", updates: 8, message: "拉取完成" };
         return {
@@ -952,8 +1102,14 @@ class MockHost implements HostApi {
             commits: 1,
           },
           status: this.syncStatusSnapshot(),
-          reload: { path, applied: this.incoming !== null, settings: this.settings, error: null },
-          theme: this.theme,
+          reload: {
+            path,
+            applied: this.incoming !== null,
+            settings: this.settings,
+            theme: this.themeState(),
+            error: null,
+          },
+          theme: this.themeState().selected,
           memos: this.memos,
           message: "已快进拉取到 8b2d4e1，共 1 个提交",
         };
@@ -962,8 +1118,14 @@ class MockHost implements HostApi {
       return {
         result: { kind: "upToDate" },
         status: this.syncStatusSnapshot(),
-        reload: { path, applied: false, settings: this.settings, error: null },
-        theme: this.theme,
+        reload: {
+          path,
+          applied: false,
+          settings: this.settings,
+          theme: this.themeState(),
+          error: null,
+        },
+        theme: this.themeState().selected,
         memos: this.memos,
         message: "远端没有新的提交，本地已是最新",
       };

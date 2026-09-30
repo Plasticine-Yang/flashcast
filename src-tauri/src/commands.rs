@@ -7,9 +7,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use flashcast_core::{
-    ActionOutcome, BackOutcome, CloneOutcome, CloneProgress, CommitOutcome, DefaultAction,
-    ItemKind, Notice, PluginFailure, PullOutcome, PushOutcome, QueryResponse, QueryScope, Score,
-    SearchItem, Settings, SyncProgress, SyncStatus, WorkspaceChanges, WorkspaceStatus,
+    ActionOutcome, Appearance, BackOutcome, CloneOutcome, CloneProgress, CommitOutcome,
+    DefaultAction, ItemKind, Notice, PluginFailure, PullOutcome, PushOutcome, QueryResponse,
+    QueryScope, Score, SearchItem, Settings, SyncProgress, SyncStatus, ThemeState,
+    WorkspaceChanges, WorkspaceStatus,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -134,9 +135,9 @@ pub fn query(state: State<'_, AppState>, input: String) -> QueryView {
 pub fn execute(state: State<'_, AppState>, item_id: String) -> ActionOutcome {
     match state.host.item_by_id(&item_id) {
         Some(item) => state.host.execute(&item),
-        None => ActionOutcome::failed(
-            "结果已过期：请重新输入查询后再执行（列表可能已被重新扫描刷新）",
-        ),
+        None => {
+            ActionOutcome::failed("结果已过期：请重新输入查询后再执行（列表可能已被重新扫描刷新）")
+        }
     }
 }
 
@@ -208,6 +209,59 @@ pub fn set_settings(
     Ok(hotkey_status(&state))
 }
 
+/// 当前主题状态：选中主题、CSS 自定义属性与可选主题列表。
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_theme(state: State<'_, AppState>) -> ThemeState {
+    state.host.theme_state()
+}
+
+/// 选择主题。失败时返回中文原因，且当前外观不变。
+#[tauri::command(rename_all = "snake_case")]
+pub fn select_theme(state: State<'_, AppState>, id: String) -> Result<ThemeState, String> {
+    state
+        .host
+        .select_theme(&id)
+        .map_err(|error| error.to_string())
+}
+
+/// 启用或停用插件（功能插件与主题插件共用同一张清单）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_plugin_enabled(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .host
+        .set_plugin_enabled(&id, enabled)
+        .map_err(|error| error.to_string())
+}
+
+/// 上报当前系统外观；「跟随系统」的主题据此在运行时切换。
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_system_appearance(state: State<'_, AppState>, appearance: Appearance) -> ThemeState {
+    state.host.set_system_appearance(appearance)
+}
+
+/// 校验并安装一个本地主题包（目录或 JSON 文件）。失败时返回中文原因，
+/// 已安装内容与当前外观保持不变。
+#[tauri::command(rename_all = "snake_case")]
+pub fn install_theme(state: State<'_, AppState>, path: String) -> Result<ThemeState, String> {
+    state
+        .host
+        .install_theme_package(Path::new(&path))
+        .map_err(|error| error.to_string())
+}
+
+/// 移除一个已安装的本地主题包。内置主题会被拒绝。
+#[tauri::command(rename_all = "snake_case")]
+pub fn remove_theme(state: State<'_, AppState>, id: String) -> Result<ThemeState, String> {
+    state
+        .host
+        .remove_theme(&id)
+        .map_err(|error| error.to_string())
+}
+
 /// 当前配置工作区与它的有效性。
 #[tauri::command(rename_all = "snake_case")]
 pub fn get_workspace(state: State<'_, AppState>) -> WorkspaceStatus {
@@ -229,10 +283,7 @@ pub fn select_workspace(
 
 /// 在指定目录初始化新的配置工作区及其 Git 仓库。目标目录非空时拒绝。
 #[tauri::command(rename_all = "snake_case")]
-pub fn init_workspace(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<WorkspaceStatus, String> {
+pub fn init_workspace(state: State<'_, AppState>, path: String) -> Result<WorkspaceStatus, String> {
     state
         .host
         .init_workspace(Path::new(&path))
@@ -314,6 +365,7 @@ pub fn reload_workspace(state: State<'_, AppState>) -> WorkspaceEvent {
     WorkspaceEvent {
         status: state.host.workspace_status(),
         settings: state.host.settings(),
+        theme: state.host.theme_state(),
         reload: Some(reload),
     }
 }

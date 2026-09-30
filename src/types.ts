@@ -101,6 +101,60 @@ export interface PluginView {
   enabled: boolean;
 }
 
+/** 实际生效的外观。 */
+export type Appearance = "light" | "dark";
+
+/** 主题声明的外观偏好；「跟随系统」按当前系统外观解析。 */
+export type ThemeAppearance = "light" | "dark" | "system";
+
+/** 宿主下发的一条 CSS 自定义属性。UI 只消费属性，不认识具体主题。 */
+export interface CssVar {
+  name: string;
+  value: string;
+}
+
+/** 主题列表里的一条。 */
+export interface ThemeEntry {
+  id: string;
+  name: string;
+  version: string;
+  enabled: boolean;
+  selected: boolean;
+  /** 内置主题不能被移除。 */
+  builtin: boolean;
+  appearance: ThemeAppearance;
+  /** 主题文档当前是否能解析并通过校验。 */
+  usable: boolean;
+  error: string | null;
+}
+
+/** 宿主当前的主题状态（对应 flashcast_core::ThemeState）。 */
+export interface ThemeState {
+  selected: string;
+  selectedName: string;
+  preference: ThemeAppearance;
+  appearance: Appearance;
+  systemAppearance: Appearance;
+  /** 直接写入根元素的 CSS 自定义属性。 */
+  cssVars: CssVar[];
+  themes: ThemeEntry[];
+  /** 最近一次无效主题的中文原因；此时外观仍是上一次可用的。 */
+  error: string | null;
+}
+
+/** 插件清单条目（对应 flashcast_core::ManifestEntry）。 */
+export interface ManifestEntry {
+  id: string;
+  name: string;
+  kind: "feature" | "theme";
+  version: string;
+  enabled: boolean;
+  keywords: string[];
+  capabilities: string[];
+  origin: "builtin" | "registered" | "installed";
+  appearance: ThemeAppearance | null;
+}
+
 export interface StatusView {
   previousApp: FocusedApp | null;
   hotkey: HotkeyStatus;
@@ -189,6 +243,8 @@ export interface WorkspaceReload {
   path: string;
   applied: boolean;
   settings: Settings;
+  /** 处理之后生效的主题状态（无效主题保留上一次可用外观）。 */
+  theme: ThemeState;
   error: string | null;
 }
 
@@ -240,6 +296,7 @@ export interface CommitOutcome {
 export interface WorkspaceEvent {
   status: WorkspaceStatus;
   settings: Settings;
+  theme: ThemeState;
   reload: WorkspaceReload | null;
 }
 

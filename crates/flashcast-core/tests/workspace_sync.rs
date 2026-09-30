@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flashcast_core::{
-    Host, PullResult, Settings, SyncControl, SyncError, SyncPhase, SETTINGS_FILE,
+    Host, PullResult, Settings, SyncControl, SyncError, SyncPhase, SETTINGS_FILE, THEME_DARK,
+    THEME_FILE,
 };
 use support::{
     bare_remote, bare_remote_commit, bare_remote_file, bare_remote_oid, cleanup, fast_settings,
@@ -279,13 +280,16 @@ fn fast_forward_pull_applies_commit_and_reloads_settings_theme_and_memos() {
     let before = fixture.head_oid();
 
     let remote_settings = settings_toml(HOTKEY_REMOTE);
+    // `theme.json` 用 ticket 06 的格式：拉取后应当切换为深色主题。
+    let remote_theme = format!("{{\"selected\": \"{THEME_DARK}\"}}\n");
     let target = bare_remote_commit(
         &fixture.remote,
         &[
             (SETTINGS_FILE, remote_settings.as_str()),
+            (THEME_FILE, remote_theme.as_str()),
             ("memos/remote-note.md", "# 远端笔记\n\n来自另一台设备。\n"),
         ],
-        "远端更新设置与备忘录",
+        "远端更新设置、主题与备忘录",
     );
 
     let outcome = fixture.host.pull_workspace().expect("快进拉取应成功");
@@ -299,16 +303,33 @@ fn fast_forward_pull_applies_commit_and_reloads_settings_theme_and_memos() {
         std::fs::read_to_string(fixture.workspace.join(SETTINGS_FILE)).expect("读设置"),
         remote_settings
     );
+    assert_eq!(
+        std::fs::read_to_string(fixture.workspace.join(THEME_FILE)).expect("读主题配置"),
+        remote_theme
+    );
     assert!(fixture.workspace.join("memos/remote-note.md").exists());
     assert_eq!(fixture.head_oid(), target, "本地分支应指向远端提交");
 
     // 生效设置重新加载：宿主看到的是拉取进来的快捷键。
     assert_eq!(fixture.host.settings().hotkey, HOTKEY_REMOTE);
-    assert!(outcome.reload.applied, "设置内容变了，重载应当生效");
-    assert!(outcome.reload.error.is_none());
+    assert!(outcome.reload.applied, "配置内容变了，重载应当生效");
+    assert!(outcome.reload.error.is_none(), "{:?}", outcome.reload.error);
 
-    // 主题与备忘录重新读取。
-    assert_eq!(outcome.theme.as_deref(), Some("dark"));
+    // 主题重新加载：生效主题变成拉取进来的那一个（不只是记下文件名）。
+    assert_eq!(outcome.reload.theme.selected, THEME_DARK);
+    assert_eq!(outcome.theme.as_deref(), Some(THEME_DARK));
+    assert_eq!(fixture.host.theme_state().selected, THEME_DARK);
+    assert_eq!(
+        fixture.host.theme_state().appearance,
+        flashcast_core::Appearance::Dark
+    );
+    assert!(
+        fixture.host.theme_state().error.is_none(),
+        "{:?}",
+        fixture.host.theme_state().error
+    );
+
+    // 备忘录重新读取。
     assert_eq!(
         outcome.memos,
         vec![

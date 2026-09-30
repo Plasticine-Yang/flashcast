@@ -1077,15 +1077,18 @@ pub struct PullReport {
 ///
 /// 拉取成功后设置、主题与备忘录都要重新读取，因此这里如实带上重新加载的
 /// 结果（[`Host::pull_workspace`](crate::Host::pull_workspace) 填充）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `reload.theme` 是重新解析后的**生效**主题状态；`theme` 是它的 id 摘要。
+///
+/// 不派生 `Eq`：`WorkspaceReload` 里的主题状态含浮点 token（ticket 06）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullOutcome {
     pub result: PullResult,
     /// 拉取后按真实 Git 状态重建的状态。
     pub status: SyncStatus,
-    /// 重新加载生效设置的结果。
+    /// 重新加载生效配置（设置与主题）的结果。
     pub reload: WorkspaceReload,
-    /// 拉取后工作区记录的主题名。
+    /// 拉取后生效的主题 id。
     pub theme: Option<String>,
     /// 拉取后 `memos/` 下的备忘录（仓库相对路径，已排序）。
     pub memos: Vec<String>,

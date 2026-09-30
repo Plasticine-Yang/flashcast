@@ -430,7 +430,15 @@ pub fn git_resolve_all_conflicts(repo: &Path) {
 }
 
 /// 一份可被克隆的配置工作区内容。
+///
+/// `manifest.json` 用 `PluginManifestFile::defaults()` 写成，保证它是 ticket 06
+/// 定义的合法清单（原先手写的 `{"plugins": []}` 缺少 `schemaVersion`，会被判为
+/// 无效清单）。`theme.json` 保持 ticket 14 记录过的旧写法，`recorded_theme()` 仍能
+/// 如实读出 `dark`；拉取测试会换成 ticket 06 的合法格式来验证主题重新加载。
 pub fn workspace_files(hotkey: &str) -> Vec<(&'static str, String)> {
+    let manifest = flashcast_core::PluginManifestFile::defaults()
+        .to_json()
+        .expect("序列化默认插件清单");
     vec![
         (
             "settings.toml",
@@ -438,7 +446,7 @@ pub fn workspace_files(hotkey: &str) -> Vec<(&'static str, String)> {
                 "hotkey = \"{hotkey}\"\nlaunchAtStartup = false\nquickAccessLimit = 6\npluginTimeoutMs = 400\ndisabledPlugins = []\n"
             ),
         ),
-        ("manifest.json", "{\"plugins\": []}\n".to_string()),
+        ("manifest.json", manifest),
         ("theme.json", "{\"theme\": \"dark\"}\n".to_string()),
         ("memos/hello.md", "# 你好\n\n来自远端的备忘录。\n".to_string()),
     ]
