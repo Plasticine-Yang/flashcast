@@ -27,7 +27,7 @@ use crate::plugin::{PluginScope, SearchContext};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
 use crate::registry::PluginRegistry;
 use crate::settings::{Settings, SettingsError};
-use crate::watch::WorkspaceWatcher;
+use crate::watch::{hash_bytes, WatchEventTrace, WorkspaceWatcher};
 use crate::workspace::{Workspace, WorkspaceError, WorkspaceReload, WorkspaceStatus};
 
 /// 宿主的注入依赖。不含任何 Tauri 类型。
@@ -65,6 +65,17 @@ struct HostInner {
     settings: Settings,
     /// 当前配置工作区；`None` 表示尚未关联。
     workspace: Option<Workspace>,
+    /// 当前**已应用**设置内容的哈希。
+    ///
+    /// 这是「一次外部修改只重载一次」的**主判据**：重载时先读磁盘原始字节，哈希与它
+    /// 相同就当无事发生（不给用户发事件、不计重载、不重新生效）。它不依赖事件路径、
+    /// FSEvents 的延迟、重复/合并的事件记录、读文件引发的自伤事件，也不依赖静默窗口，
+    /// 因此把 [`crate::watch`] 的 1–4 层过滤全删掉仍然成立（见
+    /// [`Host::reload_from_workspace`]）。
+    ///
+    /// 每一条能改变设置的路径都必须刷新它：应用自身写入、外部重载生效、切换工作区、
+    /// 启动时恢复工作区。否则过期的哈希会把真实修改静默吞掉。
+    applied_settings_hash: Option<u64>,
     /// 最近一次工作区失败的中文原因。
     workspace_error: Option<String>,
     /// 已应用的外部重载次数（自写抑制的观测点）。
@@ -128,6 +139,7 @@ impl Host {
                 plugin_scopes: HashMap::new(),
                 settings,
                 workspace: None,
+                applied_settings_hash: None,
                 workspace_error: None,
                 reloads: 0,
             }),
@@ -165,9 +177,13 @@ impl Host {
     /// 写入失败时保留上一次可用状态并返回中文原因。
     pub fn update_settings(&self, settings: Settings) -> Result<Settings, SettingsError> {
         settings.validate()?;
-        self.persist_settings(&settings)?;
+        let applied_hash = self.persist_settings(&settings)?;
         let mut inner = lock(&self.inner);
         inner.settings = settings.clone();
+        // 应用写入也是一次「已应用内容」的变化：设置与哈希在同一把锁内更新。
+        if let Some(hash) = applied_hash {
+            inner.applied_settings_hash = Some(hash);
+        }
         Ok(settings)
     }
 
@@ -250,22 +266,47 @@ impl Host {
         lock(&self.inner).reloads
     }
 
+    /// 最近一次被监听层接受的工作区事件（路径、事件类型与宿主处理结果）。诊断用。
+    ///
+    /// 跨平台监听缺陷的断言失败时，「多了一次重载」本身没有信息量；这个入口让测试能
+    /// 在消息里带上究竟是哪条事件、走的哪个分支。
+    pub fn last_watch_event(&self) -> Option<WatchEventTrace> {
+        lock(&self.watch)
+            .as_ref()
+            .and_then(|watcher| watcher.last_accepted_event())
+    }
+
+    /// 最近一次事件过滤决策，包括被拒绝的事件。诊断用。
+    pub fn last_watch_decision(&self) -> Option<WatchEventTrace> {
+        lock(&self.watch)
+            .as_ref()
+            .and_then(|watcher| watcher.last_decision())
+    }
+
     /// 显式重新读取工作区配置（UI 的「重新检测」入口）。
+    ///
+    /// 与监听路径共用同一判据：磁盘内容与已应用内容一致时不生效、不计重载，只回一份
+    /// `applied == false` 的结果。UI 需要的是一份可展示的结果，因此这里总是返回
+    /// [`WorkspaceReload`]，而不是像 [`Host::wait_for_workspace_change`] 那样返回 `None`。
     pub fn reload_workspace(&self) -> WorkspaceReload {
         let path = match &lock(&self.inner).workspace {
             Some(workspace) => workspace.settings_path(),
             None => return self.unchanged_reload(PathBuf::new()),
         };
-        self.reload_from_workspace(&path)
+        match self.reload_from_workspace(&path) {
+            Some(reload) => reload,
+            None => self.unchanged_reload(path),
+        }
     }
 
     /// 等待并处理一次外部修改。
     ///
-    /// 阻塞至多 `timeout`：超时、没有工作区或事件被自写抑制层吞掉时返回 `None`。
-    /// 外壳在后台线程里循环调用它并把结果推送给 UI。
+    /// 阻塞至多 `timeout`：超时、没有工作区，或收到的事件所携带的内容与已应用内容一致
+    /// 时返回 `None`。外壳在后台线程里循环调用它并把结果推送给 UI。
     ///
     /// 实现为短轮询而不是在监听通道上阻塞等待：等待期间不持有工作区监听锁，
-    /// 保存设置或切换工作区不会被这里卡住。
+    /// 保存设置或切换工作区不会被这里卡住。内容一致的事件被就地丢弃后继续等待，
+    /// 直到超时或出现一次真正的修改。
     pub fn wait_for_workspace_change(&self, timeout: Duration) -> Option<WorkspaceReload> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -274,7 +315,11 @@ impl Host {
                 watch.as_ref().and_then(|watcher| watcher.try_next_change())
             };
             if let Some(changed) = changed {
-                return Some(self.reload_from_workspace(&changed));
+                if let Some(reload) = self.reload_from_workspace(&changed) {
+                    return Some(reload);
+                }
+                // 内容未变（重复记录、自读事件、FSEvents 迟到的上报）：继续等，
+                // 但不再对外发出任何事件。
             }
             if std::time::Instant::now() >= deadline {
                 return None;
@@ -283,62 +328,94 @@ impl Host {
         }
     }
 
-    /// 按外部修改重新加载配置。无效配置保留上一次有效状态并给出中文原因。
-    fn reload_from_workspace(&self, changed: &Path) -> WorkspaceReload {
+    /// 处理一次文件事件：**先读原始字节**，与已应用内容比对，只有真正变化才算一次重载。
+    ///
+    /// 返回 `None` 表示磁盘内容与已应用内容完全一致，因此不计数、不应用、也不对外发出
+    /// 任何事件。这是跨平台正确性的**主判据**，刻意不依赖事件路径（macOS 上报的路径
+    /// 未必等于写入路径）、不依赖事件类型（FSEvents 常只给 `Any`）、不依赖到达时间
+    /// （可能晚于静默窗口），也不依赖 [`crate::watch`] 的账本与静默窗口——那四层只是
+    /// 廉价的第一道过滤，删掉它们这些用例仍然必须通过。
+    ///
+    /// 字节变化但解析后与生效设置相同时，同样不对外发事件（文本变了、语义没变），
+    /// 但会刷新已应用哈希，避免后续重复事件被反复重新解析。
+    fn reload_from_workspace(&self, changed: &Path) -> Option<WorkspaceReload> {
         let workspace = match &lock(&self.inner).workspace {
             Some(workspace) => workspace.clone(),
-            None => return self.unchanged_reload(changed.to_path_buf()),
+            None => return None,
         };
-        // 先读**原始字节**、再解析：宿主这次读在 macOS / Windows 上会被上报成像修改的
+        // 读**原始字节**、再解析：宿主这次读在 macOS / Windows 上会被上报成像修改的
         // 事件（macOS 常是 `EventKind::Any`，按事件类型丢不掉）。因此无论解析结果如何，
-        // 读到的内容都先记进监听层的账本，随后内容字节相同的事件才会被吞掉，而不是形成
-        // 「重载 → 读 → 事件 → 重载」（见 [`crate::watch`] 模块文档）。
+        // 读到的内容都先记进监听层的账本，作为第一道过滤。
         let bytes = match workspace.read_settings_bytes() {
             Ok(bytes) => bytes,
-            Err(error) => return self.reload_failed(changed, error.to_string()),
+            Err(error) => {
+                self.record_outcome(changed, "read-failed");
+                return Some(self.reload_failed(changed, error.to_string()));
+            }
         };
+        let incoming_hash = bytes.as_deref().map(hash_bytes);
+        // 主判据：磁盘内容与已应用内容一致 → 什么都不做。
+        if incoming_hash.is_some() && incoming_hash == lock(&self.inner).applied_settings_hash {
+            self.record_outcome(changed, "content-unchanged-noop");
+            return None;
+        }
         let settings = match &bytes {
             Some(bytes) => {
                 self.record_own_read(&workspace.settings_path(), bytes);
                 match workspace.parse_settings(bytes) {
                     Ok(settings) => Some(settings),
-                    Err(error) => return self.reload_failed(changed, error.to_string()),
+                    Err(error) => {
+                        self.record_outcome(changed, "invalid-config");
+                        return Some(self.reload_failed(changed, error.to_string()));
+                    }
                 }
             }
             None => None,
         };
         match settings {
-            // 幂等：内容与生效设置一致时不做任何事，写入循环在此终止。
-            Some(settings) if settings == self.settings() => WorkspaceReload {
-                path: changed.to_path_buf(),
-                applied: false,
-                settings,
-                error: None,
-            },
             Some(settings) => {
+                // 文本变了但语义没变：刷新已应用哈希，但不算一次重载、不发事件。
+                let same_settings = settings == self.settings();
                 let mut inner = lock(&self.inner);
                 inner.settings = settings.clone();
                 inner.workspace_error = None;
+                if let Some(hash) = incoming_hash {
+                    inner.applied_settings_hash = Some(hash);
+                }
+                if same_settings {
+                    drop(inner);
+                    self.record_outcome(changed, "content-changed-settings-equal-noop");
+                    return None;
+                }
                 inner.reloads += 1;
-                let applied = inner.reloads;
                 drop(inner);
-                let _ = applied;
-                WorkspaceReload {
+                self.record_outcome(changed, "applied");
+                Some(WorkspaceReload {
                     path: changed.to_path_buf(),
                     applied: true,
                     settings,
                     error: None,
-                }
+                })
             }
-            None => WorkspaceReload {
-                path: changed.to_path_buf(),
-                applied: false,
-                settings: self.settings(),
-                error: Some(format!(
-                    "设置文件已不存在，继续使用上一次有效设置（{}）",
-                    workspace.settings_path().display()
-                )),
-            },
+            None => {
+                self.record_outcome(changed, "settings-file-removed");
+                Some(WorkspaceReload {
+                    path: changed.to_path_buf(),
+                    applied: false,
+                    settings: self.settings(),
+                    error: Some(format!(
+                        "设置文件已不存在，继续使用上一次有效设置（{}）",
+                        workspace.settings_path().display()
+                    )),
+                })
+            }
+        }
+    }
+
+    /// 记录宿主对这条已接受事件的处理结果（诊断用）。
+    fn record_outcome(&self, path: &Path, outcome: &str) {
+        if let Some(watcher) = lock(&self.watch).as_ref() {
+            watcher.record_outcome(path, outcome);
         }
     }
 
@@ -372,8 +449,15 @@ impl Host {
 
     /// 让一个已校验的工作区成为当前工作区，并开始监听它的变更。
     fn activate_workspace(&self, workspace: Workspace) -> Result<WorkspaceStatus, WorkspaceError> {
-        // 先读设置：无效则整体拒绝，当前工作区与设置原样保留。
-        let loaded = workspace.read_settings()?;
+        // 先读设置：无效则整体拒绝，当前工作区与设置原样保留。读原始字节是为了同时拿到
+        // 「已应用内容」的哈希：切换 / 首次关联工作区也必须刷新它，否则新工作区里与旧
+        // 哈希碰巧一致的改动会被静默吞掉。
+        let bytes = workspace.read_settings_bytes()?;
+        let loaded = match &bytes {
+            Some(bytes) => Some(workspace.parse_settings(bytes)?),
+            None => None,
+        };
+        let applied_hash = bytes.as_deref().map(hash_bytes);
         let watcher =
             WorkspaceWatcher::start(workspace.root(), workspace.git_dir().map(Path::to_path_buf))
                 .map_err(|error| WorkspaceError::Watch(error.to_string()))?;
@@ -382,6 +466,7 @@ impl Host {
             if let Some(settings) = loaded {
                 inner.settings = settings;
             }
+            inner.applied_settings_hash = applied_hash;
             inner.workspace = Some(workspace.clone());
             inner.workspace_error = None;
         }
@@ -418,11 +503,14 @@ impl Host {
         }
     }
 
-    /// 把设置写入当前工作区文件。
-    fn persist_settings(&self, settings: &Settings) -> Result<(), SettingsError> {
+    /// 把设置写入当前工作区文件，返回落盘内容的哈希（未关联工作区时为 `None`）。
+    ///
+    /// 返回的哈希由 [`Host::update_settings`] 与设置一起写进 [`HostInner`]，保证「生效设置」
+    /// 与「已应用内容」始终同步。
+    fn persist_settings(&self, settings: &Settings) -> Result<Option<u64>, SettingsError> {
         let workspace = match &lock(&self.inner).workspace {
             Some(workspace) => workspace.clone(),
-            None => return Ok(()),
+            None => return Ok(None),
         };
         let bytes = settings.to_toml()?.into_bytes();
         {
@@ -434,7 +522,8 @@ impl Host {
         }
         workspace
             .write_settings_bytes(&bytes)
-            .map_err(|error| SettingsError::Workspace(error.to_string()))
+            .map_err(|error| SettingsError::Workspace(error.to_string()))?;
+        Ok(Some(hash_bytes(&bytes)))
     }
 
     /// 平台能力快照（如实反映当前环境）。

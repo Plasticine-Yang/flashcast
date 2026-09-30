@@ -31,7 +31,9 @@ pub use plugin::{
 pub use ranking::{score_match, sort_ranked, RankedItem};
 pub use registry::{PluginRegistry, PluginSearchOutcome};
 pub use settings::{Settings, SettingsError};
-pub use watch::{ChangeFilter, WatchError, WorkspaceWatcher, DEBOUNCE, QUIET_WINDOW};
+pub use watch::{
+    ChangeFilter, WatchError, WatchEventTrace, WorkspaceWatcher, DEBOUNCE, QUIET_WINDOW,
+};
 pub use workspace::{
     Workspace, WorkspaceError, WorkspaceReload, WorkspaceStatus, MANIFEST_FILE, MEMOS_DIR,
     SETTINGS_FILE, THEME_FILE, WORKSPACE_FILES,
