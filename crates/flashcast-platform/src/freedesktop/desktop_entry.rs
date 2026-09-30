@@ -222,11 +222,16 @@ fn expand_token(
     name: Option<&str>,
     out: &mut Vec<String>,
 ) {
-    // 整段就是 %i 时展开为两个参数。
+    // 整段就是 %i 时展开为两个参数 `--icon <Icon>`。
+    //
+    // 部分条目的 `Exec=` 已经自带字面量 `--icon`（写成 `--icon %i`）；此时只补上图标名，
+    // 避免出现 `--icon --icon <Icon>` 这种重复标记。
     if token == "%i" {
         if let Some(icon) = icon {
             if !icon.is_empty() {
-                out.push("--icon".to_string());
+                if out.last().map(String::as_str) != Some("--icon") {
+                    out.push("--icon".to_string());
+                }
                 out.push(icon.to_string());
             }
         }
