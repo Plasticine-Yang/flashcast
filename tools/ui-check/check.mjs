@@ -48,6 +48,20 @@ const CLONE_BUTTON = '[data-testid="workspace-clone"]';
 const CLONE_CANCEL = '[data-testid="workspace-clone-cancel"]';
 const CLONE_PROGRESS = '[data-testid="clone-progress"]';
 const WORKSPACE_REMOTE = '[data-testid="workspace-remote"]';
+const SYNC_SECTION = '[data-testid="sync-section"]';
+const SYNC_BRANCH = '[data-testid="sync-branch"]';
+const SYNC_REMOTE = '[data-testid="sync-remote"]';
+const SYNC_COUNTS = '[data-testid="sync-counts"]';
+const SYNC_DIRTY = '[data-testid="sync-dirty"]';
+const SYNC_CAPABILITY = '[data-testid="sync-capability"]';
+const SYNC_STATE = '[data-testid="sync-state"]';
+const SYNC_BLOCK = '[data-testid="sync-block"]';
+const SYNC_BLOCK_LABEL = '[data-testid="sync-block-label"]';
+const SYNC_BLOCK_HINT = '[data-testid="sync-block-hint"]';
+const SYNC_PROGRESS = '[data-testid="sync-progress"]';
+const SYNC_PULL = '[data-testid="sync-pull"]';
+const SYNC_PUSH = '[data-testid="sync-push"]';
+const SYNC_REDETECT = '[data-testid="sync-redetect"]';
 
 // 浏览器模拟宿主认得的路径（见 src/api.ts）。
 const MOCK_REPO = "/home/user/.config/flashcast";
@@ -681,9 +695,20 @@ async function main() {
         commitButton && commitButton.x >= 0 && commitButton.x + commitButton.width <= 640,
         `创建提交按钮超出窗口宽度：${JSON.stringify(commitButton)}`,
       );
+
+      // 同步区段同样必须在真实窗口尺寸下可见、可操作。
+      await page.locator(SYNC_SECTION).scrollIntoViewIfNeeded();
+      assert(await page.isVisible(SYNC_SECTION), "同步区段不可见");
+      assert(await page.isVisible(SYNC_PULL), "拉取按钮不可见");
+      assert(await page.isVisible(SYNC_REDETECT), "重新检测按钮不可见");
+      const pullBox = await page.locator(SYNC_PULL).boundingBox();
+      assert(
+        pullBox && pullBox.x >= 0 && pullBox.x + pullBox.width <= 640,
+        `拉取按钮超出窗口宽度：${JSON.stringify(pullBox)}`,
+      );
       const file = await shot(page, "13-settings-compact-window.png");
       await page.setViewportSize({ width: 900, height: 620 });
-      return `640×420 下工作区、快捷键与克隆区段均可见可操作，截图 ${file}`;
+      return `640×420 下工作区、快捷键、克隆与同步区段均可见可操作，截图 ${file}`;
     });
 
     // 13. 变更区展示分支、差异基准、每个文件的状态与真实差异。
@@ -864,6 +889,222 @@ async function main() {
       const emptyShot = await shot(page, "19-settings-changes-empty.png");
 
       return `不是仓库时「${unavailable}」；全部提交后「${empty}」，截图 ${unavailableShot} / ${emptyShot}`;
+    });
+
+    /** 切换同步场景并点「重新检测」，等待该场景对应的状态文案出现。 */
+    const setSyncScenario = async (scenario, blockLabel) => {
+      await page.evaluate((value) => window.__flashcastMock.simulateSyncScenario(value), scenario);
+      await page.click(SYNC_REDETECT);
+      if (blockLabel) {
+        await page.waitForFunction(
+          ({ sel, expected }) => document.querySelector(sel)?.textContent?.trim() === expected,
+          { sel: SYNC_BLOCK_LABEL, expected: blockLabel },
+        );
+      } else {
+        await page.waitForFunction(
+          ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+          { sel: SYNC_BLOCK, expected: "没有阻塞" },
+        );
+      }
+    };
+
+    const text = async (selector) => (await page.textContent(selector)).trim();
+
+    // 18. 同步区展示分支、远端、领先 / 落后、未提交改动、同步能力与进行中操作。
+    await check("同步区展示分支、远端、待同步与同步能力", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await linkMockWorkspace();
+      await page.waitForSelector(SYNC_BRANCH);
+
+      const branch = await text(SYNC_BRANCH);
+      assert(branch === "main", `必须显示当前分支，实际 ${branch}`);
+      const remote = await text(SYNC_REMOTE);
+      assert(
+        remote.includes("origin") && remote.includes(MOCK_CLONE_URL),
+        `必须显示远端名与地址：${remote}`,
+      );
+      const counts = await text(SYNC_COUNTS);
+      assert(counts.includes("领先 0") && counts.includes("落后 0"), `待同步数量不对：${counts}`);
+      const dirty = await text(SYNC_DIRTY);
+      assert(dirty.includes("工作区干净"), `干净工作区必须说明：${dirty}`);
+      const capability = await text(SYNC_CAPABILITY);
+      assert(
+        capability.includes("拉取可用") && capability.includes("推送可用"),
+        `同步能力不对：${capability}`,
+      );
+      assert(capability.includes("没有需要推送的提交"), `应说明无需推送：${capability}`);
+      const state = await text(SYNC_STATE);
+      assert(state === "无", `没有进行中的操作时应显示「无」，实际 ${state}`);
+      assert(
+        (await text(SYNC_BLOCK)).includes("没有阻塞"),
+        "没有阻塞时必须明确说明可以同步",
+      );
+      const file = await shot(page, "26-settings-sync.png");
+      return `分支 ${branch}，远端「${remote}」，${counts}，${dirty}，${capability}，截图 ${file}`;
+    });
+
+    // 19. 未提交修改阻塞拉取（推送仍然可用），并给出外部处理指引。
+    await check("未提交修改阻塞拉取并给出指引，推送仍可用", async () => {
+      await setSyncScenario("dirty", "有未提交修改");
+      const label = await text(SYNC_BLOCK_LABEL);
+      assert(label === "有未提交修改", `阻塞标签不对：${label}`);
+      const hint = await text(SYNC_BLOCK_HINT);
+      assert(hint.includes("提交") && hint.includes("重新检测"), `指引不可操作：${hint}`);
+      assert(await page.locator(SYNC_PULL).isDisabled(), "阻塞时拉取按钮必须禁用");
+      assert(
+        !(await page.locator(SYNC_PUSH).isDisabled()),
+        "未提交修改只搬运已提交对象，推送不应被禁用",
+      );
+      const dirty = await text(SYNC_DIRTY);
+      assert(dirty.includes("已暂存") && dirty.includes("未跟踪"), `脏状态要分类点明：${dirty}`);
+      const file = await shot(page, "27-settings-sync-blocked.png");
+      return `阻塞「${label}」，指引指向外部提交后重新检测，截图 ${file}`;
+    });
+
+    // 20. 分叉：两边都不动，明确不给自动合并。
+    await check("分叉阻塞拉取且不自动合并", async () => {
+      await setSyncScenario("diverged", "历史已分叉");
+      const hint = await text(SYNC_BLOCK_HINT);
+      assert(
+        hint.includes("不强推") && hint.includes("三方合并编辑器"),
+        `分叉指引不完整：${hint}`,
+      );
+      const counts = await text(SYNC_COUNTS);
+      assert(counts.includes("领先 1") && counts.includes("落后 1"), `分叉数量不对：${counts}`);
+      assert(await page.locator(SYNC_PULL).isDisabled(), "分叉时拉取必须禁用");
+      const file = await shot(page, "28-settings-sync-diverged.png");
+      return `阻塞「${await text(SYNC_BLOCK_LABEL)}」，${counts}，不自动合并，截图 ${file}`;
+    });
+
+    // 21. 鉴权失败与离线分类不同，且本地功能不受影响。
+    await check("鉴权失败与离线分类不同且本地功能可用", async () => {
+      await setSyncScenario("auth", "authFailed".replace("authFailed", ""));
+      await page.click(SYNC_PULL);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "鉴权失败" },
+      );
+      const auth = await text(SETTINGS_MESSAGE);
+      assert(auth.includes("令牌"), `鉴权失败要给出令牌指引：${auth}`);
+      const authShot = await shot(page, "29-settings-sync-auth.png");
+
+      await setSyncScenario("offline");
+      await page.click(SYNC_PULL);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "网络不可用" },
+      );
+      const offline = await text(SETTINGS_MESSAGE);
+      assert(offline !== auth, "鉴权失败与离线必须是不同的反馈");
+      assert(offline.includes("网络"), `离线反馈不对：${offline}`);
+      const offlineShot = await shot(page, "30-settings-sync-offline.png");
+
+      // 本地功能不降级：回到搜索页仍能查询并得到结果。
+      await page.click('[data-testid="settings-back"]');
+      await page.fill(INPUT, "firefox");
+      await page.waitForSelector(ROW);
+      const results = await rows(page);
+      assert(results.length > 0, "离线时本地搜索仍必须可用");
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      return `鉴权「${auth.slice(0, 24)}…」与离线「${offline.slice(0, 24)}…」不同，本地搜索仍返回 ${results.length} 条，截图 ${authShot} / ${offlineShot}`;
+    });
+
+    // 22. 快进拉取：工作区先显示进行中，完成后重新加载设置、主题与备忘录。
+    await check("快进拉取展示进行中并重新加载设置、主题与备忘录", async () => {
+      await page.evaluate(() => window.__flashcastMock.simulateSyncScenario("ready"));
+      await page.click(SYNC_REDETECT);
+      await page.evaluate(() => window.__flashcastMock.simulateRemoteCommit("Alt+Space"));
+      await page.click(SYNC_REDETECT);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SYNC_COUNTS, expected: "落后 1" },
+      );
+      const before = await page.inputValue(HOTKEY_INPUT);
+
+      await page.click(SYNC_PULL);
+      // 拉取期间必须能看到进行中的状态。
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SYNC_PROGRESS, expected: "拉取中" },
+      );
+      const progress = await text(SYNC_PROGRESS);
+      const progressShot = await shot(page, "31-settings-sync-pulling.png");
+
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "已快进拉取到" },
+      );
+      const message = await text(SETTINGS_MESSAGE);
+      assert(message.includes("主题：solarized"), `主题必须随拉取重新加载：${message}`);
+      assert(message.includes("备忘录 2 篇"), `备忘录必须随拉取重新读取：${message}`);
+
+      const after = await page.inputValue(HOTKEY_INPUT);
+      assert(
+        after === "Alt+Space" && before !== after,
+        `设置必须随拉取重新加载：${before} → ${after}`,
+      );
+      const counts = await text(SYNC_COUNTS);
+      assert(counts.includes("领先 0") && counts.includes("落后 0"), `拉取后应同步：${counts}`);
+      const file = await shot(page, "32-settings-sync-pulled.png");
+      return `进度「${progress}」，生效快捷键 ${before} → ${after}，${message}，截图 ${progressShot} / ${file}`;
+    });
+
+    // 23. 推送成功，以及「没有需要推送的提交」是独立反馈。
+    await check("推送成功且无需推送时给出独立说明", async () => {
+      await page.evaluate(() => window.__flashcastMock.simulateLocalCommit());
+      await page.click(SYNC_REDETECT);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SYNC_COUNTS, expected: "领先 1" },
+      );
+      await page.click(SYNC_PUSH);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "已推送到" },
+      );
+      const pushed = await text(SETTINGS_MESSAGE);
+      assert(
+        pushed.includes("refs/heads/main → refs/heads/main"),
+        `推送结果必须点明引用：${pushed}`,
+      );
+      const file = await shot(page, "33-settings-sync-pushed.png");
+
+      await page.click(SYNC_PUSH);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "没有需要推送的提交" },
+      );
+      const nothing = await text(SETTINGS_MESSAGE);
+      assert(nothing !== pushed, "无需推送必须与推送成功区分");
+      return `推送「${pushed}」；再次推送「${nothing}」，截图 ${file}`;
+    });
+
+    // 24. 进行中的 Git 操作可见；外部处理后重新检测恢复同步。
+    await check("重新检测在外部处理后恢复同步", async () => {
+      await setSyncScenario("inProgress", "Git 操作进行中");
+      const state = await text(SYNC_STATE);
+      assert(state.includes("变基"), `进行中的操作必须可见：${state}`);
+      const hint = await text(SYNC_BLOCK_HINT);
+      assert(hint.includes("rebase --abort"), `中止指引不完整：${hint}`);
+      assert(await page.locator(SYNC_PULL).isDisabled(), "进行中的操作必须阻塞拉取");
+      const blockedShot = await shot(page, "34-settings-sync-in-progress.png");
+
+      // 外部处理完毕 → 重新检测 → 阻塞消失。
+      await page.evaluate(() => window.__flashcastMock.simulateSyncScenario("ready"));
+      await page.click(SYNC_REDETECT);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SYNC_BLOCK, expected: "没有阻塞" },
+      );
+      const recovered = await text(SYNC_CAPABILITY);
+      assert(
+        recovered.includes("拉取可用") && recovered.includes("推送可用"),
+        `重新检测后必须恢复同步能力：${recovered}`,
+      );
+      const file = await shot(page, "35-settings-sync-redetected.png");
+      return `阻塞时「${state}」，重新检测后「${recovered}」，截图 ${blockedShot} / ${file}`;
     });
 
     const failed = results.filter((result) => !result.ok).length;

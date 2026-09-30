@@ -13,12 +13,18 @@ import type {
   CloneOutcome,
   CloneProgress,
   CommitOutcome,
+  PullOutcome,
+  PushOutcome,
   QueryView,
   Settings,
   StatusView,
+  SyncBlock,
+  SyncProgress,
+  SyncStatus,
   UnlistenFn,
   WorkspaceChanges,
   WorkspaceEvent,
+  WorkspaceRemote,
   WorkspaceStatus,
 } from "./types";
 
@@ -62,6 +68,18 @@ export interface HostApi {
   get_git_changes(): Promise<WorkspaceChanges>;
   /** 创建提交；提交范围只包含显式传入的路径。失败时 reject，原因为中文。 */
   commit_changes(message: string, paths: string[]): Promise<CommitOutcome>;
+  /** 当前工作区的同步状态：分支、远端、领先 / 落后、阻塞原因与指引（只读）。 */
+  get_sync_status(): Promise<SyncStatus>;
+  /** 重新检测同步状态：用户在应用外部处理完阻塞后调用。 */
+  redetect_sync_state(): Promise<SyncStatus>;
+  /** 仅快进拉取。阻塞或失败时 reject，原因为中文。 */
+  pull_workspace(): Promise<PullOutcome>;
+  /** 显式推送当前分支到上游（永不 force）。失败时 reject，原因为中文。 */
+  push_workspace(): Promise<PushOutcome>;
+  /** 最近一次同步的进度快照；UI 轮询它显示进度。 */
+  sync_progress(): Promise<SyncProgress>;
+  /** 请求取消正在进行的同步。 */
+  cancel_sync(): Promise<void>;
   hide_window(): Promise<void>;
   on(event: string, handler: Handler): Promise<UnlistenFn>;
   readonly kind: "tauri" | "browser";
@@ -94,6 +112,12 @@ const tauriApi: HostApi = {
   cancel_clone: () => tauriInvoke("cancel_clone"),
   get_git_changes: () => tauriInvoke("get_git_changes"),
   commit_changes: (message, paths) => tauriInvoke("commit_changes", { message, paths }),
+  get_sync_status: () => tauriInvoke("get_sync_status"),
+  redetect_sync_state: () => tauriInvoke("redetect_sync_state"),
+  pull_workspace: () => tauriInvoke("pull_workspace"),
+  push_workspace: () => tauriInvoke("push_workspace"),
+  sync_progress: () => tauriInvoke("sync_progress"),
+  cancel_sync: () => tauriInvoke("cancel_sync"),
   hide_window: () => tauriInvoke("hide_window"),
   on: async (event, handler) => {
     const { listen } = await import("@tauri-apps/api/event");
@@ -150,6 +174,17 @@ export const MOCK_CLONE_URL = "https://github.com/me/flashcast-config.git";
 export const MOCK_CLONE_BAD_URL = "https://github.com/me/not-found-config.git";
 export const MOCK_CLONE_SECRET_URL = "https://alice:sekret@github.com/me/flashcast-config.git";
 
+/**
+ * 模拟工作区的远端关系：已克隆的工作区才有远端记录，这里用它让同步区段
+ * 展示出分支、远端与上游（真实关系由宿主的设备本地表与仓库配置决定）。
+ */
+const MOCK_SYNC_REMOTE: WorkspaceRemote = {
+  name: "origin",
+  url: MOCK_CLONE_URL,
+  branch: "main",
+  upstream: "origin/main",
+};
+
 const IDLE_CLONE_PROGRESS: CloneProgress = {
   phase: "idle",
   receivedObjects: 0,
@@ -168,6 +203,65 @@ const IDLE_CLONE_PROGRESS: CloneProgress = {
 function looksLikeHotkey(value: string): boolean {
   return /^[A-Za-z0-9+]+$/.test(value.trim()) && value.includes("+");
 }
+
+const IDLE_SYNC_PROGRESS: SyncProgress = {
+  phase: "idle",
+  receivedObjects: 0,
+  totalObjects: 0,
+  receivedBytes: 0,
+  updates: 0,
+  message: null,
+};
+
+/**
+ * 浏览器模拟宿主可切换的同步场景。真实判定（脏工作区、分叉、冲突、
+ * 进行中操作、鉴权、离线）全部在 `flashcast-core::sync`，
+ * 由 `crates/flashcast-core/tests/workspace_sync.rs` 在真实仓库上验证。
+ *
+ * `auth` / `offline` 只影响**操作结果**，不出现在状态里：状态查询是纯本地的，
+ * 与真实宿主一样，只有真的发起网络操作才可能遇到鉴权或网络失败。
+ */
+type MockSyncScenario =
+  | "ready"
+  | "dirty"
+  | "diverged"
+  | "conflicts"
+  | "inProgress"
+  | "auth"
+  | "offline";
+
+/** 与宿主一致的中文指引（节选），用于浏览器检查断言「给出了可操作的下一步」。 */
+const MOCK_SYNC_BLOCKS: Record<Exclude<MockSyncScenario, "ready" | "auth" | "offline">, SyncBlock> = {
+  dirty: {
+    code: "dirtyWorktree",
+    label: "有未提交修改",
+    detail: "已暂存改动 + 未跟踪文件",
+    hint: "在「变更与提交」区段提交这些改动（或在外部 git commit / git stash），然后重新检测。处理完成后回到本应用点击「重新检测」即可恢复同步。",
+  },
+  diverged: {
+    code: "diverged",
+    label: "历史已分叉",
+    detail: "本地领先 1、落后 1",
+    hint: "本地与远端都有对方没有的提交，需要人工合并：在外部执行 git pull --no-rebase（或 git fetch 后 git merge / git rebase）解决，首版不提供内置三方合并编辑器，也绝不强推覆盖对方。处理完成后回到本应用点击「重新检测」即可恢复同步。",
+  },
+  conflicts: {
+    code: "conflicts",
+    label: "存在合并冲突",
+    detail: "memos/2026-10-01.md",
+    hint: "在外部编辑冲突文件并 git add，然后 git commit（合并）或 git merge --abort / git rebase --abort 放弃本次操作。处理完成后回到本应用点击「重新检测」即可恢复同步。",
+  },
+  inProgress: {
+    code: "operationInProgress",
+    label: "Git 操作进行中",
+    detail: "工作区正在进行变基（rebase），请先在外部完成或中止它，再创建提交",
+    hint: "先在外部完成（git commit）或中止（git merge --abort、git rebase --abort、git cherry-pick --abort）这个操作。处理完成后回到本应用点击「重新检测」即可恢复同步。",
+  },
+};
+
+const MOCK_AUTH_ERROR =
+  "鉴权失败：unexpected http status code: 401（鉴权失败：https 请在设置中为该主机填写访问令牌，或确认系统 git 的凭证 helper 可用）";
+const MOCK_OFFLINE_ERROR =
+  "网络不可用：Could not resolve host: github.com（请检查网络、代理与远端地址是否正确）";
 
 /**
  * 浏览器模拟宿主里的工作区变更样例：覆盖 UI 需要区分的状态
@@ -276,6 +370,18 @@ class MockHost implements HostApi {
   /** 模拟一次提交失败的中文原因；`null` 表示提交会成功。 */
   private commitError: string | null = null;
   private gitUnavailable = false;
+
+  // ---- 同步（浏览器模拟） ----
+  private syncScenario: MockSyncScenario = "ready";
+  private syncAhead = 0;
+  private syncBehind = 0;
+  private syncBusy = false;
+  private syncProgress: SyncProgress = IDLE_SYNC_PROGRESS;
+  /** 远端记录的主题与备忘录；拉取时按远端内容重新加载。 */
+  private theme: string | null = "dark";
+  private memos = ["memos/hello.md"];
+  /** 远端待拉取的内容（设置快捷键、主题、新增备忘录）。 */
+  private incoming: { hotkey: string; theme: string; memo: string } | null = null;
 
   private emit(event: string, payload?: unknown) {
     for (const handler of this.handlers.get(event) ?? []) {
@@ -564,6 +670,12 @@ class MockHost implements HostApi {
   }
 
   private link(path: string, remote: WorkspaceStatus["remote"] = null): WorkspaceStatus {
+    // 切换工作区后同步状态重新建立（真实宿主也会按新仓库重新探测）。
+    this.syncScenario = "ready";
+    this.syncAhead = 0;
+    this.syncBehind = 0;
+    this.incoming = null;
+    this.syncProgress = IDLE_SYNC_PROGRESS;
     this.workspace = {
       path,
       gitDir: `${path}/.git`,
@@ -702,6 +814,214 @@ class MockHost implements HostApi {
   /** 模拟工作区不是 Git 仓库。 */
   simulateGitUnavailable(unavailable: boolean): void {
     this.gitUnavailable = unavailable;
+  }
+
+  // ---- 同步（浏览器模拟，语义与 flashcast_core::sync 对齐） ----
+
+  /** 切换同步场景。 */
+  simulateSyncScenario(scenario: MockSyncScenario): void {
+    this.syncScenario = scenario;
+  }
+
+  /**
+   * 模拟远端新增一次提交：下一次拉取会快进，并把有效设置、主题与备忘录
+   * 「重新加载」成远端的内容（与宿主拉取后的行为一致）。
+   */
+  simulateRemoteCommit(hotkey = "Alt+Space"): void {
+    this.syncBehind = 1;
+    this.incoming = { hotkey, theme: "solarized", memo: "memos/remote-note.md" };
+  }
+
+  /** 模拟本地新增一次提交：下一次推送会把远端分支推到新提交。 */
+  simulateLocalCommit(): void {
+    this.syncAhead = 1;
+  }
+
+  /** 当前场景对应的拉取阻塞原因；鉴权与离线只有发起操作才会遇到。 */
+  private syncBlock(): SyncBlock | null {
+    if (this.workspace.path === null) {
+      return {
+        code: "noWorkspace",
+        label: "尚未关联工作区",
+        detail: "尚未关联配置工作区",
+        hint: "先在「配置工作区」区段选择或克隆一个配置工作区。",
+      };
+    }
+    if (this.syncScenario in MOCK_SYNC_BLOCKS) {
+      return MOCK_SYNC_BLOCKS[this.syncScenario as keyof typeof MOCK_SYNC_BLOCKS];
+    }
+    return null;
+  }
+
+  private syncStatusSnapshot(): SyncStatus {
+    const blocking = this.syncBlock();
+    // 推送只搬运已提交对象：未提交修改不阻塞推送。
+    const pushBlocking = blocking?.code === "dirtyWorktree" ? null : blocking;
+    const linked = this.workspace.path !== null;
+    const remote = this.workspace.remote ?? (linked ? MOCK_SYNC_REMOTE : null);
+    // 分叉意味着两边各有对方没有的提交。
+    const diverged = this.syncScenario === "diverged";
+    const ahead = diverged ? 1 : this.syncAhead;
+    const behind = diverged ? 1 : this.syncBehind;
+    return {
+      repository: linked,
+      branch: linked ? "main" : null,
+      detached: false,
+      remote,
+      remoteName: remote?.name ?? null,
+      remoteUrl: remote?.url ?? null,
+      upstream: remote?.upstream ?? null,
+      ahead,
+      behind,
+      tracking: linked,
+      dirty: this.syncScenario === "dirty",
+      staged: this.syncScenario === "dirty",
+      unstaged: this.syncScenario === "conflicts",
+      untracked: this.syncScenario === "dirty",
+      conflicted: this.syncScenario === "conflicts",
+      state:
+        this.syncScenario === "inProgress" ? MOCK_SYNC_BLOCKS.inProgress.detail : null,
+      canPull: blocking === null,
+      canPush: pushBlocking === null,
+      nothingToPush: pushBlocking === null && ahead === 0,
+      blocking,
+      pushBlocking,
+      busy: this.syncBusy,
+      error: null,
+    };
+  }
+
+  async get_sync_status(): Promise<SyncStatus> {
+    return this.syncStatusSnapshot();
+  }
+
+  async redetect_sync_state(): Promise<SyncStatus> {
+    return this.syncStatusSnapshot();
+  }
+
+  async pull_workspace(): Promise<PullOutcome> {
+    if (this.workspace.path === null) {
+      throw "尚未关联配置工作区，无法同步";
+    }
+    const blocking = this.syncBlock();
+    if (blocking) {
+      throw `${blocking.label}：${blocking.detail}。${blocking.hint}`;
+    }
+    if (this.syncScenario === "auth") {
+      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "failed", message: MOCK_AUTH_ERROR };
+      throw MOCK_AUTH_ERROR;
+    }
+    if (this.syncScenario === "offline") {
+      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "failed", message: MOCK_OFFLINE_ERROR };
+      throw MOCK_OFFLINE_ERROR;
+    }
+
+    this.syncBusy = true;
+    try {
+      for (const stage of [
+        { phase: "fetching" as const, updates: 3, receivedObjects: 12, totalObjects: 40 },
+        { phase: "fetching" as const, updates: 7, receivedObjects: 40, totalObjects: 40 },
+      ]) {
+        this.syncProgress = {
+          ...IDLE_SYNC_PROGRESS,
+          phase: stage.phase,
+          updates: stage.updates,
+          receivedObjects: stage.receivedObjects,
+          totalObjects: stage.totalObjects,
+        };
+        await new Promise((resolve) => setTimeout(resolve, 160));
+      }
+      const path = `${this.workspace.path}/settings.toml`;
+      if (this.syncBehind > 0) {
+        this.syncBehind = 0;
+        this.syncAhead = 0;
+        const incoming = this.incoming;
+        if (incoming) {
+          // 与宿主一致：拉取后重新加载生效设置，并重新读取主题与备忘录。
+          this.settings = { ...this.settings, hotkey: incoming.hotkey };
+          this.theme = incoming.theme;
+          this.memos = [...this.memos, incoming.memo];
+        }
+        this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "done", updates: 8, message: "拉取完成" };
+        return {
+          result: {
+            kind: "fastForwarded",
+            from: "3f9c1a2e0f9c4b1e8a7d6c5b4a39281706f5e4d3",
+            to: "8b2d4e1c9a7f3b5d2e6c8a0f4b7d9e1c3a5f7024",
+            shortTo: "8b2d4e1",
+            commits: 1,
+          },
+          status: this.syncStatusSnapshot(),
+          reload: { path, applied: this.incoming !== null, settings: this.settings, error: null },
+          theme: this.theme,
+          memos: this.memos,
+          message: "已快进拉取到 8b2d4e1，共 1 个提交",
+        };
+      }
+      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "done", updates: 8, message: "已是最新" };
+      return {
+        result: { kind: "upToDate" },
+        status: this.syncStatusSnapshot(),
+        reload: { path, applied: false, settings: this.settings, error: null },
+        theme: this.theme,
+        memos: this.memos,
+        message: "远端没有新的提交，本地已是最新",
+      };
+    } finally {
+      this.syncBusy = false;
+    }
+  }
+
+  async push_workspace(): Promise<PushOutcome> {
+    if (this.workspace.path === null) {
+      throw "尚未关联配置工作区，无法同步";
+    }
+    const blocking = this.syncBlock();
+    // 与宿主一致：未提交修改不阻塞推送。
+    if (blocking && blocking.code !== "dirtyWorktree") {
+      throw `${blocking.label}：${blocking.detail}。${blocking.hint}`;
+    }
+    if (this.syncScenario === "auth") {
+      throw MOCK_AUTH_ERROR;
+    }
+    if (this.syncScenario === "offline") {
+      throw MOCK_OFFLINE_ERROR;
+    }
+    if (this.syncAhead === 0) {
+      throw "没有需要推送的提交：本地与远端已经一致";
+    }
+
+    this.syncBusy = true;
+    try {
+      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "pushing", updates: 2 };
+      await new Promise((resolve) => setTimeout(resolve, 240));
+      this.syncAhead = 0;
+      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "done", updates: 4, message: "推送完成" };
+      return {
+        branch: "main",
+        remote: "origin",
+        updated: [
+          {
+            local: "refs/heads/main",
+            remote: "refs/heads/main",
+            localOid: "8b2d4e1c9a7f3b5d2e6c8a0f4b7d9e1c3a5f7024",
+            remoteOid: "3f9c1a2e0f9c4b1e8a7d6c5b4a39281706f5e4d3",
+          },
+        ],
+        status: this.syncStatusSnapshot(),
+        message: "已推送到 origin/main（1 个引用）",
+      };
+    } finally {
+      this.syncBusy = false;
+    }
+  }
+
+  async sync_progress(): Promise<SyncProgress> {
+    return this.syncProgress;
+  }
+
+  async cancel_sync(): Promise<void> {
+    this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "cancelled", message: "同步已取消，未改动任何内容" };
   }
 
   async hide_window(): Promise<void> {
