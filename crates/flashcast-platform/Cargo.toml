@@ -13,11 +13,38 @@ fake = []
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
+serde_json = { workspace = true }
+# 纯 Rust 的 .lnk 解析器：与操作系统无关，因此 Windows 的开始菜单解析逻辑
+# 可以在 Linux 上被真实夹具测试（见 tests/windows_fixture.rs）。
+# 必须保留默认 feature `serde`：0.6.4 的源码无条件使用 `#[serde(skip)]`，
+# 关闭默认 feature 会直接编译失败。
+lnk = "0.6.4"
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+global-hotkey = "0.8.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-global-hotkey = "0.8.0"
 # 与 global-hotkey 依赖的 x11rb 保持同一版本，避免重复编译两份。
 x11rb = "0.13.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# 与 Tauri 2.12 依赖的 `windows` 版本一致，feature 统一后共用同一份编译。
+# 每个 feature 是 Win32 命名空间叶子；下面的注释写明本 crate 实际用到的 API。
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation", # HWND、HINSTANCE、BOOL、SIZE
+    "Win32_UI_Shell", # IShellLinkW、ShellExecuteW、SHCreateItemFromParsingName、IShellItemImageFactory
+    "Win32_UI_Shell_Common", # ITEMIDLIST（IShellLinkW 的 GetIDList 需要）
+    "Win32_UI_WindowsAndMessaging", # GetForegroundWindow、SetForegroundWindow、ShowWindow、GetWindowTextW
+    "Win32_UI_Input_KeyboardAndMouse", # GetActiveWindow、SetActiveWindow、SetFocus
+    "Win32_System_Com", # CoInitializeEx、CoCreateInstance、IPersistFile
+    "Win32_System_Threading", # OpenProcess、QueryFullProcessImageNameW、AttachThreadInput
+    "Win32_Storage_FileSystem", # WIN32_FIND_DATAW（IShellLinkW::GetPath 的 pfd 参数）
+    "Win32_Graphics_Gdi", # HBITMAP、GetDIBits、GetDC（GetImage 在缺少该 feature 时是空槽）
+] }
+# 只读注册表，不需要 9 MB 的 `windows` bindings；用 wow64_32/wow64_64 视图，
+# 而不是拼接 WOW6432Node 字符串。
+windows-registry = "0.100.0"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [[bin]]
 name = "flashcast-platform-check"
