@@ -7,6 +7,7 @@
 //! 本 crate 不依赖 Tauri，因此可以在没有桌面会话的 CI runner 上完整测试。
 
 pub mod device;
+pub mod git;
 pub mod host;
 pub mod model;
 pub mod plugin;
@@ -17,6 +18,7 @@ pub mod watch;
 pub mod workspace;
 
 pub use device::{DeviceError, DeviceStore, DEVICE_STATE_FILE, KEY_WORKSPACE_PATH};
+pub use git::{ChangedFile, CommitOutcome, GitError, WorkspaceChanges, MAX_DIFF_CHARS};
 pub use host::{quick_access_commands, Host, HostDeps};
 pub use model::{
     ActionOutcome, ActionStatus, BackOutcome, DefaultAction, ItemKind, MatchTier, Notice,

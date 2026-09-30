@@ -9,10 +9,13 @@ import type {
   ActionOutcome,
   BackView,
   Capabilities,
+  ChangedFile,
+  CommitOutcome,
   QueryView,
   Settings,
   StatusView,
   UnlistenFn,
+  WorkspaceChanges,
   WorkspaceEvent,
   WorkspaceStatus,
 } from "./types";
@@ -40,6 +43,10 @@ export interface HostApi {
   select_workspace(path: string): Promise<WorkspaceStatus>;
   /** 在空目录初始化工作区与 Git 仓库。失败时 reject，原因为中文。 */
   init_workspace(path: string): Promise<WorkspaceStatus>;
+  /** 当前工作区的 Git 变更：状态分类、分支与逐文件真实差异。 */
+  get_git_changes(): Promise<WorkspaceChanges>;
+  /** 创建提交；提交范围只包含显式传入的路径。失败时 reject，原因为中文。 */
+  commit_changes(message: string, paths: string[]): Promise<CommitOutcome>;
   hide_window(): Promise<void>;
   on(event: string, handler: Handler): Promise<UnlistenFn>;
   readonly kind: "tauri" | "browser";
@@ -66,6 +73,8 @@ const tauriApi: HostApi = {
   get_workspace: () => tauriInvoke("get_workspace"),
   select_workspace: (path) => tauriInvoke("select_workspace", { path }),
   init_workspace: (path) => tauriInvoke("init_workspace", { path }),
+  get_git_changes: () => tauriInvoke("get_git_changes"),
+  commit_changes: (message, paths) => tauriInvoke("commit_changes", { message, paths }),
   hide_window: () => tauriInvoke("hide_window"),
   on: async (event, handler) => {
     const { listen } = await import("@tauri-apps/api/event");
@@ -122,6 +131,74 @@ function looksLikeHotkey(value: string): boolean {
   return /^[A-Za-z0-9+]+$/.test(value.trim()) && value.includes("+");
 }
 
+/**
+ * 浏览器模拟宿主里的工作区变更样例：覆盖 UI 需要区分的状态
+ * （未暂存 / 已暂存 + 未暂存 / 未跟踪）与真实差异文本。
+ * 真实的 Git 行为由 `crates/flashcast-core/tests/workspace_git.rs` 在真实仓库上验证。
+ */
+const MOCK_CHANGES: ChangedFile[] = [
+  {
+    path: "settings.toml",
+    code: " M",
+    statusLabel: "未暂存修改",
+    staged: false,
+    unstaged: true,
+    untracked: false,
+    conflicted: false,
+    diff: [
+      "diff --git a/settings.toml b/settings.toml",
+      "index 1f2c3ab..9d4e5f6 100644",
+      "--- a/settings.toml",
+      "+++ b/settings.toml",
+      "@@ -1,2 +1,2 @@",
+      '-hotkey = "Ctrl+Alt+Space"',
+      '+hotkey = "Super+Space"',
+      " quickAccessLimit = 6",
+      "",
+    ].join("\n"),
+    diffTruncated: false,
+  },
+  {
+    path: "theme.json",
+    code: "MM",
+    statusLabel: "已暂存修改 + 未暂存修改",
+    staged: true,
+    unstaged: true,
+    untracked: false,
+    conflicted: false,
+    diff: [
+      "diff --git a/theme.json b/theme.json",
+      "index 3401802..2735556 100644",
+      "--- a/theme.json",
+      "+++ b/theme.json",
+      "@@ -1 +1 @@",
+      '-{"theme":"dark"}',
+      '+{"theme":"dark","font":"serif"}',
+      "",
+    ].join("\n"),
+    diffTruncated: false,
+  },
+  {
+    path: "memos/2026-10-01.md",
+    code: "??",
+    statusLabel: "未跟踪（新文件）",
+    staged: false,
+    unstaged: false,
+    untracked: true,
+    conflicted: false,
+    diff: [
+      "diff --git a/memos/2026-10-01.md b/memos/2026-10-01.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/memos/2026-10-01.md",
+      "@@ -0,0 +1 @@",
+      "+备忘录内容：今天做的事",
+      "",
+    ].join("\n"),
+    diffTruncated: false,
+  },
+];
+
 class MockHost implements HostApi {
   readonly kind = "browser" as const;
   private seq = 0;
@@ -148,6 +225,13 @@ class MockHost implements HostApi {
   /** 最近一次请求启动的条目 id（含失败样例），供浏览器交互检查脚本断言「是否真的执行了」。 */
   lastLaunched: string | null = null;
   hidden = false;
+
+  // ---- Git 变更与提交（浏览器模拟） ----
+  private gitChanges: ChangedFile[] = MOCK_CHANGES.map((file) => ({ ...file }));
+  private commitCount = 0;
+  /** 模拟一次提交失败的中文原因；`null` 表示提交会成功。 */
+  private commitError: string | null = null;
+  private gitUnavailable = false;
 
   private emit(event: string, payload?: unknown) {
     for (const handler of this.handlers.get(event) ?? []) {
@@ -403,6 +487,95 @@ class MockHost implements HostApi {
         registered: true,
       });
     }
+  }
+
+  async get_git_changes(): Promise<WorkspaceChanges> {
+    if (this.workspace.path === null || this.gitUnavailable) {
+      return {
+        repository: false,
+        branch: null,
+        detached: false,
+        hasChanges: false,
+        diffBase: "",
+        files: [],
+        state: null,
+        error: this.gitUnavailable
+          ? `当前工作区不是 Git 仓库，无法提交：${this.workspace.path ?? MOCK_REPO}`
+          : null,
+      };
+    }
+    return this.changes();
+  }
+
+  async commit_changes(message: string, paths: string[]): Promise<CommitOutcome> {
+    if (this.workspace.path === null) {
+      throw "尚未关联配置工作区，无法执行 Git 操作";
+    }
+    if (this.commitError) {
+      throw this.commitError;
+    }
+    if (message.trim().length === 0) {
+      throw "提交说明不能为空";
+    }
+    if (paths.length === 0) {
+      throw "没有选择要提交的文件：提交范围只包含你显式勾选的路径";
+    }
+    const known = new Set(this.gitChanges.map((file) => file.path));
+    for (const path of paths) {
+      if (!known.has(path)) {
+        throw `所选路径不在当前变更列表中，已拒绝提交：${path}`;
+      }
+    }
+    if (this.gitChanges.length === 0) {
+      throw "没有可提交的变更";
+    }
+    this.commitCount += 1;
+    const short = ["3f9c1a2", "8b2d4e1", "c4a70f9"][(this.commitCount - 1) % 3];
+    // 与宿主一致：提交后这些路径从变更列表消失（未勾选的改动仍然保留）。
+    this.gitChanges = this.gitChanges.filter((file) => !paths.includes(file.path));
+    return {
+      oid: `${short}${"0".repeat(33)}`,
+      short,
+      message: message.trim(),
+      authorName: "Flashcast 模拟身份",
+      authorEmail: "mock@example.invalid",
+      paths: [...paths],
+      changes: this.changes(),
+    };
+  }
+
+  private changes(): WorkspaceChanges {
+    return {
+      repository: true,
+      branch: "main",
+      detached: false,
+      hasChanges: this.gitChanges.length > 0,
+      diffBase: "HEAD (3f9c1a2) → 工作区（含已暂存改动）",
+      files: this.gitChanges.map((file) => ({ ...file })),
+      state: null,
+      error: null,
+    };
+  }
+
+  /** 让随后的提交以给定的中文原因失败，用于检查错误反馈（一次设定，显式清除）。 */
+  simulateCommitError(kind: "identity" | "locked" | "abnormal" | "detached" | "nothing"): void {
+    this.commitError = {
+      identity: "Git 用户身份未配置，请先设置 user.name 与 user.email",
+      locked: `Git 索引被占用（${MOCK_REPO}/.git/index.lock），可能有其它 Git 操作正在进行，请稍后重试`,
+      abnormal: "工作区正在进行合并（merge），请先在外部完成或中止它，再创建提交",
+      detached:
+        "工作区处于分离 HEAD 状态（HEAD 未指向任何分支），无法在分支上创建提交；请先在外部切换回分支",
+      nothing: "没有可提交的变更",
+    }[kind];
+  }
+
+  clearCommitError(): void {
+    this.commitError = null;
+  }
+
+  /** 模拟工作区不是 Git 仓库。 */
+  simulateGitUnavailable(unavailable: boolean): void {
+    this.gitUnavailable = unavailable;
   }
 
   async hide_window(): Promise<void> {

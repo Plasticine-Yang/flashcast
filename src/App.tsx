@@ -6,6 +6,7 @@ import type {
   QueryView,
   Settings,
   StatusView,
+  WorkspaceChanges,
   WorkspaceEvent,
   WorkspaceStatus,
 } from "./types";
@@ -47,6 +48,11 @@ export default function App() {
   const [settingsMessage, setSettingsMessage] = useState<SettingsMessage | null>(null);
   const [workspaceAlert, setWorkspaceAlert] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
+  // 变更与提交状态。提交范围完全由用户勾选的路径决定。
+  const [changes, setChanges] = useState<WorkspaceChanges | null>(null);
+  const [commitMessage, setCommitMessage] = useState("");
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [diffPath, setDiffPath] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const appliedSeq = useRef(0);
@@ -110,6 +116,8 @@ export default function App() {
           setWorkspace(event.status);
           setSettings(event.settings);
           setWorkspaceAlert(event.status.error);
+          // 工作区被外部改动后，变更视图必须按仓库真实状态重新读取。
+          void loadChanges();
           if (event.reload?.error) {
             setSettingsMessage({ level: "error", text: event.reload.error });
           } else if (event.reload?.applied) {
@@ -143,6 +151,77 @@ export default function App() {
     setScreen("settings");
     void api.get_workspace().then(setWorkspace);
     void api.get_settings().then(setSettings);
+    void loadChanges();
+  };
+
+  /**
+   * 应用一份变更快照：勾选与差异展示都收敛到仍然存在的路径上，
+   * 避免提交后残留指向已消失文件的勾选。
+   */
+  const applyChanges = (next: WorkspaceChanges) => {
+    setChanges(next);
+    setSelectedPaths((current) =>
+      current.filter((path) => next.files.some((file) => file.path === path)),
+    );
+    setDiffPath((current) =>
+      current && next.files.some((file) => file.path === current)
+        ? current
+        : (next.files[0]?.path ?? null),
+    );
+  };
+
+  /** 读取工作区 Git 变更。失败只影响这一区段，不影响设置与备忘录。 */
+  const loadChanges = async () => {
+    try {
+      applyChanges(await api.get_git_changes());
+    } catch (error) {
+      setSettingsMessage({ level: "error", text: String(error) });
+    }
+  };
+
+  const handleTogglePath = (path: string) => {
+    setSelectedPaths((current) =>
+      current.includes(path) ? current.filter((item) => item !== path) : [...current, path],
+    );
+    setDiffPath(path);
+  };
+
+  const handleToggleAllPaths = () => {
+    if (!changes) {
+      return;
+    }
+    setSelectedPaths((current) =>
+      current.length === changes.files.length ? [] : changes.files.map((file) => file.path),
+    );
+  };
+
+  const handleRefreshChanges = () => {
+    void runSettingsAction(loadChanges, () => {
+      setSettingsMessage({ level: "info", text: "已按仓库当前状态重新读取变更" });
+    });
+  };
+
+  /**
+   * 创建提交：范围只包含勾选的路径。成功与失败都以仓库真实状态刷新变更视图，
+   * 失败原因原样展示，用户的修改不会因此丢失。
+   */
+  const handleCommit = async () => {
+    setSettingsBusy(true);
+    try {
+      const outcome = await api.commit_changes(commitMessage, selectedPaths);
+      applyChanges(outcome.changes);
+      setCommitMessage("");
+      setSettingsMessage({
+        level: "info",
+        text: `已创建提交 ${outcome.short}，包含 ${outcome.paths.length} 个文件：${outcome.paths.join("、")}`,
+      });
+    } catch (error) {
+      setSettingsMessage({ level: "error", text: String(error) });
+      // 失败后不猜测仓库状态，重新读取一次。
+      await loadChanges();
+    } finally {
+      setSettingsBusy(false);
+    }
   };
 
   const closeSettings = () => {
@@ -176,6 +255,7 @@ export default function App() {
             ? `已关联 Git 仓库：${next.path}`
             : `已关联目录（不是 Git 仓库）：${next.path}`,
         });
+        void loadChanges();
       },
     );
   };
@@ -190,6 +270,7 @@ export default function App() {
           level: "info",
           text: `已初始化工作区与 Git 仓库：${next.path}`,
         });
+        void loadChanges();
       },
     );
   };
@@ -351,9 +432,19 @@ export default function App() {
           message={settingsMessage}
           busy={settingsBusy}
           onBack={closeSettings}
+          changes={changes}
+          commitMessage={commitMessage}
+          selectedPaths={selectedPaths}
+          diffPath={diffPath}
           onSelectWorkspace={handleSelectWorkspace}
           onInitWorkspace={handleInitWorkspace}
           onSaveHotkey={handleSaveHotkey}
+          onTogglePath={handleTogglePath}
+          onToggleAllPaths={handleToggleAllPaths}
+          onSelectDiff={setDiffPath}
+          onCommitMessageChange={setCommitMessage}
+          onCommit={() => void handleCommit()}
+          onRefreshChanges={handleRefreshChanges}
         />
       ) : (
         <>

@@ -17,6 +17,7 @@ use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
 
 use crate::device::DeviceStore;
+use crate::git::{CommitOutcome, GitError, WorkspaceChanges};
 use crate::model::{
     ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview,
     QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES, COMMAND_PREFIX,
@@ -208,6 +209,40 @@ impl Host {
         if let Some(watcher) = lock(&self.watch).as_ref() {
             watcher.set_git_busy(busy);
         }
+    }
+
+    /// 当前工作区的 Git 变更：状态分类、分支与逐文件真实差异（ADR §3 的补充入口）。
+    ///
+    /// 只读，不修改仓库，也不改变宿主状态。未关联工作区时返回
+    /// [`WorkspaceChanges::unlinked`]；工作区不是 Git 仓库或读取失败时，
+    /// 结果里的 `error` 给出中文原因。
+    pub fn workspace_changes(&self) -> WorkspaceChanges {
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return WorkspaceChanges::unlinked(),
+        };
+        crate::git::changes(&workspace)
+    }
+
+    /// 创建一次 Git 提交，范围**只包含** `paths` 里显式给出的路径（ADR §3 的补充入口）。
+    ///
+    /// 提交前把工作区标记为「Git 操作进行中」，期间丢弃文件监听事件；提交后由调用方
+    /// 用返回值里的 `changes`（按真实仓库状态重新读取）刷新界面。提交说明为空、
+    /// 未选择路径、身份未配置、工作区异常或索引被占用时返回中文原因，
+    /// 且不产生提交、不改动工作区文件。
+    pub fn commit_workspace(
+        &self,
+        message: &str,
+        paths: &[String],
+    ) -> Result<CommitOutcome, GitError> {
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return Err(GitError::NoWorkspace),
+        };
+        self.set_git_busy(true);
+        let result = crate::git::commit(&workspace, message, paths);
+        self.set_git_busy(false);
+        result
     }
 
     /// 已应用的外部重载次数。

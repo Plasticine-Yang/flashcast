@@ -186,6 +186,193 @@ pub fn fast_settings() -> Settings {
 }
 
 // ---------------------------------------------------------------------------
+// 真实 Git 仓库夹具（ticket 15）
+// ---------------------------------------------------------------------------
+
+/// 测试用的固定提交身份。写进**仓库本地**配置，因此不依赖运行环境的 git 配置。
+pub const TEST_AUTHOR_NAME: &str = "Flashcast 测试";
+pub const TEST_AUTHOR_EMAIL: &str = "flashcast-test@example.invalid";
+
+/// 在临时目录上初始化仓库、写入给定文件并提交一次，返回仓库根目录。
+///
+/// 提交身份写在仓库本地配置里，测试因此不受全局 `~/.gitconfig` 影响。
+pub fn git_repo_with_commit(prefix: &str, files: &[(&str, &str)]) -> PathBuf {
+    let dir = real_git_repo(prefix);
+    set_identity(&dir, TEST_AUTHOR_NAME, TEST_AUTHOR_EMAIL);
+    for (rel, content) in files {
+        git_write(&dir, rel, content);
+    }
+    git_commit_all(&dir, "初始提交");
+    dir
+}
+
+/// 设置仓库本地的提交身份。
+pub fn set_identity(repo: &Path, name: &str, email: &str) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let mut config = repository.config().expect("读取测试仓库配置");
+    config.set_str("user.name", name).expect("写入 user.name");
+    config
+        .set_str("user.email", email)
+        .expect("写入 user.email");
+}
+
+/// 清空仓库本地的提交身份（写入空值，覆盖全局配置）。
+pub fn clear_identity(repo: &Path) {
+    set_identity(repo, "", "");
+}
+
+/// 写文件（自动创建父目录）。
+pub fn git_write(repo: &Path, rel: &str, content: &str) {
+    let path = repo.join(rel);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("创建测试文件父目录");
+    }
+    std::fs::write(&path, content).expect("写入测试文件");
+}
+
+/// 删除文件。
+pub fn git_remove(repo: &Path, rel: &str) {
+    std::fs::remove_file(repo.join(rel)).expect("删除测试文件");
+}
+
+/// 把给定路径加入索引（`git add`）。
+pub fn git_stage(repo: &Path, rel: &str) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let mut index = repository.index().expect("读取索引");
+    index
+        .add_path(Path::new(rel))
+        .unwrap_or_else(|error| panic!("暂存 {rel} 失败：{error}"));
+    index.write().expect("写入索引");
+}
+
+/// 把所有工作区改动提交一次，返回提交 oid。
+pub fn git_commit_all(repo: &Path, message: &str) -> git2::Oid {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let mut index = repository.index().expect("读取索引");
+    index
+        .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+        .expect("暂存全部文件");
+    index.write().expect("写入索引");
+    let tree_oid = index.write_tree().expect("写出树");
+    let tree = repository.find_tree(tree_oid).expect("读取树");
+    let signature = repository
+        .signature()
+        .expect("测试仓库必须配置了提交身份");
+    let parents = match repository.head() {
+        Ok(head) => vec![head.peel_to_commit().expect("读取 HEAD 提交")],
+        Err(_) => Vec::new(),
+    };
+    let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+    repository
+        .commit(Some("HEAD"), &signature, &signature, message, &tree, &parent_refs)
+        .expect("创建测试提交")
+}
+
+/// 当前 HEAD 提交 oid。
+pub fn git_head_oid(repo: &Path) -> git2::Oid {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let head = repository.head().expect("读取 HEAD");
+    let commit = head.peel_to_commit().expect("HEAD 必须指向提交");
+    commit.id()
+}
+
+/// 某个提交的树里所有文件路径（仓库相对，`/` 分隔，已排序）。
+pub fn git_tree_paths(repo: &Path, commit: git2::Oid) -> Vec<String> {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let commit = repository.find_commit(commit).expect("读取提交");
+    let tree = commit.tree().expect("读取提交树");
+    let mut found = Vec::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+        if entry.kind() == Some(git2::ObjectType::Blob) {
+            found.push(format!("{dir}{}", entry.name().unwrap_or_default()));
+        }
+        git2::TreeWalkResult::Ok
+    })
+    .expect("遍历提交树");
+    found.sort();
+    found
+}
+
+/// 读取提交里某个文件的内容；不存在返回 `None`。
+pub fn git_show(repo: &Path, commit: git2::Oid, rel: &str) -> Option<String> {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let commit = repository.find_commit(commit).expect("读取提交");
+    let tree = commit.tree().expect("读取提交树");
+    let entry = tree.get_path(Path::new(rel)).ok()?;
+    let blob = repository.find_blob(entry.id()).ok()?;
+    Some(String::from_utf8_lossy(blob.content()).into_owned())
+}
+
+/// 索引文件的原始字节。用于证明提交过程没有破坏用户已有的暂存状态。
+pub fn git_index_bytes(repo: &Path) -> Vec<u8> {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let path = repository.path().join("index");
+    std::fs::read(&path).expect("索引文件必须存在")
+}
+
+/// 提交的作者/提交者身份。
+pub fn git_commit_signature(repo: &Path, commit: git2::Oid) -> (String, String, usize) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let commit = repository.find_commit(commit).expect("读取提交");
+    let author = commit.author();
+    (
+        author.name().unwrap_or_default().to_string(),
+        author.email().unwrap_or_default().to_string(),
+        commit.parent_count(),
+    )
+}
+
+/// 在 gitdir 下放一个标记文件或锁文件（例如 `index.lock`、`MERGE_HEAD`）。
+pub fn git_put_marker(repo: &Path, rel: &str, content: &str) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let path = repository.path().join(rel);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("创建 gitdir 子目录");
+    }
+    std::fs::write(&path, content).expect("写入 gitdir 标记文件");
+}
+
+/// 删除 gitdir 下的标记文件。
+pub fn git_remove_marker(repo: &Path, rel: &str) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let _ = std::fs::remove_file(repository.path().join(rel));
+}
+
+/// 删除 gitdir 下的目录（例如 `rebase-merge`）。
+pub fn git_remove_dir(repo: &Path, rel: &str) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let _ = std::fs::remove_dir_all(repository.path().join(rel));
+}
+
+/// 当前索引里某个路径的 stage 0 条目 oid。
+pub fn git_index_oid(repo: &Path, rel: &str) -> Option<git2::Oid> {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let index = repository.index().expect("读取索引");
+    index.get_path(Path::new(rel), 0).map(|entry| entry.id)
+}
+
+/// 索引里某个路径 stage 0 条目的**内容**；不在索引里返回 `None`。
+pub fn git_index_blob(repo: &Path, rel: &str) -> Option<String> {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let index = repository.index().expect("读取索引");
+    let entry = index.get_path(Path::new(rel), 0)?;
+    let blob = repository.find_blob(entry.id).ok()?;
+    Some(String::from_utf8_lossy(blob.content()).into_owned())
+}
+
+/// 当前 HEAD 指向的引用名（例如 `refs/heads/main`）。
+pub fn git_head_ref(repo: &Path) -> String {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let reference = repository.find_reference("HEAD").expect("读取 HEAD 引用");
+    reference
+        .symbolic_target()
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .to_string()
+}
+
+// ---------------------------------------------------------------------------
 // 插件替身
 // ---------------------------------------------------------------------------
 
