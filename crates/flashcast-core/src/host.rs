@@ -17,6 +17,7 @@ use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
 
 use crate::device::DeviceStore;
+use crate::git::WorkspaceChanges;
 use crate::model::{
     ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview,
     QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES, COMMAND_PREFIX,
@@ -206,6 +207,19 @@ impl Host {
         if let Some(watcher) = lock(&self.watch).as_ref() {
             watcher.set_git_busy(busy);
         }
+    }
+
+    /// 当前工作区的 Git 变更：状态分类、分支与逐文件真实差异（ADR §3 的补充入口）。
+    ///
+    /// 只读，不修改仓库，也不改变宿主状态。未关联工作区时返回
+    /// [`WorkspaceChanges::unlinked`]；工作区不是 Git 仓库或读取失败时，
+    /// 结果里的 `error` 给出中文原因。
+    pub fn workspace_changes(&self) -> WorkspaceChanges {
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return WorkspaceChanges::unlinked(),
+        };
+        crate::git::changes(&workspace)
     }
 
     /// 已应用的外部重载次数。
