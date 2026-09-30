@@ -114,7 +114,7 @@ class MockHost implements HostApi {
     pluginTimeoutMs: 400,
     disabledPlugins: [],
   };
-  /** 最近一次「启动失败」的条目 id，供检查脚本断言。 */
+  /** 最近一次请求启动的条目 id（含失败样例），供浏览器交互检查脚本断言「是否真的执行了」。 */
   lastLaunched: string | null = null;
   hidden = false;
 
@@ -223,6 +223,19 @@ class MockHost implements HostApi {
     }
     this.selection = Math.min(this.selection, Math.max(0, this.items.length - 1));
     return this.response();
+  }
+
+  async execute(itemId: string): Promise<ActionOutcome> {
+    // 记录本次请求，浏览器交互检查脚本据此判断回车是否真的触发了执行。
+    this.lastLaunched = itemId;
+    const app = MOCK_APPS.find((candidate) => itemId === `app:${candidate.id}`);
+    if (app?.failsToLaunch) {
+      return {
+        status: "failed",
+        message: `无法启动「${app.title}」：浏览器模拟宿主中的失败样例`,
+      };
+    }
+    return { status: "done", message: null };
   }
 
   async move_selection(delta: number): Promise<QueryView> {
