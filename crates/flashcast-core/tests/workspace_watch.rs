@@ -196,8 +196,9 @@ fn a_duplicate_event_with_unchanged_content_is_suppressed() {
 
     rewrite_settings_unchanged(&repo);
 
+    // 重复记录若被放行，去抖窗口 500ms 后就会到达，`QUIET` 足够看到它。
     assert!(
-        host.wait_for_workspace_change(WAIT).is_none(),
+        host.wait_for_workspace_change(QUIET).is_none(),
         "内容未变化的重复事件记录不得产生重载"
     );
     assert_eq!(host.workspace_reloads(), 0, "内容未变化不算重载");
