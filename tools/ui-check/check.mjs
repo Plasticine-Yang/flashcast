@@ -31,6 +31,20 @@ const DEFAULT_URL = "http://localhost:1420";
 const CHROME_PATH = process.env.CHROME_PATH || "/usr/bin/google-chrome";
 const INPUT = '[data-testid="search-input"]';
 const ROW = '[data-testid="result-item"]';
+const SETTINGS_BUTTON = '[data-testid="open-settings"]';
+const SETTINGS_SCREEN = '[data-testid="settings-screen"]';
+const WORKSPACE_PATH_INPUT = '[data-testid="workspace-path-input"]';
+const WORKSPACE_PATH_VALUE = '[data-testid="workspace-path-value"]';
+const WORKSPACE_VALIDITY = '[data-testid="workspace-validity"]';
+const SETTINGS_MESSAGE = '[data-testid="settings-message"]';
+const HOTKEY_INPUT = '[data-testid="hotkey-input"]';
+const HOTKEY_STATUS = '[data-testid="hotkey-status"]';
+
+// 浏览器模拟宿主认得的路径（见 src/api.ts）。
+const MOCK_REPO = "/home/user/.config/flashcast";
+const MOCK_BROKEN_REPO = "/home/user/broken-repo";
+const MOCK_NEW_DIR = "/home/user/flashcast-config";
+const MOCK_NON_EMPTY_DIR = "/home/user/Documents";
 
 const lines = [];
 function log(line) {
@@ -326,6 +340,170 @@ async function main() {
       assert(hovered.selected === false, "被悬停的行被标记为选中");
       const file = await shot(page, "06-hover-keeps-selection.png");
       return `悬停第 ${target.index + 1} 行（${target.id}），选中仍为第 ${after.index + 1} 行，截图 ${file}`;
+    });
+
+    // 7. 从启动器进入设置页，关联一个现有本地 Git 仓库。
+    await check("设置页可关联本地 Git 仓库", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+
+      const before = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      assert(
+        before.includes("尚未关联"),
+        `初始状态应显示尚未关联工作区：${before}`,
+      );
+      const unlinked = await shot(page, "07-settings-unlinked.png");
+
+      await page.fill(WORKSPACE_PATH_INPUT, MOCK_REPO);
+      await page.click('[data-testid="workspace-select"]');
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: WORKSPACE_VALIDITY, expected: "已关联 Git 仓库" },
+      );
+      const linked = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      assert(linked === MOCK_REPO, `当前工作区应为 ${MOCK_REPO}，实际 ${linked}`);
+      const settingsFile = (
+        await page.textContent('[data-testid="workspace-settings-file"]')
+      ).trim();
+      assert(
+        settingsFile.endsWith("settings.toml"),
+        `设置文件路径不对：${settingsFile}`,
+      );
+      const file = await shot(page, "08-settings-workspace-linked.png");
+      return `未关联 → ${linked}（${settingsFile}），截图 ${unlinked} / ${file}`;
+    });
+
+    // 8. 目标工作区配置无效：显示中文原因，并保留当前工作区。
+    await check("无效配置显示原因且不切换工作区", async () => {
+      await page.fill(WORKSPACE_PATH_INPUT, MOCK_BROKEN_REPO);
+      await page.click('[data-testid="workspace-select"]');
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "配置无效" },
+      );
+      const message = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      const current = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      assert(current === MOCK_REPO, `失败后必须保留当前工作区，实际 ${current}`);
+      const file = await shot(page, "09-settings-validation-error.png");
+      return `显示「${message}」，当前工作区仍为 ${current}，截图 ${file}`;
+    });
+
+    // 9. 初始化新目录：非空目录被拒绝，空目录建好工作区。
+    await check("初始化新目录并拒绝覆盖非空目录", async () => {
+      await page.fill(WORKSPACE_PATH_INPUT, MOCK_NON_EMPTY_DIR);
+      await page.click('[data-testid="workspace-init"]');
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "非空" },
+      );
+      const refused = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      assert(
+        refused.includes("不会覆盖") || refused.includes("以免覆盖"),
+        `拒绝原因必须是可读的中文说明：${refused}`,
+      );
+      const still = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      assert(still === MOCK_REPO, `被拒绝后不得切换工作区，实际 ${still}`);
+
+      await page.fill(WORKSPACE_PATH_INPUT, MOCK_NEW_DIR);
+      await page.click('[data-testid="workspace-init"]');
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: WORKSPACE_PATH_VALUE, expected: MOCK_NEW_DIR },
+      );
+      const created = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
+      assert(created === MOCK_NEW_DIR, `应切换到新建工作区，实际 ${created}`);
+      const file = await shot(page, "10-settings-initialised.png");
+      return `非空目录被拒绝（${refused}），新目录 ${created} 初始化成功，截图 ${file}`;
+    });
+
+    // 10. 编辑快捷键：立即生效；无效写法被拒绝并保留上次有效值。
+    await check("修改快捷键立即生效，无效写法被拒绝", async () => {
+      await page.fill(HOTKEY_INPUT, "Ctrl+Shift+F1");
+      await page.click('[data-testid="hotkey-save"]');
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: HOTKEY_STATUS, expected: "Ctrl+Shift+F1" },
+      );
+      const applied = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      assert(applied.includes("立即生效"), `应提示立即生效：${applied}`);
+
+      await page.fill(HOTKEY_INPUT, "这不是快捷键");
+      await page.click('[data-testid="hotkey-save"]');
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "快捷键无效" },
+      );
+      const rejected = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      const status = (await page.textContent(HOTKEY_STATUS)).trim();
+      assert(
+        status.includes("Ctrl+Shift+F1"),
+        `无效写法必须保留上次有效快捷键：${status}`,
+      );
+      const file = await shot(page, "11-settings-hotkey.png");
+      return `生效 ${applied}；无效写法「${rejected}」后仍为 ${status}，截图 ${file}`;
+    });
+
+    // 11. 外部修改设置文件：有效则重新加载，无效则保留并显示原因。
+    await check("外部修改重新加载，错误配置保留上次有效状态", async () => {
+      await page.evaluate(() =>
+        window.__flashcastMock.simulateExternalEdit("Ctrl+Alt+K"),
+      );
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: HOTKEY_STATUS, expected: "Ctrl+Alt+K" },
+      );
+      const applied = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      assert(applied.includes("重新加载"), `应提示重新加载：${applied}`);
+
+      await page.evaluate(() =>
+        window.__flashcastMock.simulateExternalEdit("不是快捷键"),
+      );
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SETTINGS_MESSAGE, expected: "配置无效" },
+      );
+      const error = (await page.textContent(SETTINGS_MESSAGE)).trim();
+      const status = (await page.textContent(HOTKEY_STATUS)).trim();
+      assert(
+        status.includes("Ctrl+Alt+K"),
+        `错误配置必须保留上次有效快捷键：${status}`,
+      );
+      const file = await shot(page, "12-settings-external-reload.png");
+
+      // Escape 从设置页返回搜索首屏。
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(
+        () =>
+          document.querySelector('[data-testid="app-root"]')?.dataset.screen === "search",
+        undefined,
+      );
+      const back = await page.inputValue(INPUT);
+      assert(back === "", `返回后输入框应回到空查询：${JSON.stringify(back)}`);
+      return `重载 ${applied}；错误「${error}」后仍为 ${status}，Escape 返回首屏，截图 ${file}`;
+    });
+
+    // 12. 真实窗口尺寸（640×420）下设置页仍可操作。
+    await check("设置页在 640×420 窗口内可操作", async () => {
+      await page.setViewportSize({ width: 640, height: 420 });
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      assert(await page.isVisible('[data-testid="workspace-section"]'), "工作区区段不可见");
+      assert(await page.isVisible(WORKSPACE_PATH_INPUT), "路径输入框不可见");
+
+      // 快捷键区段可能在折叠内容下方：滚动后仍必须可见、可点击。
+      await page.locator(HOTKEY_INPUT).scrollIntoViewIfNeeded();
+      assert(await page.isVisible(HOTKEY_INPUT), "快捷键输入框不可见");
+      assert(await page.isVisible('[data-testid="hotkey-save"]'), "保存按钮不可见");
+      const box = await page.locator('[data-testid="hotkey-save"]').boundingBox();
+      assert(
+        box && box.x >= 0 && box.x + box.width <= 640,
+        `保存按钮超出窗口宽度：${JSON.stringify(box)}`,
+      );
+      const file = await shot(page, "13-settings-compact-window.png");
+      await page.setViewportSize({ width: 900, height: 620 });
+      return `640×420 下工作区与快捷键区段均可见可操作，截图 ${file}`;
     });
 
     const failed = results.filter((result) => !result.ok).length;

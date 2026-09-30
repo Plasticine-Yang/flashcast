@@ -29,16 +29,26 @@ pub struct WorkspaceEvent {
 /// 启动监听线程。
 pub fn spawn<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
-    std::thread::spawn(move || loop {
-        let state = app.state::<AppState>();
-        let reload = state.host.wait_for_workspace_change(SLICE);
-        let Some(reload) = reload else { continue };
-        let payload = WorkspaceEvent {
-            status: state.host.workspace_status(),
-            settings: state.host.settings(),
-            reload: Some(reload),
-        };
-        drop(state);
-        let _ = app.emit("flashcast://workspace", payload);
+    std::thread::spawn(move || {
+        // 记录已注册的快捷键，外部修改设置后需要重新注册才能「立即生效」。
+        let mut registered_hotkey = app.state::<AppState>().host.settings().hotkey;
+        loop {
+            let state = app.state::<AppState>();
+            let reload = state.host.wait_for_workspace_change(SLICE);
+            let Some(reload) = reload else { continue };
+            let settings = state.host.settings();
+            if settings.hotkey != registered_hotkey {
+                // 外部把 settings.toml 的快捷键改掉后，外壳必须重新注册才会生效。
+                registered_hotkey = settings.hotkey.clone();
+                crate::hotkey::apply(&app, &state, &settings.hotkey);
+            }
+            let payload = WorkspaceEvent {
+                status: state.host.workspace_status(),
+                settings,
+                reload: Some(reload),
+            };
+            drop(state);
+            let _ = app.emit("flashcast://workspace", payload);
+        }
     });
 }

@@ -379,12 +379,15 @@ class MockHost implements HostApi {
     };
     if (!looksLikeHotkey(hotkey)) {
       reload.error = `配置无效：settings.toml 内容不合法：快捷键无效：无法识别的主键：${hotkey}`;
+      // 与宿主一致：配置无效时工作区标记为不可用，但保留上次有效设置。
+      this.workspace = { ...this.workspace, valid: false, error: reload.error };
     } else if (hotkey === this.settings.hotkey) {
       // 幂等：内容没变就不做任何事。
     } else {
       this.settings = { ...this.settings, hotkey };
       reload.applied = true;
       reload.settings = this.settings;
+      this.workspace = { ...this.workspace, valid: true, error: null };
     }
     const payload: WorkspaceEvent = {
       status: this.workspace,
@@ -392,6 +395,14 @@ class MockHost implements HostApi {
       reload,
     };
     this.emit("flashcast://workspace", payload);
+    if (reload.applied) {
+      // 与外壳一致：外部改了快捷键后重新注册，并推送注册结果。
+      this.emit("flashcast://hotkey-status", {
+        label: this.settings.hotkey,
+        error: null,
+        registered: true,
+      });
+    }
   }
 
   async hide_window(): Promise<void> {
