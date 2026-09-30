@@ -297,3 +297,360 @@ jobs:
 
       - name: Type check flashcast-platform for ${{ matrix.target }}
         run: cargo check -p flashcast-platform --target ${{ matrix.target }}
+
+  # ── ticket 04：候选安装包 ────────────────────────────────────────────────
+  #
+  # 目标：让每个提交都能下载到三平台候选安装包。**不创建 GitHub Release**（发布是
+  # ticket 18 的事），job 级 permissions 只给 contents: read —— 即使 tauri-action 想建
+  # Release 也没有权限，这是比「不传 tagName」更强的保证。
+  #
+  # 跨 OS 打包不可能（Linux 上做不出 exe，Windows 上做不出 dmg），所以一个 OS 一个 job，
+  # 用 tauri-apps/tauri-action@v1（官方文档的 macOS 签名页仍写 @v0，是过时的）。
+  # 本仓库是 Cargo workspace，bundle 落在仓库根的 `target/` 下。
+  #
+  # 这里不依赖 verify 矩阵：候选包要尽早可用，是否允许发布由 ticket 18 汇总所有必需
+  # 检查后再决定。各平台的真实检查结果由 `scripts/ci/check-installers.sh` 逐平台记录。
+  bundle:
+    name: 候选安装包 ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64 AppImage + deb
+            slug: linux-x64
+            os: ubuntu-22.04
+            platform: linux
+            arch: amd64
+            target: ""
+            bundles: appimage,deb
+            rust_targets: ""
+          - name: Windows x64 NSIS exe
+            slug: windows-x64
+            os: windows-latest
+            platform: windows
+            arch: x64
+            target: ""
+            bundles: nsis
+            rust_targets: ""
+          # macOS 两种架构都在 arm64 runner 上交叉编译。`macos-13` 标签已不存在，
+          # 用它会永远排队；Intel 架构改用 --target x86_64-apple-darwin。
+          - name: macOS arm64 dmg
+            slug: macos-arm64
+            os: macos-latest
+            platform: macos
+            arch: aarch64
+            target: aarch64-apple-darwin
+            bundles: dmg
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: macOS x64 dmg (cross-compiled)
+            slug: macos-x64
+            os: macos-latest
+            platform: macos
+            arch: x64
+            target: x86_64-apple-darwin
+            bundles: dmg
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            xdg-utils \
+            xvfb \
+            dbus-x11 \
+            file
+
+      # AppImage 打包走 linuxdeploy，它同样需要 4.1 的 .pc；链接错了只会在运行时出问题。
+      - name: Assert WebKitGTK 4.1 is what pkg-config resolves
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          set -euo pipefail
+          version="$(pkg-config --modversion webkit2gtk-4.1)"
+          echo "webkit2gtk-4.1 = ${version}"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: bundle-${{ matrix.slug }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend bundle
+        run: pnpm build
+
+      # `generate_context!` 在非 dev 构建里会嵌入 frontendDist（../dist），缺失时直接 panic；
+      # 安装包里没有界面就等于包装错了，所以这里先断言 dist/index.html 存在。
+      - name: Assert the frontend bundle exists before bundling
+        run: |
+          set -euo pipefail
+          if [ ! -s dist/index.html ]; then
+            echo "::error::dist/index.html 缺失或为空；安装包里不会有界面。"
+            exit 1
+          fi
+          ls -l dist dist/assets
+
+      # macOS：没有 Apple 证书时用 ad-hoc 签名（签名标识 `-`），避免 Apple Silicon 把
+      # 下载来的应用报成「已损坏」。ad-hoc **不能**绕过 Gatekeeper，报告里会如实写明。
+      # 有证书时按 Tauri 文档接入正式签名；凭证只经 GITHUB_ENV 传给后续步骤，不落仓库、不进日志。
+      - name: Decide macOS signing mode (ad-hoc or Developer ID)
+        id: macos_signing
+        if: matrix.platform == 'macos'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY_SECRET: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cert=no
+          identity=no
+          [ -n "${APPLE_CERTIFICATE:-}" ] && cert=yes
+          [ -n "${APPLE_SIGNING_IDENTITY_SECRET:-}" ] && identity=yes
+          # APPLE_CERTIFICATE 与 APPLE_SIGNING_IDENTITY 必须成对出现：tauri-bundler 会拿
+          # tauri.conf.json 里的 signingIdentity（本仓库是 `-`）去匹配导入的证书，只有一边
+          # 存在时会以晦涩的错误中断。这里提前给出可执行的提示。
+          if [ "$cert" = yes ] && [ "$identity" = no ]; then
+            echo "::error::提供了 APPLE_CERTIFICATE 却没有 APPLE_SIGNING_IDENTITY；请同时提供（值取自 security find-identity -v -p codesigning）。"
+            exit 1
+          fi
+          if [ "$cert" = no ] && [ "$identity" = yes ]; then
+            echo "::error::提供了 APPLE_SIGNING_IDENTITY 却没有 APPLE_CERTIFICATE；CI 上没有可导入的证书。"
+            exit 1
+          fi
+          if [ "$cert" = yes ]; then
+            mode=developer-id
+            {
+              echo "APPLE_CERTIFICATE=${APPLE_CERTIFICATE}"
+              echo "APPLE_CERTIFICATE_PASSWORD=${APPLE_CERTIFICATE_PASSWORD}"
+              echo "APPLE_SIGNING_IDENTITY=${APPLE_SIGNING_IDENTITY_SECRET}"
+            } >>"$GITHUB_ENV"
+            if [ -n "${KEYCHAIN_PASSWORD:-}" ]; then
+              echo "KEYCHAIN_PASSWORD=${KEYCHAIN_PASSWORD}" >>"$GITHUB_ENV"
+            fi
+            if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+              notarize=yes
+              {
+                echo "APPLE_ID=${APPLE_ID}"
+                echo "APPLE_PASSWORD=${APPLE_PASSWORD}"
+                echo "APPLE_TEAM_ID=${APPLE_TEAM_ID}"
+              } >>"$GITHUB_ENV"
+            else
+              notarize=no
+              echo "::warning::有签名证书但 APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID 不完整，跳过公证；Gatekeeper 仍会拦截首次启动。"
+            fi
+          else
+            mode=ad-hoc
+            notarize=no
+            # 只写 `-`，绝不写空值：APPLE_SIGNING_IDENTITY 为空会让 Tauri 用空标识去 codesign。
+            echo "APPLE_SIGNING_IDENTITY=-" >>"$GITHUB_ENV"
+          fi
+          printf 'mode=%s\nnotarize=%s\n' "$mode" "$notarize" >>"$GITHUB_OUTPUT"
+          printf '%s\n' "$mode" >"artifacts/macos-signing-mode-${{ matrix.slug }}.txt"
+          echo "macOS 签名模式：${mode}（公证：${notarize}）"
+
+      # Windows：有 Authenticode 证书时导入到当前用户的证书存储，并把指纹通过 --config 传给
+      # tauri build；没有证书时保持未签名，并在报告里写明 SmartScreen 的提示与绕过方式。
+      - name: Import Windows code signing certificate when provided
+        id: windows_signing
+        if: matrix.platform == 'windows'
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          if [ -z "${WINDOWS_CERTIFICATE:-}" ]; then
+            printf 'unsigned\n' >"artifacts/windows-signing-mode-${{ matrix.slug }}.txt"
+            echo "::notice::未提供 WINDOWS_CERTIFICATE，NSIS 安装程序不带 Authenticode 签名。"
+            exit 0
+          fi
+          pfx="$RUNNER_TEMP/flashcast-codesign.pfx"
+          # tauri-action 的 args 以空白切分，--config 的路径里不能有空格；有的话直接报错，
+          # 免得退化成「指纹没传进去、包静默未签名」。
+          case "$RUNNER_TEMP" in
+            *" "*)
+              echo "::error::RUNNER_TEMP 含空格，--config 路径无法通过 tauri-action 的 args 传递。"
+              exit 1
+              ;;
+          esac
+          echo "${WINDOWS_CERTIFICATE}" | base64 --decode >"$pfx"
+          thumbprint="$(powershell.exe -NoProfile -NonInteractive -Command \
+            "\$p = ConvertTo-SecureString -String \$env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText; (Import-PfxCertificate -FilePath '$(cygpath -w "$pfx")' -CertStoreLocation Cert:\\CurrentUser\\My -Password \$p).Thumbprint" \
+            | tr -d '\r' | tail -n 1)"
+          if [ -z "$thumbprint" ]; then
+            echo "::error::导入 Windows 代码签名证书失败。"
+            exit 1
+          fi
+          config="$RUNNER_TEMP/flashcast-windows-signing.json"
+          printf '{"bundle":{"windows":{"certificateThumbprint":"%s","digestAlgorithm":"sha256","timestampUrl":"http://timestamp.digicert.com"}}}\n' \
+            "$thumbprint" >"$config"
+          printf 'signed\n' >"artifacts/windows-signing-mode-${{ matrix.slug }}.txt"
+          printf 'config_args=--config %s\n' "$config" >>"$GITHUB_OUTPUT"
+          echo "已导入 Windows 代码签名证书，指纹 ${thumbprint}。"
+
+      - name: Build bundles (tauri-action)
+        id: tauri
+        uses: tauri-apps/tauri-action@v1
+        with:
+          # 不传 tagName / releaseId：tauri-action 只构建，不创建 Release。
+          args: >-
+            ${{ matrix.target != '' && format('--target {0} --bundles {1}', matrix.target, matrix.bundles) || format('--bundles {0}', matrix.bundles) }}
+            ${{ steps.windows_signing.outputs.config_args }}
+
+      - name: Check installer content, install and startup
+        id: installer_check
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          scripts/ci/check-installers.sh \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --slug "${{ matrix.slug }}" \
+            --target "${{ matrix.target }}" \
+            --artifacts-dir artifacts \
+            --display-mode auto \
+            2>&1 | tee "artifacts/installer-check-${{ matrix.slug }}.log"
+
+      # 把「编译成功」与「安装/启动实测」分开汇报：只有创建压缩文件不算安装通过。
+      - name: Summarise installer checks
+        if: always()
+        run: |
+          set -uo pipefail
+          json="artifacts/installer-check-${{ matrix.slug }}.json"
+          {
+            echo "### 候选安装包 ${{ matrix.name }}"
+            echo ""
+            if [ ! -f "$json" ]; then
+              echo "_未取得检查报告（构建可能已失败）。_"
+            elif ! command -v jq >/dev/null 2>&1; then
+              echo '```'
+              cat "$json"
+              echo '```'
+            else
+              echo "| 产物 | 类型 | 字节 | SHA256 |"
+              echo "| --- | --- | --- | --- |"
+              jq -r '.artifacts[] | "| `\(.name)` | \(.kind) | \(.sizeBytes) | `\(.sha256[0:16])…` |"' "$json"
+              echo ""
+              echo "| 检查 | 结果 | 说明 |"
+              echo "| --- | --- | --- |"
+              jq -r '.checks[] | "| \(.title) | \(.statusLabel) | \(.detail | gsub("\\|"; "\\|")) |"' "$json"
+              echo ""
+              echo "签名状态："
+              echo ""
+              jq -r '.signing[] | "- **\(.scope)**：\(.status) —— \(.detail)"' "$json"
+              echo ""
+              jq -r '.summary | "汇总：实测通过 \(.measuredPass)，实测失败 \(.measuredFail)，未覆盖 \(.notCovered)"' "$json"
+            fi
+            echo ""
+            echo "「未覆盖」表示该检查在当前 runner 上无法执行，**不等于通过**。"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload candidate installers and reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flashcast-candidate-${{ matrix.slug }}
+          path: artifacts/**
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove the temporary Windows signing certificate
+        if: always() && matrix.platform == 'windows'
+        run: |
+          set -uo pipefail
+          rm -f "${RUNNER_TEMP:-}/flashcast-codesign.pfx" "${RUNNER_TEMP:-}/flashcast-windows-signing.json"
+
+  # ── 汇总 SHA256 ─────────────────────────────────────────────────────────
+  # 重新计算所有安装包的 SHA256 并与各 job 自己算出的值比对（校验上传/下载链路），
+  # 产出 SHA256SUMS.txt 供 ticket 18 附加到 Release。这里同样不创建 Release。
+  checksums:
+    name: SHA256 校验和
+    needs: [bundle]
+    if: always()
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download all candidate installers
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate and verify SHA256SUMS
+        run: |
+          set -euo pipefail
+          scripts/ci/verify-sha256sums.sh artifacts 2>&1 | tee artifacts/sha256-report.txt
+
+      - name: Summarise checksums
+        if: always()
+        run: |
+          set -uo pipefail
+          {
+            echo "### SHA256 校验和"
+            echo ""
+            if [ -f artifacts/SHA256SUMS.txt ]; then
+              echo '```'
+              cat artifacts/SHA256SUMS.txt
+              echo '```'
+            else
+              echo "_没有生成 SHA256SUMS.txt：没有任何安装包产物。_"
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload SHA256SUMS
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: flashcast-sha256sums
+          path: |
+            artifacts/SHA256SUMS.txt
+            artifacts/sha256-report.txt
+            artifacts/*.sha256
+          # SHA256SUMS.txt 是 ticket 18 附加到 Release 的必需资产；缺了必须让 job 变红，
+          # 不能只警告——第一次真实运行就是因为相对输出路径而「静默没有产出」。
+          if-no-files-found: error
+          retention-days: 30
