@@ -10,11 +10,13 @@ pub mod clone;
 pub mod device;
 pub mod git;
 pub mod host;
+pub mod manifest;
 pub mod model;
 pub mod plugin;
 pub mod ranking;
 pub mod registry;
 pub mod settings;
+pub mod theme;
 pub mod watch;
 pub mod workspace;
 
@@ -28,19 +30,30 @@ pub use device::{
 };
 pub use git::{ChangedFile, CommitOutcome, GitError, WorkspaceChanges, MAX_DIFF_CHARS};
 pub use host::{quick_access_commands, Host, HostDeps};
+pub use manifest::{
+    ManifestEntry, ManifestError, PluginManifestFile, PluginOrigin, MANIFEST_SCHEMA_VERSION,
+};
 pub use model::{
     ActionOutcome, ActionStatus, BackOutcome, DefaultAction, ItemKind, MatchTier, Notice,
     NoticeLevel, PluginFailure, PluginFailureKind, Preview, QueryResponse, QueryScope, Score,
     SearchItem, SourceId, COMMAND_CAPABILITIES, COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
 pub use plugin::{
-    FeaturePlugin, Keyword, PluginError, PluginKind, PluginManifest, PluginScope, SearchContext,
+    is_valid_plugin_id, FeaturePlugin, Keyword, PluginError, PluginKind, PluginManifest, PluginScope,
+    SearchContext,
 };
 pub use ranking::{score_match, sort_ranked, RankedItem};
 pub use registry::{PluginRegistry, PluginSearchOutcome};
 pub use settings::{Settings, SettingsError};
+pub use theme::{
+    builtin_themes, dark_tokens, light_tokens, Appearance, ColorTokens, CssVar, DisabledState,
+    ErrorState, FocusState, FontTokens, RadiusTokens, Rgba, SelectedState, ShadowTokens,
+    SpaceTokens, StateTokens, ThemeAppearance, ThemeDocument, ThemeEntry, ThemeError, ThemeLibrary,
+    ThemePalettes, ThemeSelection, ThemeState, ThemeTokens, THEME_DARK, THEME_LIGHT, THEME_SYSTEM,
+};
 pub use watch::{ChangeFilter, WatchError, WorkspaceWatcher, DEBOUNCE, QUIET_WINDOW};
 pub use workspace::{
     workspace_remote_of, Workspace, WorkspaceError, WorkspaceReload, WorkspaceRemote,
-    WorkspaceStatus, MANIFEST_FILE, MEMOS_DIR, SETTINGS_FILE, THEME_FILE, WORKSPACE_FILES,
+    WorkspaceStatus, MANIFEST_FILE, MEMOS_DIR, SETTINGS_FILE, THEMES_DIR, THEME_FILE,
+    WORKSPACE_FILES,
 };

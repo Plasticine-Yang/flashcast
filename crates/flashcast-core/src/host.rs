@@ -19,18 +19,23 @@ use flashcast_platform::launch_request::LaunchRequest;
 use crate::clone::{self, CloneControl, CloneOutcome, CloneProgress, CredentialProvider};
 use crate::device::{CredentialStore, DeviceStore, StoredToken};
 use crate::git::{CommitOutcome, GitError, WorkspaceChanges};
+use crate::manifest::{ManifestEntry, ManifestError, PluginManifestFile};
 use crate::model::{
     ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview,
     QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES, COMMAND_PREFIX,
     COMMAND_RESCAN, HOST_SOURCE,
 };
-use crate::plugin::{PluginScope, SearchContext};
+use crate::plugin::{PluginKind, PluginScope, SearchContext};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
 use crate::registry::PluginRegistry;
 use crate::settings::{Settings, SettingsError};
+use crate::theme::{
+    Appearance, ThemeDocument, ThemeEntry, ThemeError, ThemeLibrary, ThemeSelection, ThemeState,
+    ThemeTokens, THEME_LIGHT,
+};
 use crate::watch::WorkspaceWatcher;
 use crate::workspace::{
-    Workspace, WorkspaceError, WorkspaceReload, WorkspaceRemote, WorkspaceStatus,
+    write_atomic, Workspace, WorkspaceError, WorkspaceReload, WorkspaceRemote, WorkspaceStatus,
 };
 
 /// 宿主的注入依赖。不含任何 Tauri 类型。
@@ -66,6 +71,22 @@ struct HostInner {
     /// 已进入的插件范围对象。ticket 01 只用它验证 `back()` 与范围切换。
     plugin_scopes: HashMap<String, Box<dyn PluginScope>>,
     settings: Settings,
+    /// 插件清单：插件标识、种类、版本与启用状态。主题与功能插件共用。
+    manifest: PluginManifestFile,
+    /// 主题库：内置主题 + 从工作区 `themes/` 读入的本地主题包。
+    theme_library: ThemeLibrary,
+    /// 当前选中的主题 id。
+    selected_theme: String,
+    /// 当前系统外观。「跟随系统」的主题据此解析。
+    system_appearance: Appearance,
+    /// 最近一次成功解析出的 token：无效主题时保留它，即「上一次可用外观」。
+    theme_tokens: ThemeTokens,
+    /// 最近一次成功解析出的实际外观。
+    theme_appearance: Appearance,
+    /// 当前选中主题解析失败的中文原因（持续到该主题重新可用）。
+    theme_error: Option<String>,
+    /// 工作区主题配置 / 插件清单的问题（持续到配置修好或被重新选择）。
+    theme_notice: Option<String>,
     /// 当前配置工作区；`None` 表示尚未关联。
     workspace: Option<Workspace>,
     /// 最近一次工作区失败的中文原因。
@@ -135,6 +156,15 @@ impl Host {
                 history: Vec::new(),
                 plugin_scopes: HashMap::new(),
                 settings,
+                // 默认清单 = 浅色 / 深色 / 跟随系统三个默认主题。
+                manifest: PluginManifestFile::defaults(),
+                theme_library: ThemeLibrary::with_builtins(),
+                selected_theme: THEME_LIGHT.to_string(),
+                system_appearance: Appearance::Light,
+                theme_tokens: crate::theme::light_tokens(),
+                theme_appearance: Appearance::Light,
+                theme_error: None,
+                theme_notice: None,
                 workspace: None,
                 workspace_error: None,
                 reloads: 0,
@@ -206,7 +236,9 @@ impl Host {
     /// 先校验目标目录与它已有的配置；失败时当前工作区与有效设置都保持不变。
     pub fn select_workspace(&self, path: &Path) -> Result<WorkspaceStatus, WorkspaceError> {
         let workspace = Workspace::open(path)?;
-        self.activate_workspace(workspace)
+        // 关联已有工作区时**不写任何文件**：工作区里的 Git 仓库必须保持干净，
+        // 直到用户真的改了插件清单或主题（见 `activate_workspace`）。
+        self.activate_workspace(workspace, false)
     }
 
     /// 在新目录（必须为空或不存在）上初始化工作区**及其 Git 仓库**。
@@ -214,7 +246,9 @@ impl Host {
     /// 非空目录一律拒绝，绝不覆盖已有用户文件。
     pub fn init_workspace(&self, path: &Path) -> Result<WorkspaceStatus, WorkspaceError> {
         let workspace = Workspace::init(path)?;
-        self.activate_workspace(workspace)
+        // 刚初始化的空目录：随设置文件一起写出默认插件清单与主题配置，
+        // 让新工作区一开始就自描述。这里不可能覆盖用户已有文件。
+        self.activate_workspace(workspace, true)
     }
 
     /// 从远端 Git 仓库克隆配置工作区（ticket 14）。
@@ -302,7 +336,9 @@ impl Host {
         };
 
         // 关联：切换工作区、开始监听、恢复其中的设置（含插件启停选择）。
-        if let Err(error) = self.activate_workspace(workspace) {
+        // `bootstrap = false`：克隆下来的是一份已有仓库，只读不写，不能把它改脏；
+        // 清单 / 主题配置缺失时用内存默认值（与「关联已有仓库」一致）。
+        if let Err(error) = self.activate_workspace(workspace, false) {
             cloned.rollback();
             return Err(self.clone_failure(control, error.to_string()));
         }
@@ -497,6 +533,8 @@ impl Host {
             Some(workspace) => workspace.clone(),
             None => return self.unchanged_reload(changed.to_path_buf()),
         };
+        let mut messages: Vec<String> = Vec::new();
+
         // 先读**原始字节**、再解析：宿主这次读在 macOS / Windows 上会被上报成像修改的
         // 事件（macOS 常是 `EventKind::Any`，按事件类型丢不掉）。因此无论解析结果如何，
         // 读到的内容都先记进监听层的账本，随后内容字节相同的事件才会被吞掉，而不是形成
@@ -513,41 +551,56 @@ impl Host {
                     Err(error) => return self.reload_failed(changed, error.to_string()),
                 }
             }
-            None => None,
-        };
-        match settings {
-            // 幂等：内容与生效设置一致时不做任何事，写入循环在此终止。
-            Some(settings) if settings == self.settings() => WorkspaceReload {
-                path: changed.to_path_buf(),
-                applied: false,
-                settings,
-                error: None,
-            },
-            Some(settings) => {
-                let mut inner = lock(&self.inner);
-                inner.settings = settings.clone();
-                inner.workspace_error = None;
-                inner.reloads += 1;
-                let applied = inner.reloads;
-                drop(inner);
-                let _ = applied;
-                // 外部修改的插件启停也要真正生效（已有功能读取其中内容）。
-                self.apply_plugin_choices(&settings.disabled_plugins);
-                WorkspaceReload {
-                    path: changed.to_path_buf(),
-                    applied: true,
-                    settings,
-                    error: None,
-                }
-            }
-            None => WorkspaceReload {
-                path: changed.to_path_buf(),
-                applied: false,
-                settings: self.settings(),
-                error: Some(format!(
+            // 设置文件被删除：保留上一次有效设置，但主题与清单仍按工作区重读。
+            None => {
+                messages.push(format!(
                     "设置文件已不存在，继续使用上一次有效设置（{}）",
                     workspace.settings_path().display()
-                )),
+                ));
+                None
+            }
+        };
+
+        let (applied, settings_changed) = {
+            let mut inner = lock(&self.inner);
+            let mut applied = false;
+            let mut settings_changed = false;
+            if let Some(settings) = settings {
+                if settings != inner.settings {
+                    inner.settings = settings;
+                    applied = true;
+                    settings_changed = true;
+                }
+            }
+            let (theme_changed, theme_reason) =
+                self.apply_workspace_config(&mut inner, &workspace, false);
+            applied |= theme_changed;
+            inner.theme_notice = theme_reason;
+            if applied {
+                inner.workspace_error = None;
+                inner.reloads += 1;
+            }
+            (applied, settings_changed)
+        };
+        // 外部修改的插件启停也要真正生效（已有功能读取其中内容）。只在设置真的变了时
+        // 应用一次，避免把清单里刚读到的启停状态覆盖回去（见 [`Host::plugin_manifests`]）。
+        if settings_changed {
+            self.apply_plugin_choices(&self.settings().disabled_plugins);
+        }
+
+        let theme = self.theme_state();
+        if let Some(error) = theme.error.clone() {
+            messages.push(error);
+        }
+        WorkspaceReload {
+            path: changed.to_path_buf(),
+            applied,
+            settings: self.settings(),
+            theme,
+            error: if messages.is_empty() {
+                None
+            } else {
+                Some(messages.join("；"))
             },
         }
     }
@@ -560,15 +613,145 @@ impl Host {
         }
     }
 
-    /// 重载失败：保留上一次有效设置，把中文原因记进工作区状态并返回。
+    /// 重载失败：保留上一次有效配置，把中文原因记进工作区状态并返回。
     fn reload_failed(&self, changed: &Path, message: String) -> WorkspaceReload {
         lock(&self.inner).workspace_error = Some(message.clone());
         WorkspaceReload {
             path: changed.to_path_buf(),
             applied: false,
             settings: self.settings(),
+            theme: self.theme_state(),
             error: Some(message),
         }
+    }
+
+    /// 从工作区读取插件清单、已安装主题包与当前主题，成功部分立即生效。
+    ///
+    /// 返回（是否有变化，主题相关的中文原因）。任何一部分失败都不会动到
+    /// 「上一次可用外观」：调用方只把原因展示出来。
+    ///
+    /// `activation` 为真表示正在**切换**配置工作区：目标工作区缺少清单或主题配置时
+    /// 回到默认（三个内置主题 + 浅色），而不是沿用上一个工作区的选择。重新加载
+    /// （`activation == false`）时缺少文件则保留当前状态，只说明原因。
+    fn apply_workspace_config(
+        &self,
+        inner: &mut HostInner,
+        workspace: &Workspace,
+        activation: bool,
+    ) -> (bool, Option<String>) {
+        let mut changed = false;
+        let mut reason: Option<String> = None;
+
+        // 1. 插件清单。文件不存在时保留当前清单（例如用户还没提交过）。
+        match workspace.read_config_text(&workspace.manifest_path()) {
+            Ok(Some(text)) => match PluginManifestFile::from_json(&text) {
+                Ok(file) => {
+                    let extras = self.expected_manifest_extras();
+                    let (merged, _) = file.merged_with(extras);
+                    if merged != inner.manifest {
+                        inner.manifest = merged;
+                        changed = true;
+                    }
+                }
+                Err(error) => reason = Some(format!("插件清单无效：{error}")),
+            },
+            Ok(None) if activation => {
+                let (merged, _) = PluginManifestFile::defaults()
+                    .merged_with(self.expected_manifest_extras());
+                if merged != inner.manifest {
+                    inner.manifest = merged;
+                    changed = true;
+                }
+            }
+            Ok(None) => {}
+            Err(error) => reason = Some(format!("无法读取插件清单：{error}")),
+        }
+
+        // 2. 已安装的本地主题包（清单里 origin = installed 的主题）。
+        if self.reload_theme_packages(inner, workspace) {
+            changed = true;
+        }
+
+        // 3. 当前选中的主题。不可用时不切换，保留上一次可用外观。
+        let target: Option<String> = match workspace.read_config_text(&workspace.theme_path()) {
+            Ok(Some(text)) => match ThemeSelection::from_json(&text) {
+                Ok(selection) => Some(selection.selected),
+                Err(error) => {
+                    reason = Some(error.to_string());
+                    None
+                }
+            },
+            // 目标工作区没有主题配置：切换工作区时回到默认主题。
+            Ok(None) if activation => Some(THEME_LIGHT.to_string()),
+            Ok(None) => None,
+            Err(error) => {
+                reason = Some(format!("无法读取主题配置：{error}"));
+                None
+            }
+        };
+        if let Some(target) = target {
+            match () {
+                () if target == inner.selected_theme => {}
+                () => {
+                    let usable = inner
+                        .manifest
+                        .get(&target)
+                        .filter(|entry| entry.is_theme() && entry.enabled)
+                        .and_then(|_| inner.theme_library.document(&target).ok())
+                        .map(|document| document.resolve(inner.system_appearance).is_ok())
+                        .unwrap_or(false);
+                    if usable {
+                        inner.selected_theme = target.clone();
+                        inner.theme_error = None;
+                        inner.theme_notice = None;
+                        changed = true;
+                    } else {
+                        reason = Some(format!(
+                            "主题「{target}」不可用（不存在、已停用或无法解析），继续使用上一次可用外观"
+                        ));
+                    }
+                }
+            }
+        }
+
+        (changed, reason)
+    }
+
+    /// 重新读取清单里登记的本地主题包。返回已安装主题集合是否发生变化。
+    fn reload_theme_packages(&self, inner: &mut HostInner, workspace: &Workspace) -> bool {
+        let ids: Vec<String> = inner
+            .manifest
+            .entries()
+            .iter()
+            .filter(|entry| {
+                entry.is_theme() && entry.origin == crate::manifest::PluginOrigin::Installed
+            })
+            .map(|entry| entry.id.clone())
+            .collect();
+        let before = inner.theme_library.snapshot();
+        for id in &ids {
+            let path = workspace.theme_package_path(id);
+            match workspace.read_config_text(&path) {
+                Ok(Some(text)) => match ThemeDocument::from_json(&text) {
+                    Ok(document) => inner.theme_library.install(document),
+                    Err(error) => inner.theme_library.mark_broken(id, error.to_string()),
+                },
+                Ok(None) => inner
+                    .theme_library
+                    .mark_broken(id, format!("主题包文件不存在：{}", path.display())),
+                Err(error) => inner.theme_library.mark_broken(
+                    id,
+                    format!("无法读取主题包 {}：{error}", path.display()),
+                ),
+            }
+        }
+        // 清单里已经不存在的本地主题从库里清掉。
+        for id in inner.theme_library.installed_ids() {
+            if !ids.contains(&id) {
+                inner.theme_library.remove(&id);
+            }
+        }
+        inner.theme_library.snapshot() != before
     }
 
     fn unchanged_reload(&self, path: PathBuf) -> WorkspaceReload {
@@ -576,12 +759,22 @@ impl Host {
             path,
             applied: false,
             settings: self.settings(),
+            theme: self.theme_state(),
             error: None,
         }
     }
 
     /// 让一个已校验的工作区成为当前工作区，并开始监听它的变更。
-    fn activate_workspace(&self, workspace: Workspace) -> Result<WorkspaceStatus, WorkspaceError> {
+    ///
+    /// `bootstrap` 为真时（刚初始化的空目录）顺手写出默认的 `manifest.json` 与
+    /// `theme.json`；为假时**只读不写**——关联一个已有的 Git 仓库不能把仓库改脏。
+    /// 缺少清单 / 主题配置时用内存里的默认值（三个内置主题 + 浅色），
+    /// 用户真正做出选择或启停插件时才会落盘。
+    fn activate_workspace(
+        &self,
+        workspace: Workspace,
+        bootstrap: bool,
+    ) -> Result<WorkspaceStatus, WorkspaceError> {
         // 先读设置：无效则整体拒绝，当前工作区与设置原样保留。
         let loaded = workspace.read_settings()?;
         let watcher =
@@ -594,10 +787,18 @@ impl Host {
             }
             inner.workspace = Some(workspace.clone());
             inner.workspace_error = None;
+            // 插件清单 / 主题配置 / 已安装主题包。切换工作区时以目标工作区为准；
+            // 读不到的部分保留当前外观并记下中文原因。
+            let (_, theme_reason) = self.apply_workspace_config(&mut inner, &workspace, true);
+            inner.theme_notice = theme_reason;
         }
         // 工作区记录的插件启停立刻生效：克隆 / 切换后已有功能随即按新选择工作。
         self.apply_plugin_choices(&self.settings().disabled_plugins);
         *lock(&self.watch) = Some(watcher);
+        if bootstrap {
+            // 新工作区写出默认文件（清单与主题选择），让用户可以手写、提交和同步。
+            self.bootstrap_workspace_files(&workspace);
+        }
         // 记住本机路径，重启后恢复。这是设备本地数据，不写进工作区。
         if let Err(error) = self.device.set_workspace_path(Some(workspace.root())) {
             lock(&self.inner).workspace_error = Some(error.to_string());
@@ -619,6 +820,44 @@ impl Host {
         }
     }
 
+    /// 为刚初始化的空工作区写出默认清单与主题配置。只在这个入口调用，
+    /// 并且只写不存在的文件（目录是应用自己刚建的，不存在覆盖用户内容的风险）。
+    fn bootstrap_workspace_files(&self, workspace: &Workspace) {
+        let manifest_path = workspace.manifest_path();
+        if let Ok(None) = workspace.read_config_text(&manifest_path) {
+            let (merged, _) = PluginManifestFile::defaults()
+                .merged_with(self.expected_manifest_extras());
+            if let Ok(bytes) = merged.to_json().map(String::into_bytes) {
+                if self
+                    .persist_workspace_file(|_| manifest_path.clone(), &bytes)
+                    .is_ok()
+                {
+                    lock(&self.inner).manifest = merged;
+                }
+            }
+        }
+
+        let theme_path = workspace.theme_path();
+        if let Ok(None) = workspace.read_config_text(&theme_path) {
+            let selected = lock(&self.inner).selected_theme.clone();
+            if let Ok(selection) = ThemeSelection::new(selected).to_json() {
+                let _ = self.persist_workspace_file(|_| theme_path.clone(), selection.as_bytes());
+            }
+        }
+    }
+
+    /// 清单里应该始终存在的条目：默认主题 + 由宿主代码注册的功能插件。
+    fn expected_manifest_extras(&self) -> Vec<ManifestEntry> {
+        let mut extras: Vec<ManifestEntry> = crate::theme::builtin_themes()
+            .iter()
+            .map(|document| ManifestEntry::from_theme(document, true))
+            .collect();
+        for (manifest, enabled) in self.deps.plugins.manifests() {
+            extras.push(ManifestEntry::from_feature(&manifest, enabled));
+        }
+        extras
+    }
+
     /// 启动时恢复上次使用的配置工作区。
     fn restore_workspace(&self) {
         let path = match self.device.workspace_path() {
@@ -638,7 +877,7 @@ impl Host {
             }
         };
         // 已有设置文件但无效时不切换，保留构造时传入的设置并说明原因。
-        if let Err(error) = self.activate_workspace(workspace) {
+        if let Err(error) = self.activate_workspace(workspace, false) {
             lock(&self.inner).workspace_error =
                 Some(format!("上次使用的配置工作区无法恢复：{error}"));
         }
@@ -668,9 +907,367 @@ impl Host {
         self.deps.capabilities.probe()
     }
 
-    /// 插件清单与启用状态。
+    /// 插件清单与启用状态（功能插件）。
+    ///
+    /// 启用状态以工作区里的 `manifest.json` 为准；清单里还没有记录的插件
+    /// （例如刚由宿主代码注册的功能插件）按注册表的当前状态补进清单。
     pub fn plugin_manifests(&self) -> Vec<(crate::plugin::PluginManifest, bool)> {
-        self.deps.plugins.manifests()
+        let mut inner = lock(&self.inner);
+        let extras: Vec<ManifestEntry> = self
+            .deps
+            .plugins
+            .manifests()
+            .into_iter()
+            .map(|(manifest, enabled)| {
+                let mut entry = ManifestEntry::from_feature(&manifest, enabled);
+                if let Some(existing) = inner.manifest.get(&manifest.id) {
+                    entry.enabled = existing.enabled;
+                }
+                entry
+            })
+            .collect();
+        let (merged, _) = inner.manifest.merged_with(extras);
+        inner.manifest = merged;
+        inner
+            .manifest
+            .entries()
+            .iter()
+            .filter(|entry| entry.kind == PluginKind::Feature)
+            .map(|entry| (entry.to_feature_manifest(), entry.enabled))
+            .collect()
+    }
+
+    /// 清单里的全部插件条目（功能插件与主题插件）。
+    pub fn manifest_entries(&self) -> Vec<ManifestEntry> {
+        // 先让功能插件条目与注册表同步。
+        let _ = self.plugin_manifests();
+        lock(&self.inner).manifest.entries().to_vec()
+    }
+
+    // -----------------------------------------------------------------------
+    // 主题
+    // -----------------------------------------------------------------------
+
+    /// 当前主题状态：选中的主题、解析后的 token、CSS 自定义属性与可选主题列表。
+    ///
+    /// 选中的主题无法解析时保留 `theme_tokens` 里的上一次可用外观，并把中文原因
+    /// 放进 `error`（`tokens` 仍然是可用的）。
+    pub fn theme_state(&self) -> ThemeState {
+        let mut inner = lock(&self.inner);
+        Self::resolve_theme_state(&mut inner)
+    }
+
+    /// 选择主题。主题不存在、已停用或无法解析时不切换，只返回中文原因。
+    pub fn select_theme(&self, id: &str) -> Result<ThemeState, ThemeError> {
+        {
+            let inner = lock(&self.inner);
+            let entry = inner
+                .manifest
+                .get(id)
+                .filter(|entry| entry.is_theme())
+                .ok_or_else(|| ThemeError::Unknown(id.to_string()))?;
+            if !entry.enabled {
+                return Err(ThemeError::Disabled(entry.name.clone()));
+            }
+            inner
+                .theme_library
+                .document(id)?
+                .resolve(inner.system_appearance)?;
+        }
+        // 先落盘再改生效状态：写入失败时保持原有主题可用。
+        let selection = ThemeSelection::new(id);
+        let bytes = selection.to_json()?.into_bytes();
+        self.persist_workspace_file(|workspace| workspace.theme_path(), &bytes)
+            .map_err(|error| ThemeError::Workspace(error.to_string()))?;
+        {
+            let mut inner = lock(&self.inner);
+            inner.selected_theme = id.to_string();
+            inner.theme_error = None;
+            inner.theme_notice = None;
+        }
+        Ok(self.theme_state())
+    }
+
+    /// 安装（或更新）一个本地主题包。
+    ///
+    /// 主题包可以是包含 `theme.json` 的目录，也可以直接是主题 JSON 文件。
+    /// 校验失败返回可读的中文原因，并且不改动任何已安装内容与当前外观。
+    pub fn install_theme_package(&self, path: &Path) -> Result<ThemeState, ThemeError> {
+        let document = ThemeDocument::from_package_path(path)?;
+        if document.is_builtin() {
+            return Err(ThemeError::Builtin("覆盖", document.id.clone()));
+        }
+        let workspace = self
+            .workspace()?
+            .ok_or(ThemeError::NoWorkspace("安装"))?;
+        let package = workspace.theme_package_path(&document.id);
+        let bytes = document.to_json()?.into_bytes();
+        self.persist_workspace_file(|_| package.clone(), &bytes)
+            .map_err(|error| ThemeError::Workspace(error.to_string()))?;
+
+        let (manifest, entry) = {
+            let mut inner = lock(&self.inner);
+            inner.theme_library.install(document.clone());
+            inner
+                .manifest
+                .upsert(ManifestEntry::from_theme(&document, true));
+            (
+                inner.manifest.clone(),
+                inner.manifest.get(&document.id).cloned(),
+            )
+        };
+        let _ = entry;
+        self.persist_manifest(&manifest).map_err(|error| ThemeError::Workspace(error.to_string()))?;
+        Ok(self.theme_state())
+    }
+
+    /// 移除一个已安装的本地主题包。内置主题不能移除。
+    pub fn remove_theme(&self, id: &str) -> Result<ThemeState, ThemeError> {
+        let entry = {
+            let inner = lock(&self.inner);
+            inner
+                .manifest
+                .get(id)
+                .cloned()
+                .filter(|entry| entry.is_theme())
+                .ok_or_else(|| ThemeError::Unknown(id.to_string()))?
+        };
+        if !entry.origin.removable() {
+            return Err(ThemeError::Builtin("移除", entry.name.clone()));
+        }
+        let workspace = self
+            .workspace()?
+            .ok_or(ThemeError::NoWorkspace("移除"))?;
+        let dir = workspace.theme_package_dir(id);
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(ThemeError::Workspace(format!(
+                    "无法删除主题包 {}：{error}",
+                    dir.display()
+                )))
+            }
+        }
+        let (manifest, fallback) = {
+            let mut inner = lock(&self.inner);
+            inner.theme_library.remove(id);
+            inner.manifest.remove(id);
+            let fallback = if inner.selected_theme == id {
+                inner.selected_theme = THEME_LIGHT.to_string();
+                inner.theme_error = None;
+                Some(ThemeSelection::new(THEME_LIGHT))
+            } else {
+                None
+            };
+            (inner.manifest.clone(), fallback)
+        };
+        self.persist_manifest(&manifest).map_err(|error| ThemeError::Workspace(error.to_string()))?;
+        let notice = fallback.as_ref().map(|_| {
+            format!("主题「{}」已移除，已切换回「浅色」", entry.name)
+        });
+        if let Some(selection) = fallback {
+            let bytes = selection.to_json()?.into_bytes();
+            self.persist_workspace_file(|workspace| workspace.theme_path(), &bytes)
+                .map_err(|error| ThemeError::Workspace(error.to_string()))?;
+        }
+        let mut state = self.theme_state();
+        if let Some(notice) = notice {
+            state.error = Some(notice);
+        }
+        Ok(state)
+    }
+
+    /// 启用或停用插件（功能插件与主题插件共用）。
+    ///
+    /// 停用当前选中的主题会退回内置浅色主题，并给出中文原因。
+    pub fn set_plugin_enabled(&self, id: &str, enabled: bool) -> Result<(), ManifestError> {
+        let (manifest, selection, notice) = {
+            let mut inner = lock(&self.inner);
+            let entry = inner.manifest.get(id).cloned().ok_or_else(|| {
+                ManifestError::invalid(format!("插件清单里没有这个标识：{id}"))
+            })?;
+            inner.manifest.set_enabled(id, enabled);
+            if entry.kind == PluginKind::Feature {
+                self.deps.plugins.set_enabled(id, enabled);
+            }
+            let mut notice = None;
+            let selection = if entry.kind == PluginKind::Theme
+                && !enabled
+                && inner.selected_theme == id
+            {
+                inner.selected_theme = THEME_LIGHT.to_string();
+                inner.theme_error = None;
+                notice = Some(format!("主题「{}」已停用，已切换回「浅色」", entry.name));
+                Some(ThemeSelection::new(THEME_LIGHT))
+            } else {
+                None
+            };
+            (inner.manifest.clone(), selection, notice)
+        };
+        self.persist_manifest(&manifest)?;
+        if let Some(selection) = selection {
+            let bytes = selection
+                .to_json()
+                .map_err(|error| ManifestError::Io(error.to_string()))?;
+            self.persist_workspace_file(|workspace| workspace.theme_path(), bytes.as_bytes())
+                .map_err(|error| ManifestError::Io(error.to_string()))?;
+        }
+        if let Some(notice) = notice {
+            // 一次性反馈：通过主题状态回传给调用方，不长期占用错误位置。
+            lock(&self.inner).theme_error = Some(notice);
+        }
+        Ok(())
+    }
+
+    /// 当前系统外观。UI 用 `prefers-color-scheme` 的变化调用它，
+    /// 「跟随系统」的主题因此能在运行时跟着系统外观切换。
+    pub fn set_system_appearance(&self, appearance: Appearance) -> ThemeState {
+        {
+            let mut inner = lock(&self.inner);
+            inner.system_appearance = appearance;
+        }
+        self.theme_state()
+    }
+
+    pub fn system_appearance(&self) -> Appearance {
+        lock(&self.inner).system_appearance
+    }
+
+    /// 当前工作区（未关联时为 `None`）。
+    fn workspace(&self) -> Result<Option<Workspace>, ThemeError> {
+        Ok(lock(&self.inner).workspace.clone())
+    }
+
+    /// 解析主题状态。成功时更新「上一次可用外观」，失败时保留它。
+    fn resolve_theme_state(inner: &mut HostInner) -> ThemeState {
+        let selected = inner.selected_theme.clone();
+        let entry = inner.manifest.get(&selected).cloned();
+        let mut error: Option<String> = None;
+        match entry {
+            None => {
+                error = Some(format!(
+                    "找不到已选中的主题「{selected}」，继续使用上一次可用外观"
+                ))
+            }
+            Some(entry) if !entry.is_theme() => {
+                error = Some(format!(
+                    "「{}」不是主题插件，继续使用上一次可用外观",
+                    entry.name
+                ))
+            }
+            Some(entry) if !entry.enabled => error = Some(format!(
+                "主题「{}」已停用，继续使用上一次可用外观",
+                entry.name
+            )),
+            Some(_) => {
+                let resolved = inner
+                    .theme_library
+                    .document(&selected)
+                    .and_then(|document| {
+                        document
+                            .resolve(inner.system_appearance)
+                            .map(|tokens| (document.clone(), tokens))
+                    });
+                match resolved {
+                    Ok((document, tokens)) => {
+                        inner.theme_appearance = document.resolved_appearance(inner.system_appearance);
+                        inner.theme_tokens = tokens;
+                    }
+                    Err(failure) => error = Some(failure.to_string()),
+                }
+            }
+        }
+        // 解析失败的原因优先；没有解析失败时，回退到工作区配置层的问题。
+        if error.is_none() {
+            error = inner.theme_notice.clone();
+        }
+        // 解析成功即清掉「选中主题不可用」的原因；配置层问题保留到配置修好为止。
+        inner.theme_error = if inner
+            .theme_library
+            .document(&inner.selected_theme)
+            .map(|document| document.resolve(inner.system_appearance).is_ok())
+            .unwrap_or(false)
+        {
+            None
+        } else {
+            error.clone()
+        };
+
+        let themes = inner
+            .manifest
+            .entries()
+            .iter()
+            .filter(|entry| entry.is_theme())
+            .map(|entry| {
+                let (usable, theme_error) = match inner.theme_library.document(&entry.id) {
+                    Ok(document) => (document.resolve(inner.system_appearance).is_ok(), None),
+                    Err(failure) => (false, Some(failure.to_string())),
+                };
+                ThemeEntry {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                    version: entry.version.clone(),
+                    enabled: entry.enabled,
+                    selected: entry.id == selected,
+                    builtin: entry.origin == crate::manifest::PluginOrigin::Builtin,
+                    appearance: entry.appearance.unwrap_or(crate::theme::ThemeAppearance::Light),
+                    usable,
+                    error: theme_error,
+                }
+            })
+            .collect();
+
+        let selected_entry = inner.manifest.get(&selected);
+        ThemeState {
+            selected: selected.clone(),
+            selected_name: selected_entry
+                .map(|entry| entry.name.clone())
+                .unwrap_or_else(|| selected.clone()),
+            preference: selected_entry
+                .and_then(|entry| entry.appearance)
+                .unwrap_or(crate::theme::ThemeAppearance::Light),
+            appearance: inner.theme_appearance,
+            system_appearance: inner.system_appearance,
+            tokens: inner.theme_tokens.clone(),
+            css_vars: inner.theme_tokens.css_vars(),
+            themes,
+            // 解析失败原因与配置层问题合并后的结果。
+            error: error.clone(),
+        }
+    }
+
+    /// 写入当前工作区的一个文件（原子 + 自写抑制）。未关联工作区时只在内存生效。
+    fn persist_workspace_file(
+        &self,
+        path_of: impl Fn(&Workspace) -> std::path::PathBuf,
+        bytes: &[u8],
+    ) -> Result<(), WorkspaceError> {
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
+            None => return Ok(()),
+        };
+        let path = path_of(&workspace);
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        {
+            let watch = lock(&self.watch);
+            if let Some(watcher) = watch.as_ref() {
+                // 先记账再写文件：监听回调可能在写入后立刻看到事件。
+                watcher.record_self_write(&path, bytes);
+            }
+        }
+        write_atomic(&path, bytes)
+    }
+
+    /// 把插件清单写进工作区（原子写入 + 自写抑制）。
+    fn persist_manifest(&self, manifest: &PluginManifestFile) -> Result<(), ManifestError> {
+        let bytes = manifest.to_json()?.into_bytes();
+        self.persist_workspace_file(|workspace| workspace.manifest_path(), &bytes)
+            .map_err(|error| ManifestError::Io(error.to_string()))
     }
 
     /// 按 id 查找最近一次查询结果中的条目。UI 用它把命令入参还原为完整条目。

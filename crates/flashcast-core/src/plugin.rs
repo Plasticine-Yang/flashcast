@@ -68,6 +68,16 @@ impl PluginManifest {
     }
 }
 
+/// 插件标识是否合法。功能插件与主题插件共用同一条规则：小写字母、数字、
+/// 点、下划线与连字符，最长 64 个字符。写入清单的标识必须通过它。
+pub fn is_valid_plugin_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-' || c == '_'
+        })
+}
+
 /// 一次插件搜索的上下文。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchContext {
