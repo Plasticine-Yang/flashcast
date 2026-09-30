@@ -20,9 +20,20 @@
 //! 改写 `.git/index`，是典型的自伤事件风暴来源。ticket 15/16 引入 status 查询前，
 //! 这一层就已经生效（[`ChangeFilter`] 的 `git_dir` 检查）。
 //!
-//! 最后一层是「幂等应用」：真正接受外部修改时会先与内存中的模型比较，相同则不做
-//! 任何事（见 [`crate::host::Host::reload_from_workspace`]）。因此不会出现
+//! 最后一层是「已应用内容相等」：宿主重载时先读**原始字节**，与「当前已应用内容」的哈希
+//! 比较，相同则不计重载、不应用、也不对外发出任何事件（见
+//! [`crate::host::Host::reload_from_workspace`]）。因此不会出现
 //! 「写入 → 事件 → 应用 → 再写入」的循环。
+//!
+//! ## 正确性不依赖上面四层（跨平台缺陷 2 之后的判据）
+//!
+//! 上面第 1–4 层与 [`ChangeFilter`] 的账本、静默窗口都只是**廉价的第一道过滤**：
+//! 它们依赖事件路径、事件类型与到达时间，而这三点在 macOS（FSEvents）上都不可靠——
+//! 上报的路径可能与写入路径不同（大小写、软链接、目录项规范化）、一次逻辑写入拆成
+//! 多条记录、读文件本身被上报成 `EventKind::Any`、事件晚于静默窗口才到达。
+//! 真正保证「一次外部修改只重载一次」的是 [`crate::host::Host::reload_from_workspace`]
+//! 的**内容判据**：磁盘字节与已应用内容一致就是无事发生。把本模块的第 1–4 层全部删掉，
+//! 单测仍然必须通过。
 //!
 //! ## 跨平台：账本条目保留整个 TTL，命中即删是不可靠的
 //!
@@ -97,6 +108,51 @@ struct LedgerEntry {
     at: Instant,
 }
 
+/// 一次文件事件的诊断轨迹。
+///
+/// 「多了一次重载」时，只看断言里的计数说明不了任何问题：需要知道是**哪条事件**、
+/// 走的**哪个决策分支**漏出来的。这里记录最后一次被接受的事件（路径 + 事件类型 + 宿主
+/// 的处理结果）与最后一次过滤决策，测试可以把它放进断言消息。事件已经过去 500ms 去抖，
+/// 记录开销可以忽略。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchEventTrace {
+    /// 事件涉及的路径（平台上报的原始路径）。
+    pub path: PathBuf,
+    /// 事件类型，即 `EventKind` 的 `Debug` 形式（macOS 上常见 `Any`）。
+    pub kind: String,
+    /// 过滤层的决策：`accepted`，或拒绝原因（`ledger-hit`、`quiet-window`、
+    /// `git-busy`、`gitdir`、`noise`、`not-workspace-file`、`read-only`）。
+    pub decision: String,
+    /// 宿主对这条已接受事件的处理结果；尚未处理时为 `None`。
+    pub outcome: Option<String>,
+}
+
+impl WatchEventTrace {
+    /// 断言消息里的一行可读描述。
+    pub fn describe(&self) -> String {
+        format!(
+            "path={:?} kind={} decision={}{}",
+            self.path,
+            self.kind,
+            self.decision,
+            match &self.outcome {
+                Some(outcome) => format!(" outcome={outcome}"),
+                None => String::new(),
+            }
+        )
+    }
+}
+
+/// 过滤器的决策名：事件被放行。
+const DECISION_ACCEPTED: &str = "accepted";
+
+/// 诊断轨迹。只保留最近一条，内存有界。
+#[derive(Default)]
+struct Trace {
+    last_accepted: Option<WatchEventTrace>,
+    last_decision: Option<WatchEventTrace>,
+}
+
 /// 事件过滤状态。由监听回调（notify 自己的线程）与宿主共享。
 pub struct ChangeFilter {
     root: PathBuf,
@@ -104,6 +160,7 @@ pub struct ChangeFilter {
     ledger: Mutex<HashMap<PathBuf, LedgerEntry>>,
     quiet: Mutex<HashMap<PathBuf, Instant>>,
     git_busy: AtomicBool,
+    trace: Mutex<Trace>,
 }
 
 impl ChangeFilter {
@@ -114,6 +171,7 @@ impl ChangeFilter {
             ledger: Mutex::new(HashMap::new()),
             quiet: Mutex::new(HashMap::new()),
             git_busy: AtomicBool::new(false),
+            trace: Mutex::new(Trace::default()),
         }
     }
 
@@ -155,14 +213,57 @@ impl ChangeFilter {
     }
 
     /// 该路径的变更是否应视为「需要处理的外部修改」。
-    pub fn accept(&self, path: &Path) -> bool {
+    ///
+    /// 每次决策都记进诊断轨迹（见 [`WatchEventTrace`]）：跨平台缺陷 2 的剩余问题正是
+    /// 「不知道是哪种事件、从哪个分支漏出去的」。
+    pub fn accept(&self, path: &Path, kind: &EventKind) -> bool {
+        let decision = self.decide(path);
+        let trace = WatchEventTrace {
+            path: path.to_path_buf(),
+            kind: format!("{kind:?}"),
+            decision: decision.to_string(),
+            outcome: None,
+        };
+        {
+            let mut state = lock(&self.trace);
+            if decision == DECISION_ACCEPTED {
+                state.last_accepted = Some(trace.clone());
+            }
+            state.last_decision = Some(trace);
+        }
+        decision == DECISION_ACCEPTED
+    }
+
+    /// 记录一条被 `is_modification` 丢掉的只读/其它事件（诊断用）。
+    pub fn record_dropped(&self, path: &Path, kind: &EventKind, decision: &str) {
+        let trace = WatchEventTrace {
+            path: path.to_path_buf(),
+            kind: format!("{kind:?}"),
+            decision: decision.to_string(),
+            outcome: None,
+        };
+        lock(&self.trace).last_decision = Some(trace);
+    }
+
+    /// 记录宿主对一条已接受事件的处理结果（诊断用），例如内容未变的无操作。
+    pub fn record_outcome(&self, path: &Path, outcome: &str) {
+        let mut state = lock(&self.trace);
+        if let Some(accepted) = state.last_accepted.as_mut() {
+            if accepted.path == path {
+                accepted.outcome = Some(outcome.to_string());
+            }
+        }
+    }
+
+    /// 过滤决策本体，返回决策名。
+    fn decide(&self, path: &Path) -> &'static str {
         if self.git_busy.load(Ordering::SeqCst) {
-            return false;
+            return "git-busy";
         }
         // gitdir（`.git/`）内部的变化一律忽略：status 查询会改写 `.git/index`。
         if let Some(git_dir) = &self.git_dir {
             if path.starts_with(git_dir) {
-                return false;
+                return "gitdir";
             }
         }
         let name = path
@@ -170,10 +271,10 @@ impl ChangeFilter {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         if is_noise(&name) {
-            return false;
+            return "noise";
         }
         if !self.is_owned(path) {
-            return false;
+            return "not-workspace-file";
         }
 
         let now = Instant::now();
@@ -190,7 +291,7 @@ impl ChangeFilter {
         };
         if matched {
             lock(&self.quiet).insert(path.to_path_buf(), now);
-            return false;
+            return "ledger-hit";
         }
         // 第 3 层：每路径静默窗口。内容哈希对不上（文件在 `rename` 后又被改写）或文件
         // 已被删除时，靠它吞掉写入后紧随的噪声事件。
@@ -199,11 +300,21 @@ impl ChangeFilter {
             quiet.retain(|_, at| now.duration_since(*at) < LEDGER_TTL);
             if let Some(at) = quiet.get(path) {
                 if now.duration_since(*at) < QUIET_WINDOW {
-                    return false;
+                    return "quiet-window";
                 }
             }
         }
-        true
+        DECISION_ACCEPTED
+    }
+
+    /// 最近一次被接受的事件（诊断用）。
+    pub fn last_accepted_event(&self) -> Option<WatchEventTrace> {
+        lock(&self.trace).last_accepted.clone()
+    }
+
+    /// 最近一次过滤决策，包括被拒绝的事件（诊断用）。
+    pub fn last_decision(&self) -> Option<WatchEventTrace> {
+        lock(&self.trace).last_decision.clone()
     }
 
     /// 路径是否是应用真正维护的工作区文件。
@@ -262,7 +373,8 @@ fn is_noise(name: &str) -> bool {
         || name.starts_with('.')
 }
 
-fn hash_bytes(bytes: &[u8]) -> u64 {
+/// 字节内容的哈希。宿主的「已应用内容」判据与账本共用同一个实现。
+pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()
@@ -301,12 +413,15 @@ impl WorkspaceWatcher {
                 Err(_) => return,
             };
             for event in events {
+                let kind = &event.event.kind;
                 // 只读事件不算修改：算哈希时读文件本身会再生成 Access 事件。
-                if !is_modification(&event.event.kind) {
-                    continue;
-                }
+                let modification = is_modification(kind);
                 for path in &event.event.paths {
-                    if callback_filter.accept(path) {
+                    if !modification {
+                        callback_filter.record_dropped(path, kind, "read-only");
+                        continue;
+                    }
+                    if callback_filter.accept(path, kind) {
                         let _ = sender.send(path.clone());
                     }
                 }
@@ -344,6 +459,21 @@ impl WorkspaceWatcher {
     /// 记录宿主自己读到的文件内容（重载读），让随之而来的同内容事件被吞掉。
     pub fn record_own_read(&self, path: &Path, bytes: &[u8]) {
         self.filter.record_own_read(path, bytes);
+    }
+
+    /// 记录宿主对一条已接受事件的处理结果（诊断用）。
+    pub fn record_outcome(&self, path: &Path, outcome: &str) {
+        self.filter.record_outcome(path, outcome);
+    }
+
+    /// 最近一次被接受的事件（诊断用）。
+    pub fn last_accepted_event(&self) -> Option<WatchEventTrace> {
+        self.filter.last_accepted_event()
+    }
+
+    /// 最近一次过滤决策，包括被拒绝的事件（诊断用）。
+    pub fn last_decision(&self) -> Option<WatchEventTrace> {
+        self.filter.last_decision()
     }
 
     /// Git 操作忙标志：操作期间丢弃事件（见模块文档第 4 层）。

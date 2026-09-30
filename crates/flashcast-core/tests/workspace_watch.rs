@@ -37,6 +37,22 @@ fn rewrite_settings_unchanged(repo: &Path) -> PathBuf {
     path
 }
 
+/// 把最近一次事件轨迹描述成断言消息里的一行。
+///
+/// 「多了一次重载」本身没有信息量：需要知道究竟是哪条事件（路径、事件类型）从哪个
+/// 分支漏出来的。这里同时给出最后一次被接受的事件与最后一次过滤决策。
+fn watch_trace(host: &Host) -> String {
+    let describe = |label: &str, trace: Option<flashcast_core::WatchEventTrace>| match trace {
+        Some(trace) => format!("{label}：{}", trace.describe()),
+        None => format!("{label}：无"),
+    };
+    format!(
+        "{}；{}",
+        describe("最后接受的事件", host.last_watch_event()),
+        describe("最后的事件决策", host.last_watch_decision())
+    )
+}
+
 /// 外部编辑有效的设置文件后，宿主自动重新加载并生效。
 #[test]
 fn external_edit_of_settings_is_reloaded() {
@@ -52,7 +68,8 @@ fn external_edit_of_settings_is_reloaded() {
     // 自身写入必须被吞掉，先把基线确认清楚。
     assert!(
         host.wait_for_workspace_change(QUIET).is_none(),
-        "自身写入不得触发重载"
+        "自身写入不得触发重载（{}）",
+        watch_trace(&host)
     );
 
     // 外部（编辑器 / 其他进程）改成另一份合法配置。
@@ -79,9 +96,16 @@ fn external_edit_of_settings_is_reloaded() {
     // （inotify 的 Access 事件曾让这里变成永不收敛的事件流）。
     assert!(
         host.wait_for_workspace_change(QUIET).is_none(),
-        "一次外部修改不得产生持续的事件流"
+        "一次外部修改不得产生持续的事件流（{}；已计重载 {}）",
+        watch_trace(&host),
+        host.workspace_reloads()
     );
-    assert_eq!(host.workspace_reloads(), 1, "不得出现重复重载");
+    assert_eq!(
+        host.workspace_reloads(),
+        1,
+        "不得出现重复重载（{}）",
+        watch_trace(&host)
+    );
 
     cleanup(&repo);
     cleanup(&device);
@@ -153,7 +177,8 @@ fn the_applications_own_write_does_not_form_a_reload_loop() {
         .expect("写入设置");
         assert!(
             host.wait_for_workspace_change(QUIET).is_none(),
-            "自身写入 {hotkey} 触发了重载"
+            "自身写入 {hotkey} 触发了重载（{}）",
+            watch_trace(&host)
         );
     }
 
@@ -199,7 +224,8 @@ fn a_duplicate_event_with_unchanged_content_is_suppressed() {
     // 重复记录若被放行，去抖窗口 500ms 后就会到达，`QUIET` 足够看到它。
     assert!(
         host.wait_for_workspace_change(QUIET).is_none(),
-        "内容未变化的重复事件记录不得产生重载"
+        "内容未变化的重复事件记录不得产生重载（{}）",
+        watch_trace(&host)
     );
     assert_eq!(host.workspace_reloads(), 0, "内容未变化不算重载");
     assert_eq!(host.settings(), settings, "设置必须原样保留");
@@ -239,9 +265,16 @@ fn a_reload_does_not_repeat_itself_from_its_own_read() {
     rewrite_settings_unchanged(&repo);
     assert!(
         host.wait_for_workspace_change(QUIET).is_none(),
-        "重载读到的内容不得再触发一次重载"
+        "重载读到的内容不得再触发一次重载（{}；已计重载 {}）",
+        watch_trace(&host),
+        host.workspace_reloads()
     );
-    assert_eq!(host.workspace_reloads(), 1, "一次外部修改只应重载一次");
+    assert_eq!(
+        host.workspace_reloads(),
+        1,
+        "一次外部修改只应重载一次（{}）",
+        watch_trace(&host)
+    );
     assert_eq!(host.settings(), edited);
 
     cleanup(&repo);
@@ -434,6 +467,144 @@ fn switching_workspaces_moves_the_watcher() {
     assert_eq!(host.settings().hotkey, "Ctrl+Alt+N");
 
     cleanup(&first);
+    cleanup(&second);
+    cleanup(&device);
+}
+
+/// 跨平台缺陷 2 之后的新判据，**完全不依赖文件监听**：已应用内容相等就不是重载。
+///
+/// 这是「一次外部修改只重载一次」的主机制：宿主重载时先读原始字节，与「当前已应用内容」
+/// 的哈希比较，相同就不计数、不生效、不对外发事件。这里绕过监听，直接调用
+/// `reload_workspace`（UI 的「重新检测」入口）来证明判据本身成立，与事件路径、事件类型、
+/// FSEvents 的延迟、重复记录和静默窗口都无关。
+#[test]
+fn reload_is_a_noop_while_the_disk_content_equals_the_applied_content() {
+    let repo = real_git_repo("watch-applied-content");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    let initial = Settings {
+        hotkey: "Super+Space".to_string(),
+        ..fast_settings()
+    };
+    host.update_settings(initial.clone()).expect("保存初始设置");
+
+    // 内容与已应用的一致：不算一次重载，设置也不变。
+    let reload = host.reload_workspace();
+    assert!(!reload.applied, "内容未变不得生效：{reload:?}");
+    assert!(reload.error.is_none(), "内容未变不该报错：{reload:?}");
+    assert_eq!(host.workspace_reloads(), 0, "内容未变不得计入重载");
+    assert_eq!(host.settings(), initial);
+
+    // 内容真的变了：恰好一次重载。
+    let edited = Settings {
+        hotkey: "Ctrl+Alt+K".to_string(),
+        quick_access_limit: 9,
+        ..initial
+    };
+    write_settings_file(&repo, &edited);
+    let reload = host.reload_workspace();
+    assert!(reload.applied, "真实改动必须生效：{reload:?}");
+    assert_eq!(reload.settings, edited);
+    assert_eq!(host.settings(), edited);
+    assert_eq!(host.workspace_reloads(), 1, "真实改动恰好算一次重载");
+
+    // 同一内容再来一次：仍然不算重载（否则事件流会重复）。
+    let reload = host.reload_workspace();
+    assert!(!reload.applied, "同一内容不得重复生效：{reload:?}");
+    assert_eq!(host.workspace_reloads(), 1, "同一内容只应算一次重载");
+
+    cleanup(&repo);
+    cleanup(&device);
+}
+
+/// 每一条能改变设置的路径都必须刷新「已应用内容」，否则过期的哈希会静默吞掉真实改动。
+///
+/// 覆盖四条路径：首次关联 / 启动恢复（`activate_workspace`）、应用自身写入
+/// （`update_settings`）、外部重载生效（`wait_for_workspace_change`）、切换工作区。
+#[test]
+fn every_path_that_changes_settings_refreshes_the_applied_content() {
+    // 1）首次关联：工作区里已有的配置在关联时就已生效，不得再算一次重载。
+    let repo = real_git_repo("watch-applied-paths");
+    let file_settings = Settings {
+        hotkey: "Ctrl+Alt+1".to_string(),
+        ..fast_settings()
+    };
+    write_settings_file(&repo, &file_settings);
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+    assert_eq!(host.settings(), file_settings, "关联时必须载入工作区配置");
+    assert!(
+        !host.reload_workspace().applied,
+        "关联时的文件内容必须已经算作已应用"
+    );
+    assert_eq!(host.workspace_reloads(), 0, "关联本身不计重载");
+
+    // 2）应用自身写入：写完即已应用，不得再算一次重载。
+    let written = Settings {
+        hotkey: "Ctrl+Alt+2".to_string(),
+        ..file_settings.clone()
+    };
+    host.update_settings(written.clone()).expect("保存设置");
+    assert!(
+        !host.reload_workspace().applied,
+        "应用写入后不得再算一次重载"
+    );
+    assert_eq!(host.workspace_reloads(), 0);
+    // 顺带把自身写入的事件排干，让下面的外部修改不受静默窗口影响。
+    assert!(
+        host.wait_for_workspace_change(QUIET).is_none(),
+        "自身写入不得触发重载（{}）",
+        watch_trace(&host)
+    );
+
+    // 3）外部重载生效：生效后哈希必须刷新，同一内容不得重复重载。
+    let external = Settings {
+        hotkey: "Ctrl+Alt+3".to_string(),
+        ..written.clone()
+    };
+    write_settings_file(&repo, &external);
+    let reload = host
+        .wait_for_workspace_change(WAIT)
+        .expect("外部修改必须触发重载");
+    assert!(reload.applied, "{reload:?}");
+    assert_eq!(host.workspace_reloads(), 1);
+    assert!(
+        !host.reload_workspace().applied,
+        "重载生效后不得再把同一内容算一次重载"
+    );
+    assert_eq!(host.workspace_reloads(), 1);
+
+    // 4）切换工作区：新工作区的现有内容同样算作已应用。
+    let second = real_git_repo("watch-applied-paths-2");
+    let second_settings = Settings {
+        hotkey: "Ctrl+Alt+4".to_string(),
+        ..external.clone()
+    };
+    write_settings_file(&second, &second_settings);
+    host.select_workspace(&second).expect("切换工作区");
+    assert_eq!(host.settings(), second_settings);
+    assert!(
+        !host.reload_workspace().applied,
+        "切换后新工作区的内容必须算作已应用"
+    );
+    assert_eq!(host.workspace_reloads(), 1, "切换工作区本身不计重载");
+
+    // 5）反例：已应用哈希绝不能是过期的 —— 新工作区里的真实改动仍必须生效。
+    let changed = Settings {
+        hotkey: "Ctrl+Alt+5".to_string(),
+        ..second_settings.clone()
+    };
+    write_settings_file(&second, &changed);
+    let reload = host.reload_workspace();
+    assert!(
+        reload.applied,
+        "真实改动不得被过期的已应用哈希吞掉：{reload:?}"
+    );
+    assert_eq!(host.settings(), changed);
+    assert_eq!(host.workspace_reloads(), 2);
+
+    cleanup(&repo);
     cleanup(&second);
     cleanup(&device);
 }

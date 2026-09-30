@@ -51,7 +51,9 @@ pub use theme::{
     SpaceTokens, StateTokens, ThemeAppearance, ThemeDocument, ThemeEntry, ThemeError, ThemeLibrary,
     ThemePalettes, ThemeSelection, ThemeState, ThemeTokens, THEME_DARK, THEME_LIGHT, THEME_SYSTEM,
 };
-pub use watch::{ChangeFilter, WatchError, WorkspaceWatcher, DEBOUNCE, QUIET_WINDOW};
+pub use watch::{
+    ChangeFilter, WatchError, WatchEventTrace, WorkspaceWatcher, DEBOUNCE, QUIET_WINDOW,
+};
 pub use workspace::{
     workspace_remote_of, Workspace, WorkspaceError, WorkspaceReload, WorkspaceRemote,
     WorkspaceStatus, MANIFEST_FILE, MEMOS_DIR, SETTINGS_FILE, THEMES_DIR, THEME_FILE,

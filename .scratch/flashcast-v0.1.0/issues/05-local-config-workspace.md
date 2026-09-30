@@ -194,3 +194,81 @@ Linux 通过，失败全部在 `crates/flashcast-core/tests/workspace_watch.rs`�
   该失败发生在第三方 build script 里，与本次改动无关）。任务要求的 `-p flashcast-platform`
   两条交叉检查已通过。本次改动只用 `std`（`fs::read` / `str::from_utf8` / `Vec<u8>`），
   没有任何 `#[cfg]` 分支，因此跨平台类型风险很低，但仍需 CI 实测为准。
+
+### 2026-10-01：第二次 macOS 失败；判据改为「已应用内容相等」（CI 36777205788）
+
+CI run `36777205788`（提交 `e039e95`）Linux 与 Windows x64 已经通过，**两条 macOS 腿仍然失败**，
+失败位置与上一轮相同，都在 `crates/flashcast-core/tests/workspace_watch.rs`：
+
+- `a_reload_does_not_repeat_itself_from_its_own_read`：240 行 panic，消息「重载读到的内容不得再触发一次重载」。
+- `external_edit_of_settings_is_reloaded`：80 行 panic，消息「一次外部修改不得产生持续的事件流」。
+
+即：上一轮的「账本条目保留整个 TTL + 重载自读记账」在 Linux 上成立，在 macOS 上仍然不够。
+根因是这套抑制**按事件**做判断，而 macOS 的 FSEvents 让事件的三样元数据都不可靠——上报路径未必
+等于写入路径；事件类型常只有 `EventKind::Any`；到达时间可能晚于 600ms 静默窗口。继续在
+「路径 + 时间 + 事件类型」上加补丁，只会不断在某个平台上找出新的漏口。
+
+#### 设计变更：从「按路径 / 时间抑制」改为「已应用内容相等」
+
+- `HostInner` 新增 `applied_settings_hash`：**当前已应用设置内容**的哈希。
+- `Host::reload_from_workspace` 先读 `settings.toml` 的**原始字节**并算哈希，与 `applied_settings_hash`
+  比较：**相同则返回 `None`**——不计 `reloads`、不重新生效，`wait_for_workspace_change` 也不对外发出
+  任何事件；只有真实内容变化才算一次重载。文本变了但解析后与生效设置相同同样返回 `None`（同时刷新
+  哈希，避免重复解析），文件被删除、解析失败等仍如实向外报告。
+- 该判据与事件路径、事件类型、FSEvents 延迟、重复 / 合并记录、读文件引发的自伤事件、静默窗口全都无关。
+  账本 / 静默窗口 / `git_busy` 保留为廉价的第一道过滤，但**删掉它们正确性仍然成立**（见下文红绿验证）。
+- `applied_settings_hash` 的刷新路径（每条都能改变设置，漏一条就会静默吞掉真实修改）：
+  1. 应用自身写入：`update_settings` → `persist_settings` 返回落盘字节哈希，与 `inner.settings` 在同一把锁内生效；
+  2. 外部重载生效：`reload_from_workspace` 应用新设置时；
+  3. 切换 / 首次关联工作区：`activate_workspace`（同时覆盖启动恢复 `restore_workspace`）。
+
+实现提交 `cf95ae2`（宿主机判据与诊断）、`9b203b2`（测试与断言消息）。
+
+#### 可诊断性（上一轮失败消息只有一句话，这次刻意补上）
+
+- `ChangeFilter` 记录最后一次被接受的事件（路径、`EventKind`、过滤决策）与最后一次过滤决策
+  （含 `ledger-hit` / `quiet-window` / `git-busy` / `gitdir` / `noise` / `read-only` 等拒绝原因）；
+  宿主处理后再补上处理结果（`content-unchanged-noop` / `applied` / `invalid-config` / `settings-file-removed` …）。
+- 宿主入口：`Host::last_watch_event()` / `Host::last_watch_decision()`，类型为 `WatchEventTrace`
+  （已从 `flashcast_core` 导出）。只保留最近一条，事件本身已过去 500ms 去抖，开销可忽略。
+- `workspace_watch.rs` 的负向断言消息现在带上这些信息，例如
+  「一次外部修改不得产生持续的事件流（最后接受的事件：path=… kind=… decision=… outcome=…；最后的事件决策：…；已计重载 N）」。
+  红绿实验里这些消息直接指出了漏出的事件类型（`Access(Close(Write))`）与分支，可读性达到了目的。
+
+#### 新增测试（`crates/flashcast-core/tests/workspace_watch.rs`，用例数 8 → 12）
+
+- `reload_is_a_noop_while_the_disk_content_equals_the_applied_content`：**绕过文件监听**直接调用
+  `reload_workspace`（UI 的「重新检测」入口），证明「内容相等 → 不计重载、不生效；内容变化 →
+  恰好一次；同一内容再来一次 → 仍不计」。这是新判据本身的证明，与监听实现无关。
+- `every_path_that_changes_settings_refreshes_the_applied_content`：覆盖首次关联、应用自身写入、
+  外部重载生效、切换工作区四条刷新路径，最后用一次真实改动证明已应用哈希不会过期到吞掉修改。
+- 两个既有回归用例的消息加上事件轨迹，未来失败时能直接定位事件与分支。
+
+#### 验证结果（Linux x64，本机）
+
+- `cargo test --workspace`：**160 通过，0 失败**（集成基线 158 + 本次新增 2）。
+- `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null cargo test --workspace`：同样 **160 通过**
+  （CI 与本机的差异是宿主 git 身份与 `init.defaultBranch`，ticket 14 的夹具已固定为 `main`）。
+- `cargo build -p flashcast`：成功（仅既有的 2 条 `dead_code` 警告）。
+- `CARGO_TARGET_DIR=$HOME/.cache/flashcast/xcheck/05b-windows cargo check -p flashcast-platform
+  --target x86_64-pc-windows-msvc --all-targets`：通过。
+- `CARGO_TARGET_DIR=$HOME/.cache/flashcast/xcheck/05b-darwin cargo check -p flashcast-platform
+  --target x86_64-apple-darwin --all-targets`：通过。
+- **红 → 绿**（全部为临时改动，验证后已 `git checkout` 还原到 `9b203b2`）：
+  1. 设计标准：临时禁用第一道过滤的三层（`is_modification` 一律为真、跳过账本与静默窗口），
+     `workspace_watch` 的 **12 个用例仍然全部通过**——正确性只依赖「已应用内容相等」，不依赖那三层。
+  2. 在（1）的基础上再临时还原主判据（回到修复前「内容没变也对外发一次事件」的行为），
+     `a_reload_does_not_repeat_itself_from_its_own_read` 与 `external_edit_of_settings_is_reloaded`
+     在 Linux 上**确实失败**，且失败消息里能看到最后接受的事件与宿主处理结果，说明用例不是空转。
+
+#### 仍未验证（只能由真实 macOS / Windows CI 确认）
+
+- 两条 macOS 腿上的**运行时**行为：本机是 Linux，FSEvents 的路径 / 类型 / 延迟特性无法在本地复现。
+  本次把判据从「事件元数据」挪到「文件内容」，正是为了不再依赖这些特性，但**没有** macOS 实机或
+  runner 证据；`36777205788` 的两个用例是否转绿只能由下一次 CI 判定，本报告不作此断言。
+- `cargo check -p flashcast-core --target x86_64-pc-windows-msvc / x86_64-apple-darwin` 仍做不了：
+  会触发 `libz-sys` / `libgit2-sys` 为对应目标编译 C 代码，本机没有 Windows / macOS C 工具链
+  （与上文第 192–196 行同因；实测失败发生在第三方 build script，与本次改动无关）。本次新增代码只用
+  `std`（`std::fs::read`、`DefaultHasher`、`Option<u64>`），没有平台 `#[cfg]` 分支。
+- 真实编辑器造成的**迟到**事件（晚于 600ms 静默窗口）：Linux 上以「相同字节重写文件」模拟，
+  未在 macOS 上实测 FSEvents 的真实延迟分布。
