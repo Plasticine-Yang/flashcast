@@ -84,14 +84,24 @@ find "$PREFIX/usr/lib" "$PREFIX/usr/share" -name '*.pc' -type f -print0 2>/dev/n
 
 # 5. 修复指向运行库的断裂符号链接：-dev 包提供 libfoo.so -> libfoo.so.N，
 #    而 libfoo.so.N 来自运行库包。把断链改为指向系统运行库的绝对路径，供链接器使用。
+#
+#    同时在同一目录补出运行库原名（libfoo.so.N）。`tauri build` 打包 AppImage 时会先用
+#    pkg-config 的 `--libs-only-L` 找到 libayatana-appindicator3-0.1 的库目录，再拼出
+#    `<libdir>/libayatana-appindicator3.so.1` 一起塞进 AppImage；前缀里只有 `.so` 时该步骤
+#    会以「Failed to copy custom files」失败。补上运行库原名后，此前缀才与一次真实的 -dev
+#    安装（CI 上由 apt 安装）等价。
 while IFS= read -r link; do
   target="$(readlink "$link")"
   case "$target" in
     /*) cand="$target" ;;
     *) cand="/usr/lib/$multiarch/$target" ;;
   esac
-  if [ -e "$cand" ]; then ln -sfn "$cand" "$link"; fi
-done < <(find "$PREFIX/usr/lib" -xtype l -name '*.so' 2>/dev/null)
+  if [ -e "$cand" ]; then
+    ln -sfn "$cand" "$link"
+    soname="$(dirname "$link")/$(basename "$cand")"
+    [ -e "$soname" ] || ln -sfn "$cand" "$soname"
+  fi
+done < <(find "$PREFIX/usr/lib" -type l -name '*.so' 2>/dev/null)
 
 # 6. 输出环境变量。若 rustup 安装在默认的非 root 位置，一并加入 PATH。
 cat <<ENV
