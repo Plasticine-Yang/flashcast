@@ -7,7 +7,7 @@
 mod support;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flashcast_core::{Host, Settings, SETTINGS_FILE};
@@ -20,6 +20,21 @@ const QUIET: Duration = Duration::from_millis(1600);
 
 fn write_settings_file(repo: &Path, settings: &Settings) {
     fs::write(repo.join(SETTINGS_FILE), settings.to_toml().unwrap()).expect("写入设置文件");
+}
+
+/// 用与当前内容**完全相同**的字节再写一次设置文件。
+///
+/// 模拟的是「同一次逻辑写入的第二条事件记录」：Linux 的 inotify 一次 `rename` 基本只上报
+/// 一条，而 macOS 的 FSEvents 与 Windows 的 `ReadDirectoryChangesW` 常上报多条。这里用
+/// 真写一次来补齐那条记录，内容不变，因此它必须被内容哈希账本吞掉。
+fn rewrite_settings_unchanged(repo: &Path) -> PathBuf {
+    let path = repo
+        .canonicalize()
+        .expect("解析工作区路径")
+        .join(SETTINGS_FILE);
+    let bytes = fs::read(&path).expect("读取设置文件");
+    fs::write(&path, bytes).expect("用相同内容重写设置文件");
+    path
 }
 
 /// 外部编辑有效的设置文件后，宿主自动重新加载并生效。
@@ -53,7 +68,10 @@ fn external_edit_of_settings_is_reloaded() {
         .expect("外部修改必须触发重载");
     assert!(reload.applied, "有效的外部修改必须生效：{reload:?}");
     assert!(reload.error.is_none(), "有效配置不应报错：{reload:?}");
-    assert_eq!(reload.path, repo.canonicalize().unwrap().join(SETTINGS_FILE));
+    assert_eq!(
+        reload.path,
+        repo.canonicalize().unwrap().join(SETTINGS_FILE)
+    );
     assert_eq!(host.settings(), edited, "重载后设置必须更新");
     assert_eq!(host.workspace_reloads(), 1);
     assert!(host.workspace_status().error.is_none());
@@ -142,9 +160,88 @@ fn the_applications_own_write_does_not_form_a_reload_loop() {
     assert_eq!(host.workspace_reloads(), 0, "自身写入不得计入重载");
     assert_eq!(host.settings().hotkey, "Ctrl+Shift+F2");
     assert!(
-        !repo.join(format!(".{SETTINGS_FILE}.flashcast.tmp")).exists(),
+        !repo
+            .join(format!(".{SETTINGS_FILE}.flashcast.tmp"))
+            .exists(),
         "原子写入不得留下临时文件"
     );
+
+    cleanup(&repo);
+    cleanup(&device);
+}
+
+/// 回归（跨平台缺陷 1）：自身写入后的**第二条**事件记录，内容未变，不得产生重载。
+///
+/// 一次逻辑写入在 macOS（FSEvents）与 Windows（ReadDirectoryChangesW）上常产生多条事件
+/// 记录，相邻记录可能相隔数百毫秒。若第一条命中内容哈希后就把账本条目删掉，第二条只能
+/// 落到每路径静默窗口上；晚于 `QUIET_WINDOW` 时它就被当成外部修改，产生一次内容其实没变
+/// 的多余重载。Linux 只上报一条记录，所以这里手工补齐第二条。
+#[test]
+fn a_duplicate_event_with_unchanged_content_is_suppressed() {
+    let repo = real_git_repo("watch-duplicate-event");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    let settings = Settings {
+        hotkey: "Super+Space".to_string(),
+        ..fast_settings()
+    };
+    host.update_settings(settings.clone()).expect("保存设置");
+    // 等到第一条事件记录被处理（去抖窗口 500ms）**且**静默窗口（600ms）已经过期，
+    // 第二条记录才会暴露「账本条目被第一条吃掉」这个缺陷。
+    assert!(
+        host.wait_for_workspace_change(QUIET).is_none(),
+        "自身写入不得触发重载"
+    );
+
+    rewrite_settings_unchanged(&repo);
+
+    assert!(
+        host.wait_for_workspace_change(WAIT).is_none(),
+        "内容未变化的重复事件记录不得产生重载"
+    );
+    assert_eq!(host.workspace_reloads(), 0, "内容未变化不算重载");
+    assert_eq!(host.settings(), settings, "设置必须原样保留");
+
+    cleanup(&repo);
+    cleanup(&device);
+}
+
+/// 回归（跨平台缺陷 2）：重载自己要读设置文件，这次读不得再变成一次重载。
+///
+/// macOS 的 FSEvents 经常不给更细的事件类型，读文件会被上报成 `EventKind::Any`，按事件
+/// 类型丢不掉，于是「重载 → 读 → 事件 → 重载」会自我维持。宿主把重载读到的字节也记进
+/// 账本后，内容相同的后续事件必须被吞掉。这里在重载完成后用相同字节再写一次来触发它。
+#[test]
+fn a_reload_does_not_repeat_itself_from_its_own_read() {
+    let repo = real_git_repo("watch-reload-read");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+    host.update_settings(Settings {
+        hotkey: "Super+Space".to_string(),
+        ..fast_settings()
+    })
+    .expect("保存设置");
+    assert!(host.wait_for_workspace_change(QUIET).is_none());
+
+    let edited = Settings {
+        hotkey: "Ctrl+Alt+K".to_string(),
+        ..fast_settings()
+    };
+    write_settings_file(&repo, &edited);
+    let reload = host
+        .wait_for_workspace_change(WAIT)
+        .expect("外部修改必须触发重载");
+    assert!(reload.applied, "外部修改必须生效：{reload:?}");
+
+    // 重载自己的那次读（以及同一逻辑写入的重复上报）内容与新设置一致，必须被吞掉。
+    rewrite_settings_unchanged(&repo);
+    assert!(
+        host.wait_for_workspace_change(QUIET).is_none(),
+        "重载读到的内容不得再触发一次重载"
+    );
+    assert_eq!(host.workspace_reloads(), 1, "一次外部修改只应重载一次");
+    assert_eq!(host.settings(), edited);
 
     cleanup(&repo);
     cleanup(&device);
@@ -230,7 +327,9 @@ fn git_busy_flag_discards_changes_during_git_operations() {
         ..before.clone()
     };
     write_settings_file(&repo, &after);
-    let reload = host.wait_for_workspace_change(WAIT).expect("恢复后应处理变更");
+    let reload = host
+        .wait_for_workspace_change(WAIT)
+        .expect("恢复后应处理变更");
     assert!(reload.applied, "{reload:?}");
     assert_eq!(host.settings(), after);
 
@@ -327,7 +426,9 @@ fn switching_workspaces_moves_the_watcher() {
         ..host.settings()
     };
     write_settings_file(&second, &edited);
-    let reload = host.wait_for_workspace_change(WAIT).expect("新工作区应生效");
+    let reload = host
+        .wait_for_workspace_change(WAIT)
+        .expect("新工作区应生效");
     assert!(reload.applied, "{reload:?}");
     assert_eq!(host.settings().hotkey, "Ctrl+Alt+N");
 
