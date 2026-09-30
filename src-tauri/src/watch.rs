@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use flashcast_core::{Settings, WorkspaceReload, WorkspaceStatus};
+use flashcast_core::{Settings, ThemeState, WorkspaceReload, WorkspaceStatus};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 use crate::state::AppState;
@@ -22,6 +22,8 @@ const SLICE: Duration = Duration::from_millis(400);
 pub struct WorkspaceEvent {
     pub status: WorkspaceStatus,
     pub settings: Settings,
+    /// 处理之后生效的主题状态（无效主题保留上一次可用外观）。
+    pub theme: ThemeState,
     /// 触发本次事件的变更；`None` 表示由 UI 主动请求的刷新。
     pub reload: Option<WorkspaceReload>,
 }
@@ -45,6 +47,7 @@ pub fn spawn<R: Runtime>(app: &AppHandle<R>) {
             let payload = WorkspaceEvent {
                 status: state.host.workspace_status(),
                 settings,
+                theme: state.host.theme_state(),
                 reload: Some(reload),
             };
             drop(state);

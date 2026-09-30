@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type {
   ActionOutcome,
+  Appearance,
   ItemView,
   QueryView,
   Settings,
   StatusView,
+  ThemeState,
   WorkspaceEvent,
   WorkspaceStatus,
 } from "./types";
@@ -13,6 +15,28 @@ import { ActionBar } from "./components/ActionBar";
 import { ResultList } from "./components/ResultList";
 import { SettingsScreen, type SettingsMessage } from "./components/SettingsScreen";
 import { StatusBanner } from "./components/StatusBanner";
+
+/** 把宿主下发的语义 token 写成根元素上的 CSS 自定义属性。
+ *
+ * UI 不认识任何具体主题：主题只改这些属性，组件与布局保持不变。
+ */
+export function applyThemeVars(theme: ThemeState) {
+  const root = document.documentElement;
+  for (const { name, value } of theme.cssVars) {
+    root.style.setProperty(name, value);
+  }
+  // 供浏览器交互检查与 CSS 读取当前实际外观。
+  root.dataset.themeAppearance = theme.appearance;
+  root.dataset.themeSelected = theme.selected;
+}
+
+/** 系统外观：`prefers-color-scheme` 是 OS 外观在 webview 里的可靠信号。 */
+export function systemAppearance(): Appearance {
+  if (typeof window === "undefined" || !window.matchMedia) {
+    return "light";
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
 
 /** 最近一次已应用的响应序号。seq 更小的响应必须被丢弃（ADR §3）。 */
 const EMPTY_RESPONSE: QueryView = {
@@ -44,6 +68,7 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>("search");
   const [workspace, setWorkspace] = useState<WorkspaceStatus | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [theme, setTheme] = useState<ThemeState | null>(null);
   const [settingsMessage, setSettingsMessage] = useState<SettingsMessage | null>(null);
   const [workspaceAlert, setWorkspaceAlert] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -71,6 +96,11 @@ export default function App() {
       setWorkspaceAlert(next.error);
     });
     void api.get_settings().then(setSettings);
+    // 主题：先按当前系统外观解析一次（跟随系统的主题据此落定），再订阅后续变化。
+    void api
+      .set_system_appearance(systemAppearance())
+      .then(setTheme)
+      .catch(() => api.get_theme().then(setTheme));
     const unlisteners: (() => void)[] = [];
     const register = async () => {
       unlisteners.push(
@@ -103,12 +133,21 @@ export default function App() {
           );
         }),
       );
+      // 宿主推送的主题状态（选择主题、外部改 theme.json、启停主题）。
+      unlisteners.push(
+        await api.on("flashcast://theme", (payload) => {
+          setTheme(payload as ThemeState);
+        }),
+      );
       // 工作区外部修改：有效则已生效，无效则保留上次有效状态并显示原因。
       unlisteners.push(
         await api.on("flashcast://workspace", (payload) => {
           const event = payload as WorkspaceEvent;
           setWorkspace(event.status);
           setSettings(event.settings);
+          if (event.theme) {
+            setTheme(event.theme);
+          }
           setWorkspaceAlert(event.status.error);
           if (event.reload?.error) {
             setSettingsMessage({ level: "error", text: event.reload.error });
@@ -123,12 +162,28 @@ export default function App() {
     };
     void register();
     focusInput();
+
+    // 跟随系统：OS 外观在运行中变化时重新解析主题，不需要重启应用。
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSystemAppearanceChange = () => {
+      void api.set_system_appearance(systemAppearance()).then(setTheme);
+    };
+    media.addEventListener("change", onSystemAppearanceChange);
+
     return () => {
+      media.removeEventListener("change", onSystemAppearanceChange);
       for (const unlisten of unlisteners) {
         unlisten();
       }
     };
   }, []);
+
+  // 主题只通过 CSS 自定义属性生效：切换主题不改变任何布局。
+  useEffect(() => {
+    if (theme) {
+      applyThemeVars(theme);
+    }
+  }, [theme]);
 
   function focusInput() {
     // 唤起后立即进入输入状态。
@@ -143,6 +198,7 @@ export default function App() {
     setScreen("settings");
     void api.get_workspace().then(setWorkspace);
     void api.get_settings().then(setSettings);
+    void api.get_theme().then(setTheme);
   };
 
   const closeSettings = () => {
@@ -189,6 +245,34 @@ export default function App() {
         setSettingsMessage({
           level: "info",
           text: `已初始化工作区与 Git 仓库：${next.path}`,
+        });
+      },
+    );
+  };
+
+  const handleSelectTheme = (id: string) => {
+    void runSettingsAction(
+      () => api.select_theme(id),
+      (next) => {
+        setTheme(next);
+        setSettingsMessage({
+          level: "info",
+          text: `已切换主题：${next.selectedName}（${
+            next.appearance === "dark" ? "深色" : "浅色"
+          }）`,
+        });
+      },
+    );
+  };
+
+  const handleToggleTheme = (id: string, enabled: boolean) => {
+    void runSettingsAction(
+      () => api.set_plugin_enabled(id, enabled),
+      (next) => {
+        setTheme(next);
+        setSettingsMessage({
+          level: "info",
+          text: `${enabled ? "已启用" : "已停用"}主题：${next.selectedName}`,
         });
       },
     );
@@ -347,6 +431,7 @@ export default function App() {
         <SettingsScreen
           workspace={workspace}
           settings={settings}
+          theme={theme}
           hotkey={status?.hotkey ?? null}
           message={settingsMessage}
           busy={settingsBusy}
@@ -354,6 +439,8 @@ export default function App() {
           onSelectWorkspace={handleSelectWorkspace}
           onInitWorkspace={handleInitWorkspace}
           onSaveHotkey={handleSaveHotkey}
+          onSelectTheme={handleSelectTheme}
+          onToggleTheme={handleToggleTheme}
         />
       ) : (
         <>

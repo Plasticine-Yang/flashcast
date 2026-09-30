@@ -672,10 +672,6 @@ impl ThemeTokens {
             name: "--fc-shadow-overlay".to_string(),
             value: self.shadow.overlay.clone(),
         });
-        vars.push(CssVar {
-            name: "--fc-state-disabled-text".to_string(),
-            value: self.state.disabled.text.clone(),
-        });
         vars
     }
 

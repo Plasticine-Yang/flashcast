@@ -1,25 +1,32 @@
 /*
  * Flashcast 设计令牌与紧凑列表样式。
  *
- * 约定（ADR / spec §Implementation Decisions）：
+ * 约定（ADR §7 / spec §Implementation Decisions）：
  * - 窗口基准宽约 640px，约 14px 圆角，中性背景、细边框、轻阴影；
  * - 搜索输入约 16px，正文约 14px，辅助信息约 12px；
  * - 唤起、关闭、键盘选择、查询更新**无动画**：这些元素统一 `transition: none`；
  * - 选中、焦点与错误状态视觉可区分；
  * - 低分辨率与系统缩放下保持可用（列表滚动，极小高度下压缩内边距）。
  *
- * 主题在 ticket 06 落地；这里只提供默认（浅色）令牌。
+ * 这里的 `:root` 只是**兜底默认值**（与内置浅色主题一致），宿主在启动时会用所选
+ * 主题的语义 token 覆盖这些自定义属性（见 `src/App.tsx` 的 `applyThemeVars`）。
+ * UI 不认识任何具体主题，只消费属性；主题不得改变布局几何（宿主校验时钉住
+ * 间距与字号），因此切换主题不会移动控件。
  */
 
 :root {
   --fc-radius-window: 14px;
   --fc-radius-item: 8px;
+  --fc-radius-control: 6px;
   --fc-page-bg: rgba(250, 250, 251, 0.98);
   --fc-surface: #ffffff;
+  --fc-hover-bg: rgba(15, 23, 42, 0.04);
   --fc-border: rgba(15, 23, 42, 0.12);
   --fc-border-strong: rgba(15, 23, 42, 0.24);
   --fc-text: #16181d;
   --fc-text-muted: #6b7280;
+  --fc-text-disabled: #8b919c;
+  --fc-accent: #2563eb;
   --fc-selection-bg: rgba(37, 99, 235, 0.12);
   --fc-selection-border: rgba(37, 99, 235, 0.55);
   --fc-focus-ring: rgba(37, 99, 235, 0.65);
@@ -30,10 +37,25 @@
   --fc-warning-border: rgba(217, 119, 6, 0.45);
   --fc-warning-text: #92400e;
   --fc-info-bg: rgba(15, 23, 42, 0.05);
+  --fc-icon-fallback-bg: rgba(15, 23, 42, 0.08);
   --fc-shadow: 0 8px 28px rgba(15, 23, 42, 0.16);
+  --fc-shadow-overlay: 0 12px 32px rgba(15, 23, 42, 0.22);
+  --fc-disabled-opacity: 0.5;
+  --fc-font-family:
+    system-ui,
+    -apple-system,
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
   --fc-font-body: 14px;
   --fc-font-input: 16px;
   --fc-font-aux: 12px;
+  --fc-space-window-padding: 14px;
+  --fc-space-row-padding: 6px;
+  --fc-space-row-gap: 10px;
+  --fc-space-section-gap: 8px;
   --fc-row-height: 44px;
 }
 
@@ -49,14 +71,7 @@ body {
   height: 100%;
   background: transparent;
   color: var(--fc-text);
-  font-family:
-    system-ui,
-    -apple-system,
-    "Noto Sans CJK SC",
-    "Source Han Sans SC",
-    "PingFang SC",
-    "Microsoft YaHei",
-    sans-serif;
+  font-family: var(--fc-font-family);
   font-size: var(--fc-font-body);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
@@ -90,8 +105,8 @@ body {
 .search-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 14px 10px;
+  gap: var(--fc-space-section-gap);
+  padding: 12px var(--fc-space-window-padding) 10px;
   border-bottom: 1px solid var(--fc-border);
 }
 
@@ -139,7 +154,7 @@ body {
   flex: none;
   font-family: inherit;
   font-size: var(--fc-font-aux);
-  border-radius: 6px;
+  border-radius: var(--fc-radius-control);
   padding: 4px 10px;
   cursor: default;
   transition: none;
@@ -177,7 +192,9 @@ body {
 
 .primary-button:disabled,
 .secondary-button:disabled {
-  opacity: 0.5;
+  /* 禁用状态语义：透明度 + 专用文字色，任何主题下都可辨识。 */
+  opacity: var(--fc-disabled-opacity);
+  color: var(--fc-text-disabled);
 }
 
 .settings {
@@ -194,7 +211,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 10px var(--fc-space-window-padding);
   border-bottom: 1px solid var(--fc-border);
 }
 
@@ -208,7 +225,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 12px 14px 16px;
+  padding: 12px var(--fc-space-window-padding) 16px;
 }
 
 .settings-section {
@@ -271,6 +288,68 @@ body {
   color: var(--fc-text-muted);
 }
 
+/* ---------------------------------------------------------------------------
+ * 外观主题列表。与结果列表同一套令牌：无动画、选中可辨识。
+ * ------------------------------------------------------------------------- */
+
+.theme-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--fc-space-section-gap);
+}
+
+.theme-item {
+  display: flex;
+  align-items: center;
+  gap: var(--fc-space-section-gap);
+  min-height: var(--fc-row-height);
+  padding: var(--fc-space-row-padding) 10px;
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-item);
+  background: var(--fc-surface);
+  transition: none;
+}
+
+.theme-item[data-selected="true"] {
+  background: var(--fc-selection-bg);
+  border-color: var(--fc-selection-border);
+}
+
+.theme-item[data-enabled="false"] .theme-name {
+  color: var(--fc-text-disabled);
+}
+
+.theme-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: var(--fc-font-body);
+}
+
+.theme-meta {
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+}
+
+.theme-badge {
+  flex: none;
+  font-size: var(--fc-font-aux);
+  padding: 1px 6px;
+  border: 1px solid var(--fc-border-strong);
+  border-radius: var(--fc-radius-control);
+  color: var(--fc-text-muted);
+}
+
+.theme-badge-error {
+  border-color: var(--fc-error-border);
+  background: var(--fc-error-bg);
+  color: var(--fc-error-text);
+}
+
 .path-input {
   flex: 1;
   min-width: 0;
@@ -279,7 +358,7 @@ body {
   color: inherit;
   background: var(--fc-page-bg);
   border: 1px solid var(--fc-border);
-  border-radius: 6px;
+  border-radius: var(--fc-radius-control);
   padding: 4px 8px;
   transition: none;
 }
@@ -296,7 +375,7 @@ body {
 
 .banner {
   font-size: var(--fc-font-aux);
-  padding: 8px 14px;
+  padding: 8px var(--fc-space-window-padding);
   border-bottom: 1px solid var(--fc-border);
   transition: none;
 }
@@ -356,9 +435,9 @@ body {
 .result-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--fc-space-row-gap);
   min-height: var(--fc-row-height);
-  padding: 6px 10px;
+  padding: var(--fc-space-row-padding) 10px;
   border-radius: var(--fc-radius-item);
   border: 1px solid transparent;
   cursor: default;
@@ -368,7 +447,7 @@ body {
 
 /* 鼠标悬停只做视觉反馈，绝不改变宿主持有的键盘选择。 */
 .result-item:hover {
-  background: rgba(15, 23, 42, 0.04);
+  background: var(--fc-hover-bg);
 }
 
 .result-item[data-selected="true"] {
@@ -388,7 +467,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(15, 23, 42, 0.08);
+  background: var(--fc-icon-fallback-bg);
   color: var(--fc-text);
   font-size: var(--fc-font-aux);
   font-weight: 600;
@@ -420,7 +499,7 @@ body {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 8px 14px;
+  padding: 8px var(--fc-space-window-padding);
   border-top: 1px solid var(--fc-border);
   font-size: var(--fc-font-aux);
   color: var(--fc-text-muted);
@@ -442,7 +521,7 @@ kbd {
   font-size: var(--fc-font-aux);
   padding: 1px 5px;
   border: 1px solid var(--fc-border-strong);
-  border-radius: 4px;
+  border-radius: var(--fc-radius-control);
   background: var(--fc-surface);
 }
 

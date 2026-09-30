@@ -11,12 +11,13 @@ use std::path::PathBuf;
 
 use flashcast_core::{
     Appearance, ManifestEntry, PluginKind, PluginManifestFile, PluginOrigin, ThemeAppearance,
-    ThemeSelection, MANIFEST_FILE, THEME_DARK, THEME_FILE, THEME_LIGHT, THEME_SYSTEM,
+    ThemeSelection, MANIFEST_FILE, THEMES_DIR, THEME_DARK, THEME_FILE, THEME_LIGHT, THEME_SYSTEM,
 };
-use support::{cleanup, fast_settings, host_restarted, host_with_device, real_git_repo};
+use support::{
+    cleanup, fast_settings, host_restarted, host_with_device, real_git_repo, unique_dir,
+};
 
 /// 一个完整的自定义主题文档（深色外观，可安装）。
-#[allow(dead_code)]
 fn custom_theme_json(id: &str, name: &str) -> String {
     let mut tokens: serde_json::Value =
         serde_json::from_str(&serde_json::to_string(&flashcast_core::dark_tokens()).unwrap())
@@ -36,7 +37,6 @@ fn custom_theme_json(id: &str, name: &str) -> String {
 }
 
 /// 写出一个主题包目录，返回目录路径。
-#[allow(dead_code)]
 fn write_theme_package(parent: &PathBuf, id: &str, name: &str) -> PathBuf {
     let dir = parent.join(format!("{id}.package"));
     fs::create_dir_all(&dir).expect("创建主题包目录");
@@ -154,6 +154,299 @@ fn a_disabled_theme_cannot_be_selected_and_keeps_the_current_appearance() {
     assert_eq!(host.theme_state().appearance, Appearance::Dark);
 
     cleanup(&repo);
+    cleanup(&device);
+}
+
+/// 每个内置主题的 token 集合都完整，并且完整映射为 CSS 自定义属性。
+///
+/// 「UI 以 CSS 自定义属性消费」的前提是映射没有缺口：任何语义 token 没有对应的
+/// 变量，都会让某个界面元素退回默认值，主题切换就只生效一半。
+#[test]
+fn every_builtin_theme_exposes_a_complete_token_set() {
+    use std::collections::HashSet;
+
+    let required = [
+        "--fc-page-bg",
+        "--fc-surface",
+        "--fc-hover-bg",
+        "--fc-border",
+        "--fc-border-strong",
+        "--fc-text",
+        "--fc-text-muted",
+        "--fc-text-disabled",
+        "--fc-accent",
+        "--fc-info-bg",
+        "--fc-warning-bg",
+        "--fc-warning-border",
+        "--fc-warning-text",
+        "--fc-icon-fallback-bg",
+        "--fc-selection-bg",
+        "--fc-selection-border",
+        "--fc-focus-ring",
+        "--fc-error-bg",
+        "--fc-error-border",
+        "--fc-error-text",
+        "--fc-disabled-opacity",
+        "--fc-font-family",
+        "--fc-font-body",
+        "--fc-font-input",
+        "--fc-font-aux",
+        "--fc-space-window-padding",
+        "--fc-space-row-padding",
+        "--fc-space-row-gap",
+        "--fc-space-section-gap",
+        "--fc-row-height",
+        "--fc-radius-window",
+        "--fc-radius-item",
+        "--fc-radius-control",
+        "--fc-shadow",
+        "--fc-shadow-overlay",
+    ];
+
+    for document in flashcast_core::builtin_themes() {
+        for system in [Appearance::Light, Appearance::Dark] {
+            let tokens = document
+                .resolve(system)
+                .unwrap_or_else(|error| panic!("{} 在 {system:?} 下必须可解析：{error}", document.id));
+            tokens
+                .validate()
+                .unwrap_or_else(|error| panic!("{} 的 token 必须通过校验：{error}", document.id));
+            assert_eq!(
+                tokens.css_vars().len(),
+                required.len(),
+                "{} 的 CSS 变量数量与语义 token 不匹配",
+                document.id
+            );
+        }
+
+        let tokens = document.resolve(Appearance::Light).expect("可解析");
+        let vars = tokens.css_vars();
+        let names: HashSet<&str> = vars.iter().map(|var| var.name.as_str()).collect();
+        assert_eq!(
+            names.len(),
+            vars.len(),
+            "{} 的 CSS 变量名不得重复",
+            document.id
+        );
+        for name in &names {
+            assert!(name.starts_with("--fc-"), "变量名必须以 --fc- 开头：{name}");
+        }
+        for var in &vars {
+            assert!(
+                !var.value.trim().is_empty(),
+                "{} 的 {var:?} 不能是空值",
+                document.id
+            );
+        }
+        for name in required {
+            assert!(
+                names.contains(name),
+                "{} 缺少 CSS 变量 {name}",
+                document.id
+            );
+        }
+    }
+
+    // token 的字段清单与语义集合一一对应：没有字段被映射遗漏。
+    assert_eq!(
+        flashcast_core::ThemeTokens::field_names().len(),
+        36,
+        "语义 token 字段数变化时必须同步更新本用例与 css_vars 映射"
+    );
+}
+
+/// 主题数据里不允许出现动画 / 过渡语义：高频键盘操作在任何主题下都不得有动画。
+#[test]
+fn theme_tokens_carry_no_animation_semantics() {
+    for document in flashcast_core::builtin_themes() {
+        let json = serde_json::to_value(&document).expect("序列化主题文档");
+        let text = json.to_string().to_ascii_lowercase();
+        for forbidden in [
+            "anim",
+            "transition",
+            "duration",
+            "delay",
+            "keyframe",
+            "motion",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "主题 {} 里出现动画相关字段：{forbidden}",
+                document.id
+            );
+        }
+    }
+
+    // 未知字段会被拒绝：主题无法偷偷塞进动画字段。
+    let mut json = serde_json::to_value(flashcast_core::light_tokens()).expect("序列化 token");
+    json["state"]["selected"]["transition"] = serde_json::json!("all 300ms");
+    let error =
+        serde_json::from_value::<flashcast_core::ThemeTokens>(json).expect_err("未知字段必须被拒绝");
+    assert!(error.to_string().contains("transition"), "{error}");
+}
+
+/// 「跟随系统」在运行时跟着系统外观切换：不需要重启，也不改变主题选择。
+#[test]
+fn follow_system_theme_reacts_to_system_appearance_changes() {
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_theme(THEME_SYSTEM).expect("选择跟随系统");
+
+    let light = host.theme_state();
+    assert_eq!(light.preference, ThemeAppearance::System);
+    assert_eq!(light.appearance, Appearance::Light);
+    assert_eq!(light.system_appearance, Appearance::Light);
+
+    // 系统切到深色：同一个主题立即给出深色 token。
+    let dark = host.set_system_appearance(Appearance::Dark);
+    assert_eq!(dark.selected, THEME_SYSTEM, "系统外观变化不得改变主题选择");
+    assert_eq!(dark.appearance, Appearance::Dark);
+    assert_eq!(dark.system_appearance, Appearance::Dark);
+    assert_eq!(dark.tokens.color.surface, "#202226");
+    assert_ne!(dark.css_vars, light.css_vars, "CSS 变量必须真的换了");
+
+    // 系统切回浅色：回到最初的 token 集合。
+    let back = host.set_system_appearance(Appearance::Light);
+    assert_eq!(back.appearance, Appearance::Light);
+    assert_eq!(back.tokens, light.tokens);
+
+    // 固定外观的主题不受系统外观影响。
+    host.select_theme(THEME_DARK).expect("选择深色");
+    let fixed = host.set_system_appearance(Appearance::Light);
+    assert_eq!(fixed.appearance, Appearance::Dark);
+    assert_eq!(fixed.tokens.color.surface, "#202226");
+
+    cleanup(&device);
+}
+
+/// 本地主题包：校验失败给出中文原因，有效则可安装、选择，并可移除。
+#[test]
+fn a_local_theme_package_is_validated_installed_selected_and_removed() {
+    let repo = real_git_repo("theme-install");
+    let packages = unique_dir("theme-packages");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    // 无效主题包：可读原因、不改动清单、不改动当前外观。
+    let broken = packages.join("broken");
+    fs::create_dir_all(&broken).expect("创建损坏主题包目录");
+    fs::write(broken.join(THEME_FILE), "{ 这不是 JSON").expect("写出损坏主题包");
+    let message = host
+        .install_theme_package(&broken)
+        .expect_err("无效主题包必须被拒绝")
+        .to_string();
+    assert!(
+        message.contains("主题无效") && message.contains("JSON"),
+        "原因必须可读：{message}"
+    );
+    assert_eq!(host.theme_state().selected, THEME_LIGHT);
+    assert!(
+        host.manifest_entries()
+            .iter()
+            .all(|entry| entry.id != "example.solarized"),
+        "被拒绝的主题包不得写进清单"
+    );
+
+    let missing = host
+        .install_theme_package(&packages.join("not-there"))
+        .expect_err("不存在的路径必须被拒绝");
+    assert!(
+        missing.to_string().contains("主题包不存在"),
+        "原因必须可读：{missing}"
+    );
+
+    // 有效主题包：安装进工作区的 themes/<id>/theme.json。
+    let package = write_theme_package(&packages, "example.solarized", "Solarized 深色");
+    let state = host.install_theme_package(&package).expect("安装主题包");
+    let entry = state
+        .themes
+        .iter()
+        .find(|theme| theme.id == "example.solarized")
+        .expect("安装后必须出现在主题列表里");
+    assert!(!entry.builtin, "安装的主题不是内置主题");
+    assert!(entry.enabled && entry.usable);
+    assert_eq!(entry.version, "2.1.0");
+    let installed_file = repo
+        .join(THEMES_DIR)
+        .join("example.solarized")
+        .join(THEME_FILE);
+    assert!(
+        installed_file.exists(),
+        "主题包必须落在工作区里：{}",
+        installed_file.display()
+    );
+    let file =
+        PluginManifestFile::from_json(&fs::read_to_string(repo.join(MANIFEST_FILE)).unwrap())
+            .expect("读取清单");
+    let recorded = file.get("example.solarized").expect("清单里必须有它");
+    assert_eq!(recorded.kind, PluginKind::Theme);
+    assert_eq!(recorded.origin, PluginOrigin::Installed);
+
+    // 选择它：外观按主题包的数据改变。
+    let selected = host
+        .select_theme("example.solarized")
+        .expect("选择已安装主题");
+    assert_eq!(selected.appearance, Appearance::Dark);
+    assert_eq!(selected.tokens.color.surface, "#101418");
+
+    // 重启后仍然选中，并且主题包还在。
+    let restarted = host_restarted(&device, fast_settings());
+    assert_eq!(restarted.theme_state().selected, "example.solarized");
+    assert_eq!(restarted.theme_state().tokens.color.surface, "#101418");
+
+    // 内置主题不能移除。
+    let error = host
+        .remove_theme(THEME_LIGHT)
+        .expect_err("内置主题不得移除");
+    assert!(
+        error.to_string().contains("内置主题不能移除"),
+        "原因必须可读：{error}"
+    );
+
+    // 移除已安装主题：文件与清单条目一起消失，选中回退并说明原因。
+    let removed = host.remove_theme("example.solarized").expect("移除主题包");
+    assert_eq!(removed.selected, THEME_LIGHT, "移除选中主题后必须回退");
+    assert!(
+        removed.error.is_some(),
+        "回退必须给出中文原因：{:?}",
+        removed.error
+    );
+    assert!(!repo.join(THEMES_DIR).join("example.solarized").exists());
+    let file =
+        PluginManifestFile::from_json(&fs::read_to_string(repo.join(MANIFEST_FILE)).unwrap())
+            .expect("读取清单");
+    assert!(file.get("example.solarized").is_none());
+
+    let restarted = host_restarted(&device, fast_settings());
+    assert!(
+        restarted
+            .theme_state()
+            .themes
+            .iter()
+            .all(|theme| theme.id != "example.solarized"),
+        "移除后重启不得再出现"
+    );
+
+    cleanup(&repo);
+    cleanup(&packages);
+    cleanup(&device);
+}
+
+/// 未关联配置工作区时不能安装主题包，并给出可读原因。
+#[test]
+fn installing_a_theme_package_requires_a_workspace() {
+    let packages = unique_dir("theme-packages-noworkspace");
+    let package = write_theme_package(&packages, "example.solarized", "Solarized 深色");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+
+    let error = host
+        .install_theme_package(&package)
+        .expect_err("没有工作区时不得安装");
+    assert!(
+        error.to_string().contains("配置工作区"),
+        "原因必须可读：{error}"
+    );
+
+    cleanup(&packages);
     cleanup(&device);
 }
 
