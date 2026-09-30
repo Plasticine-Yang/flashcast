@@ -522,6 +522,22 @@ pub fn git_stage(repo: &Path, rel: &str) {
 
 /// 把所有工作区改动提交一次，返回提交 oid。
 pub fn git_commit_all(repo: &Path, message: &str) -> git2::Oid {
+    // CI runner 上没有全局 `user.name` / `user.email`，而开发机上的 `~/.gitconfig` 通常有，
+    // `Repository::signature()` 会回退到全局配置——于是同一份测试在本地通过、在四条 CI 腿上
+    // 全部失败。这里保证仓库自带身份：已有身份（测试显式设置过的）保持不动。
+    {
+        let probe = git2::Repository::open(repo).expect("打开测试仓库");
+        if probe.signature().is_err() {
+            let mut config = probe.config().expect("读取测试仓库配置");
+            config
+                .set_str("user.name", TEST_AUTHOR_NAME)
+                .expect("写入 user.name");
+            config
+                .set_str("user.email", TEST_AUTHOR_EMAIL)
+                .expect("写入 user.email");
+        }
+    }
+    // 重新打开：上面的写入要等新快照才对 `signature()` 可见。
     let repository = git2::Repository::open(repo).expect("打开测试仓库");
     let mut index = repository.index().expect("读取索引");
     index
