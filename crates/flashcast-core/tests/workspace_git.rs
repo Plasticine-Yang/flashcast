@@ -485,3 +485,308 @@ fn failed_commit_restores_the_index_and_keeps_the_changes() {
     cleanup(&device);
 }
 
+
+/// 干净工作区：明确给出「没有可提交的变更」，不产生空提交。
+#[test]
+fn commit_reports_nothing_to_commit_for_a_clean_workspace() {
+    let repo = git_repo_with_commit(
+        "git-clean",
+        &[(SETTINGS_FILE, "hotkey = \"Ctrl+Alt+Space\"\n")],
+    );
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    let changes = host.workspace_changes();
+    assert!(changes.repository, "{changes:?}");
+    assert!(!changes.has_changes, "干净工作区不应有可提交内容：{changes:?}");
+    assert!(changes.files.is_empty(), "{:?}", changes.files);
+    assert!(changes.state.is_none() && changes.error.is_none());
+
+    let head_before = support::git_head_oid(&repo);
+    let error = host
+        .commit_workspace("说明", &[SETTINGS_FILE.to_string()])
+        .expect_err("干净工作区必须拒绝提交");
+    assert!(
+        matches!(error, flashcast_core::GitError::NothingToCommit),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("没有可提交"), "{error}");
+    assert_eq!(support::git_head_oid(&repo), head_before);
+
+    cleanup(&repo);
+    cleanup(&device);
+}
+
+/// 提交说明为空（或只有空白）时拒绝提交。
+#[test]
+fn commit_requires_a_non_empty_message() {
+    let repo = changes_fixture("git-empty-message");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    let head_before = support::git_head_oid(&repo);
+    let index_before = support::git_index_bytes(&repo);
+    for message in ["", "   ", "\n\t "] {
+        let error = host
+            .commit_workspace(message, &[SETTINGS_FILE.to_string()])
+            .expect_err("空提交说明必须被拒绝");
+        assert!(
+            matches!(error, flashcast_core::GitError::EmptyMessage),
+            "{message:?} → {error:?}"
+        );
+        assert!(error.to_string().contains("提交说明"), "{error}");
+    }
+    assert_eq!(support::git_head_oid(&repo), head_before);
+    assert_eq!(support::git_index_bytes(&repo), index_before);
+
+    cleanup(&repo);
+    cleanup(&device);
+}
+
+/// 用户身份未配置：明确提示 user.name / user.email，且不产生提交、不丢修改。
+#[test]
+fn commit_without_a_configured_identity_is_refused() {
+    let repo = changes_fixture("git-no-identity");
+    // 仓库本地写入空值，覆盖运行环境里的全局身份，测试因此与机器配置无关。
+    support::clear_identity(&repo);
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    let head_before = support::git_head_oid(&repo);
+    let index_before = support::git_index_bytes(&repo);
+    let error = host
+        .commit_workspace("说明", &[SETTINGS_FILE.to_string()])
+        .expect_err("身份未配置必须拒绝提交");
+    assert!(
+        matches!(error, flashcast_core::GitError::IdentityMissing),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("user.name") && message.contains("user.email"),
+        "必须点明缺哪两项配置：{message}"
+    );
+
+    assert_eq!(support::git_head_oid(&repo), head_before, "不得产生提交");
+    assert_eq!(support::git_index_bytes(&repo), index_before, "不得改动索引");
+    assert!(
+        by_path(&host.workspace_changes()).contains_key(SETTINGS_FILE),
+        "修改必须还在"
+    );
+
+    // 配好身份后同一份选择能提交成功。
+    support::set_identity(&repo, support::TEST_AUTHOR_NAME, support::TEST_AUTHOR_EMAIL);
+    host.commit_workspace("身份配好之后", &[SETTINGS_FILE.to_string()])
+        .expect("配置身份后必须能提交");
+
+    cleanup(&repo);
+    cleanup(&device);
+}
+
+/// 工作区异常（分离 HEAD、合并 / 变基进行中）必须被明确识别并拒绝提交。
+#[test]
+fn commit_is_refused_in_an_abnormal_workspace_and_names_the_reason() {
+    let repo = changes_fixture("git-abnormal");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    // 分离 HEAD。
+    let head = support::git_head_oid(&repo);
+    let head_ref = support::git_head_ref(&repo);
+    {
+        let repository = git2::Repository::open(&repo).expect("打开仓库");
+        repository.set_head_detached(head).expect("进入分离 HEAD");
+    }
+    let changes = host.workspace_changes();
+    assert!(changes.detached, "必须识别分离 HEAD：{changes:?}");
+    assert!(changes.branch.is_none(), "分离 HEAD 没有分支名");
+    let error = host
+        .commit_workspace("说明", &[SETTINGS_FILE.to_string()])
+        .expect_err("分离 HEAD 必须拒绝提交");
+    assert!(
+        matches!(error, flashcast_core::GitError::AbnormalState(_)),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("分离 HEAD"), "{error}");
+
+    // 回到分支，模拟合并进行中。
+    {
+        let repository = git2::Repository::open(&repo).expect("打开仓库");
+        repository
+            .set_head(&head_ref)
+            .expect("切回分支");
+    }
+    support::git_put_marker(&repo, "MERGE_HEAD", &head.to_string());
+    let changes = host.workspace_changes();
+    assert!(
+        changes.state.as_deref().unwrap_or_default().contains("合并"),
+        "必须识别进行中的合并：{changes:?}"
+    );
+    let error = host
+        .commit_workspace("说明", &[SETTINGS_FILE.to_string()])
+        .expect_err("合并进行中必须拒绝提交");
+    assert!(error.to_string().contains("合并"), "{error}");
+
+    // 换成变基进行中（只用 .git 标记文件，不依赖 Repository::state 的实现细节）。
+    support::git_remove_marker(&repo, "MERGE_HEAD");
+    support::git_put_marker(&repo, "rebase-merge/interactive", "");
+    let changes = host.workspace_changes();
+    assert!(
+        changes.state.as_deref().unwrap_or_default().contains("变基"),
+        "必须识别进行中的变基：{changes:?}"
+    );
+    let error = host
+        .commit_workspace("说明", &[SETTINGS_FILE.to_string()])
+        .expect_err("变基进行中必须拒绝提交");
+    assert!(error.to_string().contains("变基"), "{error}");
+
+    // 移除标记后可以正常提交（证明拒绝的原因就是工作区状态）。
+    support::git_remove_marker(&repo, "rebase-merge/interactive");
+    support::git_remove_dir(&repo, "rebase-merge");
+    host.commit_workspace("清理异常状态后", &[SETTINGS_FILE.to_string()])
+        .expect("异常状态解除后必须能提交");
+
+    cleanup(&repo);
+    cleanup(&device);
+}
+
+/// 索引被占用时给出明确反馈，仓库一丝不动；解除后可提交。
+#[test]
+fn commit_reports_an_index_lock_without_touching_the_repository() {
+    let repo = changes_fixture("git-index-locked");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    let head_before = support::git_head_oid(&repo);
+    let index_before = support::git_index_bytes(&repo);
+    support::git_put_marker(&repo, "index.lock", "");
+
+    // 只读的变更查看不受锁影响。
+    assert!(
+        host.workspace_changes().has_changes,
+        "存在 index.lock 时仍应能查看变更"
+    );
+
+    let error = host
+        .commit_workspace("说明", &[SETTINGS_FILE.to_string()])
+        .expect_err("索引被占用必须拒绝提交");
+    assert!(
+        matches!(error, flashcast_core::GitError::IndexLocked(_)),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("索引") && message.contains("index.lock"),
+        "必须点明是索引被占用：{message}"
+    );
+    assert_eq!(support::git_head_oid(&repo), head_before);
+    assert_eq!(support::git_index_bytes(&repo), index_before);
+
+    support::git_remove_marker(&repo, "index.lock");
+    host.commit_workspace("锁解除之后", &[SETTINGS_FILE.to_string()])
+        .expect("解除索引锁后必须能提交");
+
+    cleanup(&repo);
+    cleanup(&device);
+}
+
+/// 未关联工作区 / 工作区不是 Git 仓库时给出明确反馈。
+#[test]
+fn commit_reports_missing_workspace_and_non_repository_workspaces() {
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+
+    let error = host
+        .commit_workspace("说明", &[SETTINGS_FILE.to_string()])
+        .expect_err("未关联工作区必须拒绝提交");
+    assert!(
+        matches!(error, flashcast_core::GitError::NoWorkspace),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("尚未关联"), "{error}");
+
+    let plain = support::unique_dir("git-non-repository");
+    std::fs::write(plain.join(SETTINGS_FILE), "hotkey = \"Ctrl+Alt+Space\"\n")
+        .expect("写入设置文件");
+    host.select_workspace(&plain).expect("普通目录也可作为工作区");
+
+    let error = host
+        .commit_workspace("说明", &[SETTINGS_FILE.to_string()])
+        .expect_err("不是 Git 仓库必须拒绝提交");
+    assert!(
+        matches!(error, flashcast_core::GitError::NotARepository(_)),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("不是 Git 仓库"), "{error}");
+
+    cleanup(&plain);
+    cleanup(&device);
+}
+
+/// 提交之后应用其余部分继续可用：变更状态按 Git 状态刷新，设置能继续写、
+/// 备忘录仍在工作区，重启后工作区与设置照常恢复并能再次提交。
+#[test]
+fn the_app_keeps_working_after_a_commit() {
+    let repo = changes_fixture("git-after-commit");
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    let outcome = host
+        .commit_workspace(
+            "提交设置与备忘录",
+            &[SETTINGS_FILE.to_string(), "memos/2026-10-01.md".to_string()],
+        )
+        .expect("提交必须成功");
+    // 返回值里的刷新结果必须与随后重新读取的 Git 状态一致。
+    assert_eq!(
+        outcome.changes.paths(),
+        host.workspace_changes().paths(),
+        "提交结果里的变更快照必须与仓库当前状态一致"
+    );
+
+    // 提交后设置仍能写回工作区，备忘内容仍在（提交不触碰工作区文件）。
+    let updated = flashcast_core::Settings {
+        hotkey: "Ctrl+Shift+F2".to_string(),
+        ..host.settings()
+    };
+    host.update_settings(updated.clone())
+        .expect("提交后仍必须能保存设置");
+    let text = std::fs::read_to_string(repo.join(SETTINGS_FILE)).expect("读取设置文件");
+    assert!(text.contains("Ctrl+Shift+F2"), "设置文件内容：{text}");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("memos/2026-10-01.md")).expect("读取备忘录"),
+        "备忘录内容：今天做的事\n",
+        "提交不得改写备忘录"
+    );
+
+    // 新的设置改动会作为新的变更出现：刷新确实来自 Git 状态。
+    let files = by_path(&host.workspace_changes());
+    assert!(
+        files.contains_key(SETTINGS_FILE),
+        "保存设置后必须重新出现待提交改动：{files:?}"
+    );
+
+    // 重启：工作区与设置都能恢复，并且还能继续提交。
+    let restarted = support::host_restarted(&device, flashcast_core::Settings::default());
+    assert_eq!(
+        restarted.workspace_status().path,
+        host.workspace_status().path,
+        "重启后必须恢复同一个工作区"
+    );
+    assert_eq!(restarted.settings().hotkey, "Ctrl+Shift+F2");
+    let second = restarted
+        .commit_workspace("提交设置改动", &[SETTINGS_FILE.to_string()])
+        .expect("重启后必须还能提交");
+    assert_eq!(
+        support::git_show(
+            &repo,
+            git2::Oid::from_str(&second.oid).expect("oid"),
+            SETTINGS_FILE
+        )
+        .as_deref()
+        .map(|content| content.contains("Ctrl+Shift+F2")),
+        Some(true)
+    );
+
+    cleanup(&repo);
+    cleanup(&device);
+}

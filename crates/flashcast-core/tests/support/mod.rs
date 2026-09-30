@@ -338,6 +338,12 @@ pub fn git_remove_marker(repo: &Path, rel: &str) {
     let _ = std::fs::remove_file(repository.path().join(rel));
 }
 
+/// 删除 gitdir 下的目录（例如 `rebase-merge`）。
+pub fn git_remove_dir(repo: &Path, rel: &str) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let _ = std::fs::remove_dir_all(repository.path().join(rel));
+}
+
 /// 当前索引里某个路径的 stage 0 条目 oid。
 pub fn git_index_oid(repo: &Path, rel: &str) -> Option<git2::Oid> {
     let repository = git2::Repository::open(repo).expect("打开测试仓库");
