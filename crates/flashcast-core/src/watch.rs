@@ -21,6 +21,15 @@
 //! 最后一层是「幂等应用」：真正接受外部修改时会先与内存中的模型比较，相同则不做
 //! 任何事（见 [`crate::host::Host::reload_from_workspace`]）。因此不会出现
 //! 「写入 → 事件 → 应用 → 再写入」的循环。
+//!
+//! ## 只读事件必须丢弃（实测踩到的自伤循环）
+//!
+//! notify 的 inotify 后端会把 `IN_ACCESS` / `IN_OPEN` / `IN_CLOSE` 一并上报为
+//! `EventKind::Access`。第 2 层要读文件内容算哈希，宿主重载时也要读设置文件，
+//! 这些**读操作本身**又会生成 `Access` 事件；把它们当成「文件改了」就形成
+//! 「读 → 事件 → 再读」的无限事件流（实测：一次写入后事件每隔约 500ms 再来一次，
+//! 且永远不收敛）。因此 [`is_modification`] 只接受 `Create` / `Modify` / `Remove` /
+//! `Any`，丢弃 `Access` 与 `Other`。
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -31,7 +40,9 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::notify::{
+    EventKind, RecommendedWatcher, RecursiveMode,
+};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 
 use crate::workspace::{MEMOS_DIR, TEMP_SUFFIX, WORKSPACE_FILES};
@@ -158,9 +169,19 @@ impl ChangeFilter {
     }
 }
 
+/// 该事件是否代表文件内容/名字可能发生了变化。
+///
+/// 只读事件（`Access`）必须丢弃，否则「读文件算哈希」本身会再次触发事件，
+/// 形成永不收敛的自伤事件流（见模块文档）。
+fn is_modification(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Any | EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+    )
+}
+
 /// 编辑器与系统噪声：交换文件、备份文件、临时文件、锁文件与目录元数据。
-fn is_noise(name: &str) -> bool {
-    name.ends_with(TEMP_SUFFIX)
+fn is_noise(name: &str) -> bool {    name.ends_with(TEMP_SUFFIX)
         || name.ends_with('~')
         || name.ends_with(".swp")
         || name.ends_with(".swx")
@@ -214,6 +235,10 @@ impl WorkspaceWatcher {
                     Err(_) => return,
                 };
                 for event in events {
+                    // 只读事件不算修改：算哈希时读文件本身会再生成 Access 事件。
+                    if !is_modification(&event.event.kind) {
+                        continue;
+                    }
                     for path in &event.event.paths {
                         if callback_filter.accept(path) {
                             let _ = sender.send(path.clone());
@@ -238,9 +263,13 @@ impl WorkspaceWatcher {
         &self.root
     }
 
-    /// 等待下一次可处理的外部变更；超时返回 `None`。
-    pub fn next_change(&self, timeout: Duration) -> Option<PathBuf> {
-        self.receiver.recv_timeout(timeout).ok()
+    /// 取走一个已就绪的外部变更；没有则立即返回 `None`。
+    ///
+    /// 刻意不提供阻塞等待：宿主用短轮询调用它，这样等待期间**不握着**工作区锁，
+    /// 保存设置或切换工作区不会被监听线程卡住（去抖窗口本身已有 500ms 延迟，
+    /// 25ms 的轮询间隔不增加可感知的时延）。
+    pub fn try_next_change(&self) -> Option<PathBuf> {
+        self.receiver.try_recv().ok()
     }
 
     pub fn record_self_write(&self, path: &Path, bytes: &[u8]) {

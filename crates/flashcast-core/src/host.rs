@@ -96,6 +96,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// [`Host::wait_for_workspace_change`] 的轮询间隔。
+const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
 /// 查询方式：用户输入会改变输入状态，快照类操作不会。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchMode {
@@ -223,12 +226,24 @@ impl Host {
     ///
     /// 阻塞至多 `timeout`：超时、没有工作区或事件被自写抑制层吞掉时返回 `None`。
     /// 外壳在后台线程里循环调用它并把结果推送给 UI。
+    ///
+    /// 实现为短轮询而不是在监听通道上阻塞等待：等待期间不持有工作区监听锁，
+    /// 保存设置或切换工作区不会被这里卡住。
     pub fn wait_for_workspace_change(&self, timeout: Duration) -> Option<WorkspaceReload> {
-        let changed = {
-            let watch = lock(&self.watch);
-            watch.as_ref()?.next_change(timeout)?
-        };
-        Some(self.reload_from_workspace(&changed))
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let changed = {
+                let watch = lock(&self.watch);
+                watch.as_ref().and_then(|watcher| watcher.try_next_change())
+            };
+            if let Some(changed) = changed {
+                return Some(self.reload_from_workspace(&changed));
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(WATCH_POLL_INTERVAL);
+        }
     }
 
     /// 按外部修改重新加载配置。无效配置保留上一次有效状态并给出中文原因。
