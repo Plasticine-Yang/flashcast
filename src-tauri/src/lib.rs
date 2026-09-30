@@ -47,6 +47,12 @@ pub fn run() {
             commands::reload_workspace,
             commands::get_git_changes,
             commands::commit_changes,
+            commands::get_sync_status,
+            commands::redetect_sync_state,
+            commands::pull_workspace,
+            commands::push_workspace,
+            commands::sync_progress,
+            commands::cancel_sync,
             commands::hide_window,
         ])
         .setup(|app| {

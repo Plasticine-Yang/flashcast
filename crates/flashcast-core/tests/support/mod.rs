@@ -77,7 +77,12 @@ pub fn host_with_device(
     settings: Settings,
 ) -> (Host, Arc<FakeLauncher>, PathBuf) {
     let device_dir = unique_dir("device");
-    let (host, launcher) = build_host(apps, settings, Arc::new(PluginRegistry::new()), device_dir.clone());
+    let (host, launcher) = build_host(
+        apps,
+        settings,
+        Arc::new(PluginRegistry::new()),
+        device_dir.clone(),
+    );
     (host, launcher, device_dir)
 }
 
@@ -239,6 +244,191 @@ pub fn remote_url(remote: &Path) -> String {
     remote.to_string_lossy().into_owned()
 }
 
+// ---------------------------------------------------------------------------
+// 远端夹具（ticket 16：推送 / 快进拉取 / 分叉）
+// ---------------------------------------------------------------------------
+
+/// 在裸远端上追加一次提交（不经过任何工作区），用于制造「远端有新提交」的场景。
+///
+/// `changes` 是「仓库相对路径 → 内容」，已存在的路径会被替换为新内容。
+/// 默认分支固定为 `main`，与 [`bare_remote`] 一致。
+pub fn bare_remote_commit(remote: &Path, changes: &[(&str, &str)], message: &str) -> git2::Oid {
+    let repo = git2::Repository::open_bare(remote).expect("打开裸远端");
+    let parent = repo
+        .find_reference("refs/heads/main")
+        .ok()
+        .and_then(|reference| reference.target())
+        .and_then(|oid| repo.find_commit(oid).ok());
+    let base = parent.as_ref().and_then(|commit| commit.tree().ok());
+    let files: Vec<(String, String)> = changes
+        .iter()
+        .map(|(path, content)| (path.to_string(), content.to_string()))
+        .collect();
+    let tree_oid = write_tree_over(&repo, base.as_ref(), &files);
+    let tree = repo.find_tree(tree_oid).expect("读取远端 tree");
+    let signature = git2::Signature::now(TEST_AUTHOR_NAME, TEST_AUTHOR_EMAIL).expect("构造签名");
+    let parents: Vec<&git2::Commit> = parent.iter().collect();
+    repo.commit(
+        Some("refs/heads/main"),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &parents,
+    )
+    .expect("远端提交失败")
+}
+
+/// 在已有 tree（可能为空）之上替换 / 新增若干路径，返回新的根 tree oid。
+fn write_tree_over(
+    repo: &git2::Repository,
+    base: Option<&git2::Tree>,
+    files: &[(String, String)],
+) -> git2::Oid {
+    use std::collections::BTreeMap;
+    let mut builder = repo
+        .treebuilder(base)
+        .expect("无法基于已有 tree 创建 builder");
+    let mut subdirs: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for (path, content) in files {
+        match path.split_once('/') {
+            Some((head, rest)) => subdirs
+                .entry(head.to_string())
+                .or_default()
+                .push((rest.to_string(), content.clone())),
+            None => {
+                let blob = repo.blob(content.as_bytes()).expect("无法写入 blob");
+                builder
+                    .insert(path, blob, 0o100_644)
+                    .expect("无法插入 blob");
+            }
+        }
+    }
+    for (name, children) in subdirs {
+        let existing = base
+            .and_then(|tree| tree.get_name(&name))
+            .filter(|entry| entry.kind() == Some(git2::ObjectType::Tree))
+            .and_then(|entry| repo.find_tree(entry.id()).ok());
+        let oid = write_tree_over(repo, existing.as_ref(), &children);
+        builder.insert(name, oid, 0o040_000).expect("无法插入子树");
+    }
+    builder.write().expect("无法写入 tree")
+}
+
+/// 读取裸远端某个分支的 oid。
+pub fn bare_remote_oid(remote: &Path, branch: &str) -> Option<git2::Oid> {
+    let repo = git2::Repository::open_bare(remote).expect("打开裸远端");
+    repo.find_reference(&format!("refs/heads/{branch}"))
+        .ok()
+        .and_then(|reference| reference.target())
+}
+
+/// 读取裸远端某个分支下某个文件的内容。
+pub fn bare_remote_file(remote: &Path, branch: &str, rel: &str) -> Option<String> {
+    let repo = git2::Repository::open_bare(remote).expect("打开裸远端");
+    let commit = repo
+        .find_reference(&format!("refs/heads/{branch}"))
+        .ok()
+        .and_then(|reference| reference.target())
+        .and_then(|oid| repo.find_commit(oid).ok())?;
+    let tree = commit.tree().ok()?;
+    let entry = tree.get_path(Path::new(rel)).ok()?;
+    let blob = repo.find_blob(entry.id()).ok()?;
+    Some(String::from_utf8_lossy(blob.content()).into_owned())
+}
+
+/// 给仓库增加一个远端。
+pub fn git_remote_add(repo: &Path, name: &str, url: &str) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    repository
+        .remote(name, url)
+        .unwrap_or_else(|error| panic!("添加远端 {name} 失败：{error}"));
+}
+
+/// 读取仓库的某个远端地址。
+pub fn git_remote_url(repo: &Path, name: &str) -> Option<String> {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let remote = repository.find_remote(name).ok()?;
+    remote.url().ok().map(str::to_string)
+}
+
+/// 改写仓库的某个远端地址（用于构造鉴权 / 离线失败）。
+pub fn git_set_remote_url(repo: &Path, name: &str, url: &str) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    repository
+        .remote_set_url(name, url)
+        .unwrap_or_else(|error| panic!("改写远端地址失败：{error}"));
+}
+
+/// 设置分支的上游关系（`branch.<名>.remote` + `branch.<名>.merge`）。
+pub fn git_set_upstream(repo: &Path, branch: &str, remote: &str, remote_branch: &str) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let mut config = repository.config().expect("读取仓库配置");
+    config
+        .set_str(&format!("branch.{branch}.remote"), remote)
+        .expect("写入 branch.remote");
+    config
+        .set_str(
+            &format!("branch.{branch}.merge"),
+            &format!("refs/heads/{remote_branch}"),
+        )
+        .expect("写入 branch.merge");
+}
+
+/// 读取某个配置键。
+pub fn git_config_get(repo: &Path, key: &str) -> Option<String> {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    repository.config().ok()?.get_string(key).ok()
+}
+
+/// 制造一次真实的合并冲突：把 `other` 合并进 HEAD，冲突留在索引里。
+///
+/// 调用后仓库处于 `MERGE_HEAD` 状态（`Repository::state()` 为 `Merge`）。
+/// 需要「索引里有冲突但没有进行中标记」这种异常组合时，再调用
+/// [`git_remove_marker`] 删掉 `MERGE_HEAD`。
+pub fn git_merge_other(repo: &Path, other: git2::Oid) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let annotated = repository
+        .find_annotated_commit(other)
+        .expect("构造 annotated commit");
+    repository
+        .merge(&[&annotated], None, None)
+        .expect("合并应产生冲突而不是失败");
+}
+
+/// 取消（删除）一次工作区改动，用于验证「外部处理后可恢复」。
+pub fn git_checkout_all(repo: &Path) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let mut options = git2::build::CheckoutBuilder::new();
+    options.force();
+    repository
+        .checkout_head(Some(&mut options))
+        .expect("恢复工作区失败");
+}
+
+/// 在外部解决全部冲突：把索引重置回 HEAD 的树，再强制检出 HEAD。
+///
+/// 用于验证「用户在应用外部处理冲突后，重新检测即可恢复同步」。
+pub fn git_resolve_all_conflicts(repo: &Path) {
+    let repository = git2::Repository::open(repo).expect("打开测试仓库");
+    let head_tree = repository
+        .head()
+        .expect("读取 HEAD")
+        .peel_to_tree()
+        .expect("HEAD 树");
+    {
+        let mut index = repository.index().expect("读取索引");
+        index.read_tree(&head_tree).expect("重置索引到 HEAD");
+        index.write().expect("写入索引");
+    }
+    let mut options = git2::build::CheckoutBuilder::new();
+    options.force();
+    repository
+        .checkout_head(Some(&mut options))
+        .expect("强制检出 HEAD");
+    repository.cleanup_state().expect("清理合并状态");
+}
+
 /// 一份可被克隆的配置工作区内容。
 pub fn workspace_files(hotkey: &str) -> Vec<(&'static str, String)> {
     vec![
@@ -332,16 +522,21 @@ pub fn git_commit_all(repo: &Path, message: &str) -> git2::Oid {
     index.write().expect("写入索引");
     let tree_oid = index.write_tree().expect("写出树");
     let tree = repository.find_tree(tree_oid).expect("读取树");
-    let signature = repository
-        .signature()
-        .expect("测试仓库必须配置了提交身份");
+    let signature = repository.signature().expect("测试仓库必须配置了提交身份");
     let parents = match repository.head() {
         Ok(head) => vec![head.peel_to_commit().expect("读取 HEAD 提交")],
         Err(_) => Vec::new(),
     };
     let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
     repository
-        .commit(Some("HEAD"), &signature, &signature, message, &tree, &parent_refs)
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &parent_refs,
+        )
         .expect("创建测试提交")
 }
 

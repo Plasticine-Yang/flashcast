@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use flashcast_core::{
     ActionOutcome, BackOutcome, CloneOutcome, CloneProgress, CommitOutcome, DefaultAction,
-    ItemKind, Notice, PluginFailure, QueryResponse, QueryScope, Score, SearchItem, Settings,
-    WorkspaceChanges, WorkspaceStatus,
+    ItemKind, Notice, PluginFailure, PullOutcome, PushOutcome, QueryResponse, QueryScope, Score,
+    SearchItem, Settings, SyncProgress, SyncStatus, WorkspaceChanges, WorkspaceStatus,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -316,6 +316,58 @@ pub fn reload_workspace(state: State<'_, AppState>) -> WorkspaceEvent {
         settings: state.host.settings(),
         reload: Some(reload),
     }
+}
+
+/// 当前工作区的同步状态（分支、远端、领先 / 落后、阻塞原因与指引）。
+///
+/// 只读入口：不发网络请求，也不改动仓库。业务判断全在宿主。
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_sync_status(state: State<'_, AppState>) -> SyncStatus {
+    state.host.sync_status()
+}
+
+/// 重新检测同步状态：用户在应用外部处理完阻塞后调用它恢复同步。
+#[tauri::command(rename_all = "snake_case")]
+pub fn redetect_sync_state(state: State<'_, AppState>) -> SyncStatus {
+    state.host.redetect_sync_state()
+}
+
+/// 仅快进拉取当前工作区。
+///
+/// libgit2 是阻塞的 C 库，放到阻塞线程池执行；UI 用 `sync_progress` 轮询进度、
+/// 用 `cancel_sync` 取消。阻塞状态（未提交修改、分叉、冲突、进行中操作）在
+/// 宿主里先于网络操作返回，工作区与索引保持不变。
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pull_workspace(state: State<'_, AppState>) -> Result<PullOutcome, String> {
+    let host = host_of(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        host.pull_workspace().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 显式推送当前分支到它的上游（永不 force）。
+#[tauri::command(rename_all = "snake_case")]
+pub async fn push_workspace(state: State<'_, AppState>) -> Result<PushOutcome, String> {
+    let host = host_of(&state);
+    tauri::async_runtime::spawn_blocking(move || {
+        host.push_workspace().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// 最近一次同步的进度快照。
+#[tauri::command(rename_all = "snake_case")]
+pub fn sync_progress(state: State<'_, AppState>) -> SyncProgress {
+    state.host.sync_progress()
+}
+
+/// 请求取消正在进行的同步。
+#[tauri::command(rename_all = "snake_case")]
+pub fn cancel_sync(state: State<'_, AppState>) {
+    state.host.cancel_sync();
 }
 
 #[tauri::command(rename_all = "snake_case")]

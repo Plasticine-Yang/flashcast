@@ -15,6 +15,7 @@ pub mod plugin;
 pub mod ranking;
 pub mod registry;
 pub mod settings;
+pub mod sync;
 pub mod watch;
 pub mod workspace;
 
@@ -39,6 +40,10 @@ pub use plugin::{
 pub use ranking::{score_match, sort_ranked, RankedItem};
 pub use registry::{PluginRegistry, PluginSearchOutcome};
 pub use settings::{Settings, SettingsError};
+pub use sync::{
+    DirtyDetail, PullOutcome, PullReport, PullResult, PushOutcome, PushReport, PushUpdateView,
+    SyncBlock, SyncBlockKind, SyncControl, SyncError, SyncPhase, SyncProgress, SyncStatus,
+};
 pub use watch::{ChangeFilter, WatchError, WorkspaceWatcher, DEBOUNCE, QUIET_WINDOW};
 pub use workspace::{
     workspace_remote_of, Workspace, WorkspaceError, WorkspaceReload, WorkspaceRemote,
