@@ -51,6 +51,33 @@ cargo clippy --workspace --all-targets
 - UI 不写单元测试，通过浏览器交互或真实桌面手动检查。
 - 真实平台检查在各平台 runner 上运行，输出「通过 / 失败 / 未覆盖」与原因。
 
+### 在开发机上模拟 CI 环境
+
+CI runner 与开发机的差异已经造成过多次「本机绿、CI 红」。提交前请用下面两条命令复核：
+
+```bash
+# 1) 不要依赖开发机的 Git 全局配置（CI 上没有 user.name / init.defaultBranch=main）。
+#    只对测试进程隐藏宿主配置，不改动你的真实 ~/.gitconfig。
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null cargo test --workspace
+
+# 2) 非 Linux 目标只做类型检查，不需要目标平台工具链。
+CARGO_TARGET_DIR=$HOME/.cache/flashcast/xcheck/windows \
+  cargo check -p flashcast-platform --target x86_64-pc-windows-msvc --all-targets
+CARGO_TARGET_DIR=$HOME/.cache/flashcast/xcheck/macos \
+  cargo check -p flashcast-platform --target x86_64-apple-darwin --all-targets
+```
+
+注意：
+
+- 测试夹具必须自己固定仓库初始分支（`real_git_repo` 会写 `HEAD -> refs/heads/main`）。`git2::Repository::init`
+  遵循宿主机的 `init.defaultBranch`，开发机是 `main`、runner 上是 `master`，直接断言分支名会在 CI 上失败。
+- 提交身份同理：测试仓库要在仓库本地写入 `user.name` / `user.email`。
+- `/tmp` 是 16 GB 的 tmpfs，交叉检查的 target 目录请放在 `$HOME/.cache/flashcast/xcheck/` 下，否则会以
+  `Disk quota exceeded (os error 122)` 的形式在无关 crate 上失败。
+- 平台原生依赖前缀 `~/.local/share/flashcast/linux-native-deps` 由多个 worktree 共享。同时只用一个版本时无碍；
+  并行开发时用 `FLASHCAST_NATIVE_DEPS_PREFIX=$HOME/.cache/flashcast/<ticket>-native-deps` 隔离。
+
+
 ## 浏览器交互检查（UI）
 
 UI 没有单元测试，主流程靠浏览器交互检查：`tools/ui-check/` 是**独立**的 npm 项目

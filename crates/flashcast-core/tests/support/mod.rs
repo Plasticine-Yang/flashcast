@@ -171,9 +171,15 @@ pub fn files_under(root: &Path) -> Vec<PathBuf> {
 }
 
 /// 用真实 `git2` 初始化一个临时 Git 仓库，返回其根目录。
+///
+/// 初始分支被固定为 `main`：`Repository::init` 会遵循宿主机的 `init.defaultBranch`，
+/// 开发机通常配成 `main`、CI runner 上则是 `master`，断言不能依赖宿主的 Git 配置。
+/// 仓库刚建好、还没有提交，所以直接写 HEAD 符号引用（对「尚未诞生的分支」也有效）。
 pub fn real_git_repo(prefix: &str) -> PathBuf {
     let dir = unique_dir(prefix);
-    git2::Repository::init(&dir).expect("无法初始化临时 Git 仓库");
+    let repo = git2::Repository::init(&dir).expect("无法初始化临时 Git 仓库");
+    repo.reference_symbolic("HEAD", "refs/heads/main", true, "固定初始分支")
+        .expect("无法固定初始分支");
     dir
 }
 
