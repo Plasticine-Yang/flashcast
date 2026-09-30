@@ -102,9 +102,43 @@ jobs:
         if: matrix.target == 'x86_64-apple-darwin'
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
 
+      # 前端必须先构建：`pnpm build` 本身就是对 UI/TS 的真实检查，而且
+      # `generate_context!` 在**非 dev** 构建里会嵌入 `frontendDist`（缺失时直接 panic），
+      # ticket 04 的打包会走这条路。注意 dev（debug）构建走 `devUrl`，不嵌入 dist。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend bundle
+        run: pnpm build
+
       - name: Test workspace (cargo test --workspace)
         id: test
         run: cargo test --workspace ${{ matrix.cargo_args }}
+
+      # 明确证明前端产物存在，而不是等打包时才发现 dist/ 是空的。
+      # （debug 的 `cargo build -p flashcast` 走 devUrl、不嵌入 dist；这条断言守的是
+      # release / `tauri build` 那条路径，见 tauri-codegen 的 frontendDist 分支。）
+      - name: Assert the frontend bundle exists
+        run: |
+          set -euo pipefail
+          if [ ! -s dist/index.html ]; then
+            echo "::error::dist/index.html 缺失或为空；release/打包构建会因此失败或缺少界面。"
+            exit 1
+          fi
+          echo "dist/ 内容："
+          ls -l dist
+          ls -l dist/assets
 
       - name: Build desktop host (cargo build -p flashcast)
         id: build
@@ -161,3 +195,38 @@ jobs:
             artifacts/ui/**
           if-no-files-found: ignore
           retention-days: 14
+
+  # 廉价的跨目标类型检查：不用 macOS / Windows runner 就能发现
+  # 「#[cfg(target_os)] 条件编译写漏了」这类问题。ticket 01 踩过一次：
+  # `platform_check` 无条件引用 `flashcast_platform::linux`，会让 3 个矩阵分支编译失败。
+  #
+  # 只检查 `flashcast-platform`：Tauri 外壳无法在 Linux 上交叉 `cargo check` ——
+  # Windows 目标需要 `llvm-rc` 嵌入图标，macOS 目标需要能识别 `-arch` 的 Apple 工具链。
+  # 那两个目标由主矩阵里各自的 runner 覆盖。
+  cross-check:
+    name: 跨目标类型检查 ${{ matrix.target }}
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: cross-check-${{ matrix.target }}
+
+      - name: Type check flashcast-platform for ${{ matrix.target }}
+        run: cargo check -p flashcast-platform --target ${{ matrix.target }}
