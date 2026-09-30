@@ -12,13 +12,31 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::workspace::write_atomic;
+use crate::workspace::{write_atomic, WorkspaceRemote};
 
 /// 设备本地状态文件。与工作区文件同名会混淆，因此放在设备目录根下。
 pub const DEVICE_STATE_FILE: &str = "device-local.json";
 
+/// 设备本地的 Git 凭证文件（https 令牌）。单独一个文件，Unix 下权限 0600。
+pub const GIT_CREDENTIALS_FILE: &str = "git-credentials.json";
+
 /// 当前配置工作区的键。
 pub const KEY_WORKSPACE_PATH: &str = "workspacePath";
+
+/// 工作区 ↔ 远端关系表（按工作区路径索引的 JSON）。
+pub const KEY_WORKSPACE_REMOTES: &str = "workspaceRemotes";
+
+/// 为某个远端主机保存的 https 令牌。**只**存在于设备本地目录。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredToken {
+    /// 远端主机（含端口，小写）。
+    pub host: String,
+    /// 用作 git 用户名的值（GitHub 用 `x-access-token`，GitLab 用 `oauth2`）。
+    pub username: String,
+    /// 访问令牌本体。绝不写入工作区、配置或日志。
+    pub token: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DeviceError {
@@ -87,6 +105,45 @@ impl DeviceStore {
         }
     }
 
+    /// 某个工作区对应的远端关系。ticket 16 的同步据此确定远端、默认分支与上游。
+    pub fn workspace_remote(
+        &self,
+        workspace: &Path,
+    ) -> Result<Option<WorkspaceRemote>, DeviceError> {
+        let Some(raw) = self.get(KEY_WORKSPACE_REMOTES)? else {
+            return Ok(None);
+        };
+        let map: BTreeMap<String, WorkspaceRemote> = serde_json::from_str(&raw)
+            .map_err(|error| DeviceError::Corrupt(format!("{KEY_WORKSPACE_REMOTES}：{error}")))?;
+        Ok(map.get(&workspace.to_string_lossy().into_owned()).cloned())
+    }
+
+    /// 记录工作区 ↔ 远端关系；传 `None` 时删除该工作区的记录。
+    pub fn set_workspace_remote(
+        &self,
+        workspace: &Path,
+        remote: Option<&WorkspaceRemote>,
+    ) -> Result<(), DeviceError> {
+        let raw = self.get(KEY_WORKSPACE_REMOTES)?;
+        let mut map: BTreeMap<String, WorkspaceRemote> = match raw {
+            Some(raw) => serde_json::from_str(&raw)
+                .map_err(|error| DeviceError::Corrupt(format!("{KEY_WORKSPACE_REMOTES}：{error}")))?,
+            None => BTreeMap::new(),
+        };
+        let key = workspace.to_string_lossy().into_owned();
+        match remote {
+            Some(remote) => {
+                map.insert(key, remote.clone());
+            }
+            None => {
+                map.remove(&key);
+            }
+        }
+        let text = serde_json::to_string(&map)
+            .map_err(|error| DeviceError::Io(error.to_string()))?;
+        self.put(KEY_WORKSPACE_REMOTES, &text)
+    }
+
     fn load(&self) -> Result<DeviceState, DeviceError> {
         let path = self.file();
         let text = match std::fs::read_to_string(&path) {
@@ -106,5 +163,82 @@ impl DeviceStore {
             .map_err(|error| DeviceError::Io(error.to_string()))?;
         write_atomic(&self.file(), text.as_bytes())
             .map_err(|error| DeviceError::Io(error.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct CredentialState {
+    /// 按主机索引（小写，含端口）。
+    #[serde(default)]
+    tokens: BTreeMap<String, StoredToken>,
+}
+
+/// 设备本地的 Git 凭证存储：https 令牌按主机保存，供克隆与同步复用。
+///
+/// 与工作区严格分离（ADR §8、spec「凭证不写入工作区或日志」）：文件放在应用数据
+/// 目录，Unix 下权限 `0600`。ssh 的凭证不在这里 —— 那些复用 ssh-agent 与 `~/.ssh`。
+#[derive(Debug, Clone)]
+pub struct CredentialStore {
+    root: PathBuf,
+}
+
+impl CredentialStore {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// 凭证文件路径。
+    pub fn file(&self) -> PathBuf {
+        self.root.join(GIT_CREDENTIALS_FILE)
+    }
+
+    /// 该主机保存的令牌。
+    pub fn token(&self, host: &str) -> Result<Option<StoredToken>, DeviceError> {
+        Ok(self.load()?.tokens.get(&host.to_ascii_lowercase()).cloned())
+    }
+
+    /// 保存该主机的令牌（覆盖同主机旧值）。
+    pub fn set_token(&self, token: &StoredToken) -> Result<(), DeviceError> {
+        let mut state = self.load()?;
+        state
+            .tokens
+            .insert(token.host.to_ascii_lowercase(), token.clone());
+        self.save(&state)
+    }
+
+    /// 删除该主机的令牌。
+    pub fn remove_token(&self, host: &str) -> Result<(), DeviceError> {
+        let mut state = self.load()?;
+        state.tokens.remove(&host.to_ascii_lowercase());
+        self.save(&state)
+    }
+
+    fn load(&self) -> Result<CredentialState, DeviceError> {
+        let path = self.file();
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(CredentialState::default())
+            }
+            Err(error) => return Err(DeviceError::Io(error.to_string())),
+        };
+        serde_json::from_str(&text)
+            .map_err(|error| DeviceError::Corrupt(format!("{}：{error}", path.display())))
+    }
+
+    fn save(&self, state: &CredentialState) -> Result<(), DeviceError> {
+        std::fs::create_dir_all(&self.root)?;
+        let text = serde_json::to_string_pretty(state)
+            .map_err(|error| DeviceError::Io(error.to_string()))?;
+        let path = self.file();
+        write_atomic(&path, text.as_bytes())
+            .map_err(|error| DeviceError::Io(error.to_string()))?;
+        // 令牌文件只给当前用户读写。Unix 之外（Windows）依赖用户目录的 ACL。
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
     }
 }

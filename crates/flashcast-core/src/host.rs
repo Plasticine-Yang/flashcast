@@ -16,7 +16,10 @@ use flashcast_platform::catalog::{AppCatalog, AppEntry};
 use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
 
-use crate::device::DeviceStore;
+use crate::clone::{
+    self, CloneControl, CloneOutcome, CloneProgress, CredentialProvider,
+};
+use crate::device::{CredentialStore, DeviceStore, StoredToken};
 use crate::model::{
     ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview,
     QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES, COMMAND_PREFIX,
@@ -27,7 +30,9 @@ use crate::ranking::{score_match, sort_ranked, RankedItem};
 use crate::registry::PluginRegistry;
 use crate::settings::{Settings, SettingsError};
 use crate::watch::WorkspaceWatcher;
-use crate::workspace::{Workspace, WorkspaceError, WorkspaceReload, WorkspaceStatus};
+use crate::workspace::{
+    Workspace, WorkspaceError, WorkspaceReload, WorkspaceRemote, WorkspaceStatus,
+};
 
 /// 宿主的注入依赖。不含任何 Tauri 类型。
 #[derive(Clone)]
@@ -88,8 +93,12 @@ pub struct Host {
     deps: HostDeps,
     /// 设备本地存储：位于应用数据目录，与配置工作区分离。
     device: DeviceStore,
+    /// 设备本地的 Git 凭证（https 令牌）；与工作区严格分离。
+    credentials: CredentialStore,
     /// 当前工作区的文件监听器。切换工作区时整体替换。
     watch: Mutex<Option<WorkspaceWatcher>>,
+    /// 最近一次克隆操作的进度与取消信号（UI 轮询，另一线程执行克隆）。
+    clone: Mutex<CloneControl>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -112,6 +121,7 @@ impl Host {
     /// 恢复失败不影响宿主可用性，只把原因记录到工作区状态。
     pub fn new(deps: HostDeps, settings: Settings) -> Self {
         let device = DeviceStore::new(deps.device_dir.clone());
+        let credentials = CredentialStore::new(deps.device_dir.clone());
         let host = Self {
             inner: Mutex::new(HostInner {
                 input: String::new(),
@@ -131,7 +141,9 @@ impl Host {
             seq: AtomicU64::new(0),
             deps,
             device,
+            credentials,
             watch: Mutex::new(None),
+            clone: Mutex::new(CloneControl::new()),
         };
         host.rescan_catalog();
         host.restore_workspace();
@@ -176,6 +188,12 @@ impl Host {
                 let mut status = WorkspaceStatus::linked(workspace);
                 status.error = inner.workspace_error.clone();
                 status.valid = inner.workspace_error.is_none();
+                status.remote = self
+                    .device
+                    .workspace_remote(workspace.root())
+                    .ok()
+                    .flatten()
+                    .or_else(|| workspace.remote());
                 status
             }
             None => WorkspaceStatus::unlinked(inner.workspace_error.clone()),
@@ -196,6 +214,184 @@ impl Host {
     pub fn init_workspace(&self, path: &Path) -> Result<WorkspaceStatus, WorkspaceError> {
         let workspace = Workspace::init(path)?;
         self.activate_workspace(workspace)
+    }
+
+    /// 从远端 Git 仓库克隆配置工作区（ticket 14）。
+    ///
+    /// - 目标目录非空时拒绝，绝不覆盖已有文件；
+    /// - 失败、取消或克隆出来的配置无效时回滚本次创建的内容，当前工作区与
+    ///   有效设置保持不变；
+    /// - 成功后校验并关联工作区（已有功能随即读取其中内容），记录远端关系。
+    ///
+    /// 阻塞调用：Tauri 外壳把它放到后台线程，UI 通过 [`Host::clone_progress`]
+    /// 轮询进度、用 [`Host::cancel_clone`] 取消。
+    pub fn clone_workspace(
+        &self,
+        remote_url: &str,
+        target: &Path,
+    ) -> Result<CloneOutcome, WorkspaceError> {
+        let control = CloneControl::new();
+        *lock(&self.clone) = control.clone();
+        control.start();
+        self.clone_workspace_with(remote_url, target, &control)
+    }
+
+    fn clone_workspace_with(
+        &self,
+        remote_url: &str,
+        target: &Path,
+        control: &CloneControl,
+    ) -> Result<CloneOutcome, WorkspaceError> {
+        let url = remote_url.trim();
+        if url.is_empty() {
+            return Err(self.clone_failure(control, "克隆地址不能为空".to_string()));
+        }
+        // 地址里带口令的写法一律拒绝：它会被 git 写进工作区的 .git/config。
+        if clone::url_password(url).is_some() {
+            let message = "克隆地址包含密码，已拒绝：请改用访问令牌（保存在本机设备目录）或系统 git 的凭证管理，不要把口令写在地址里"
+                .to_string();
+            return Err(self.clone_failure(control, message));
+        }
+
+        // 凭证来源：设备本地为该主机保存的 https 令牌（如有）。
+        let provider = match clone::host_of(url) {
+            Some(host) => {
+                let token = self
+                    .credentials
+                    .token(&host)
+                    .map_err(|error| WorkspaceError::Io(error.to_string()))?;
+                CredentialProvider::with_token(token)
+            }
+            None => CredentialProvider::new(),
+        };
+
+        let cloned = clone::clone_repository(url, target, control, &provider)?;
+
+        // 目标目录必须能作为配置工作区打开（目录可写、settings.toml 有效）。
+        let workspace = match Workspace::open(target) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                cloned.rollback();
+                return Err(self.clone_failure(control, error.to_string()));
+            }
+        };
+        let remote = match workspace.remote() {
+            Some(remote) => remote,
+            None => {
+                cloned.rollback();
+                return Err(self.clone_failure(
+                    control,
+                    "克隆完成但没有找到远端记录，无法建立同步关系".to_string(),
+                ));
+            }
+        };
+
+        // 关联：切换工作区、开始监听、恢复其中的设置（含插件启停选择）。
+        if let Err(error) = self.activate_workspace(workspace) {
+            cloned.rollback();
+            return Err(self.clone_failure(control, error.to_string()));
+        }
+
+        let unavailable_plugins = self.unavailable_plugins();
+        let recorded_theme = lock(&self.inner)
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.recorded_theme());
+        let status = self.workspace_status();
+        // 记录远端 ↔ 工作区关系：ticket 16 的同步据此确定远端、默认分支与上游。
+        if let Some(path) = status.path.clone() {
+            if let Err(error) = self.device.set_workspace_remote(&path, Some(&remote)) {
+                lock(&self.inner).workspace_error = Some(error.to_string());
+            }
+        }
+        let status = self.workspace_status();
+        Ok(CloneOutcome {
+            workspace: status,
+            remote,
+            unavailable_plugins,
+            recorded_theme,
+        })
+    }
+
+    /// 最近一次克隆的进度快照（UI 轮询）。
+    pub fn clone_progress(&self) -> CloneProgress {
+        lock(&self.clone).progress()
+    }
+
+    /// 请求取消正在进行的克隆。回调在下一次触发时中断，随后自动回滚。
+    pub fn cancel_clone(&self) {
+        lock(&self.clone).cancel();
+    }
+
+    /// 重新读取当前工作区的远端关系（供 ticket 16 的同步与界面显示）。
+    ///
+    /// 地址一律去掉 userinfo 后再返回与保存。
+    pub fn workspace_remote(&self) -> Option<WorkspaceRemote> {
+        let workspace = lock(&self.inner).workspace.clone()?;
+        let remote = workspace.remote()?;
+        let _ = self
+            .device
+            .set_workspace_remote(workspace.root(), Some(&remote));
+        Some(remote)
+    }
+
+    /// 记住某个远端主机要用的 https 令牌。**只**写进设备本地目录。
+    pub fn remember_git_token(
+        &self,
+        remote_url: &str,
+        username: &str,
+        token: &str,
+    ) -> Result<(), WorkspaceError> {
+        let host = clone::host_of(remote_url)
+            .ok_or_else(|| WorkspaceError::Clone("无法从克隆地址识别主机".to_string()))?;
+        let username = if username.trim().is_empty() {
+            "x-access-token".to_string()
+        } else {
+            username.trim().to_string()
+        };
+        self.credentials
+            .set_token(&StoredToken {
+                host,
+                username,
+                token: token.to_string(),
+            })
+            .map_err(|error| WorkspaceError::Io(error.to_string()))
+    }
+
+    /// 忘记某个远端主机的 https 令牌。
+    pub fn forget_git_token(&self, remote_url: &str) -> Result<(), WorkspaceError> {
+        let host = clone::host_of(remote_url)
+            .ok_or_else(|| WorkspaceError::Clone("无法从克隆地址识别主机".to_string()))?;
+        self.credentials
+            .remove_token(&host)
+            .map_err(|error| WorkspaceError::Io(error.to_string()))
+    }
+
+    /// 结束一次失败的克隆尝试：记录中文原因并给出失败阶段。
+    fn clone_failure(&self, control: &CloneControl, message: String) -> WorkspaceError {
+        let message = clone::redact(&message);
+        control.finish(crate::clone::ClonePhase::Failed, Some(message.clone()));
+        WorkspaceError::Clone(message)
+    }
+
+    /// 工作区记录为「停用」但本机没有对应实现的插件 id（如实报告，不假装已恢复）。
+    fn unavailable_plugins(&self) -> Vec<String> {
+        let known: std::collections::HashSet<String> = self
+            .deps
+            .plugins
+            .manifests()
+            .into_iter()
+            .map(|(manifest, _enabled)| manifest.id)
+            .collect();
+        let mut missing: Vec<String> = self
+            .settings()
+            .disabled_plugins
+            .into_iter()
+            .filter(|id| !known.contains(id))
+            .collect();
+        missing.sort();
+        missing.dedup();
+        missing
     }
 
     /// Git 操作忙标志：置位期间丢弃工作区文件事件。

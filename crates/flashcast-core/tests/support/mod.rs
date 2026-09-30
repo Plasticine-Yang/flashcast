@@ -177,6 +177,77 @@ pub fn real_git_repo(prefix: &str) -> PathBuf {
     dir
 }
 
+/// 在临时目录里构造一个**裸仓库**作为远端。`files` 是「相对路径 → 内容」，
+/// 直接写 tree/commit（默认分支 `main`），不经过 push，因此不依赖网络或传输实现。
+pub fn bare_remote<A: AsRef<str>, B: AsRef<str>>(prefix: &str, files: &[(A, B)]) -> PathBuf {
+    let dir = unique_dir(prefix);
+    let repo = git2::Repository::init_bare(&dir).expect("无法初始化裸仓库");
+    let files: Vec<(String, String)> = files
+        .iter()
+        .map(|(path, text)| (path.as_ref().to_string(), text.as_ref().to_string()))
+        .collect();
+    let tree_oid = write_tree_at(&repo, &files);
+    let tree = repo.find_tree(tree_oid).expect("无法读取 tree");
+    let signature = git2::Signature::now("Flashcast 测试", "test@localhost").expect("无法构造签名");
+    repo.commit(
+        Some("refs/heads/main"),
+        &signature,
+        &signature,
+        "初始配置",
+        &tree,
+        &[],
+    )
+    .expect("无法提交初始配置");
+    repo.set_head("refs/heads/main").expect("无法设置 HEAD");
+    dir
+}
+
+/// 在裸仓库（无工作区）里递归写入 tree，返回根 tree 的 oid。
+fn write_tree_at(repo: &git2::Repository, files: &[(String, String)]) -> git2::Oid {
+    use std::collections::BTreeMap;
+    let mut builder = repo.treebuilder(None).expect("无法创建 tree builder");
+    let mut subdirs: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for (path, content) in files {
+        match path.split_once('/') {
+            Some((head, rest)) => subdirs
+                .entry(head.to_string())
+                .or_default()
+                .push((rest.to_string(), content.clone())),
+            None => {
+                let blob = repo.blob(content.as_bytes()).expect("无法写入 blob");
+                builder
+                    .insert(path, blob, 0o100_644)
+                    .expect("无法插入 blob");
+            }
+        }
+    }
+    for (name, children) in subdirs {
+        let oid = write_tree_at(repo, &children);
+        builder.insert(name, oid, 0o040_000).expect("无法插入子树");
+    }
+    builder.write().expect("无法写入 tree")
+}
+
+/// 裸仓库的克隆 URL（本地路径形式，不经过网络）。
+pub fn remote_url(remote: &Path) -> String {
+    remote.to_string_lossy().into_owned()
+}
+
+/// 一份可被克隆的配置工作区内容。
+pub fn workspace_files(hotkey: &str) -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "settings.toml",
+            format!(
+                "hotkey = \"{hotkey}\"\nlaunchAtStartup = false\nquickAccessLimit = 6\npluginTimeoutMs = 400\ndisabledPlugins = []\n"
+            ),
+        ),
+        ("manifest.json", "{\"plugins\": []}\n".to_string()),
+        ("theme.json", "{\"theme\": \"dark\"}\n".to_string()),
+        ("memos/hello.md", "# 你好\n\n来自远端的备忘录。\n".to_string()),
+    ]
+}
+
 /// 默认设置，插件超时缩短到 60ms 以便快速验证超时隔离。
 pub fn fast_settings() -> Settings {
     Settings {

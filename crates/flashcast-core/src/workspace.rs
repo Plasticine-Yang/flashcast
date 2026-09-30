@@ -51,6 +51,12 @@ pub enum WorkspaceError {
     NotWritable(PathBuf),
     #[error("目标目录非空，已拒绝初始化以免覆盖已有文件：{}", .0.display())]
     NonEmptyDirectory(PathBuf),
+    #[error("目标目录非空，已拒绝克隆以免覆盖已有文件：{}", .0.display())]
+    CloneTargetNotEmpty(PathBuf),
+    #[error("{0}")]
+    Clone(String),
+    #[error("克隆已取消，未留下任何目录")]
+    CloneCancelled,
     #[error("配置无效：{0}")]
     InvalidSettings(String),
     #[error("Git 仓库无法读取：{0}")]
@@ -65,6 +71,22 @@ impl From<std::io::Error> for WorkspaceError {
     fn from(error: std::io::Error) -> Self {
         WorkspaceError::Io(error.to_string())
     }
+}
+
+/// 工作区与远端仓库的关系。ticket 16 的同步据此确定远端、默认分支与上游。
+///
+/// `url` 一律去掉 userinfo（凭证绝不进入配置、日志或界面）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRemote {
+    /// 远端名，通常是 `origin`。
+    pub name: String,
+    /// 远端地址（已去掉 userinfo）。
+    pub url: String,
+    /// 工作区当前分支（例如 `main`）。
+    pub branch: String,
+    /// 上游跟踪分支（例如 `origin/main`）；未设置时为 `None`。
+    pub upstream: Option<String>,
 }
 
 /// 当前工作区与它的有效性。UI 用它显示「已关联 / 未关联 / 失败原因」。
@@ -83,6 +105,8 @@ pub struct WorkspaceStatus {
     pub persisted: bool,
     /// 最近一次失败的中文原因；`None` 表示没有已知问题。
     pub error: Option<String>,
+    /// 远端仓库关系（克隆得到的工作区才有）。
+    pub remote: Option<WorkspaceRemote>,
 }
 
 impl WorkspaceStatus {
@@ -95,6 +119,7 @@ impl WorkspaceStatus {
             settings_file: None,
             persisted: false,
             error,
+            remote: None,
         }
     }
 
@@ -106,6 +131,7 @@ impl WorkspaceStatus {
             settings_file: Some(workspace.settings_path()),
             persisted: true,
             error: None,
+            remote: None,
         }
     }
 }
@@ -239,6 +265,82 @@ impl Workspace {
     pub fn write_settings_bytes(&self, bytes: &[u8]) -> Result<(), WorkspaceError> {
         write_atomic(&self.settings_path(), bytes)
     }
+
+    /// 读取工作区与远端仓库的关系（远端名、地址、当前分支、上游）。
+    ///
+    /// 地址一律去掉 userinfo。不是 Git 仓库或没有远端时返回 `None`。
+    pub fn remote(&self) -> Option<WorkspaceRemote> {
+        let repo = git2::Repository::open(&self.root).ok()?;
+        workspace_remote_of(&repo)
+    }
+
+    /// 读取工作区记录的主题名（`theme.json` 里的 `theme` 字段）。语义由 ticket 06 落地，
+    /// 这里只做宽容读取，用于克隆完成后如实告诉用户「工作区记录了什么」。
+    pub fn recorded_theme(&self) -> Option<String> {
+        let text = fs::read_to_string(self.root.join(THEME_FILE)).ok()?;
+        let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+        match &value {
+            serde_json::Value::String(name) => Some(name.clone()),
+            serde_json::Value::Object(map) => map
+                .get("theme")
+                .or_else(|| map.get("name"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            _ => None,
+        }
+    }
+}
+
+/// 从一个已打开的仓库读出远端关系。
+pub fn workspace_remote_of(repo: &git2::Repository) -> Option<WorkspaceRemote> {
+    let remotes = repo.remotes().ok()?;
+    let names: Vec<String> = remotes
+        .iter()
+        .filter_map(|name| name.ok().flatten().map(str::to_string))
+        .collect();
+    let name = if names.iter().any(|name| name == "origin") {
+        "origin".to_string()
+    } else {
+        names.first()?.clone()
+    };
+    let remote = repo.find_remote(&name).ok()?;
+    let url = crate::clone::strip_userinfo(remote.url().unwrap_or_default());
+
+    let branch = repo
+        .head()
+        .ok()
+        .and_then(|head| head.shorthand().ok().map(str::to_string))
+        .or_else(|| {
+            let buf = remote.default_branch().ok()?;
+            let full = buf.as_str().ok()?;
+            full.rsplit('/').next().map(str::to_string)
+        })
+        .unwrap_or_else(|| "main".to_string());
+
+    // 上游：branch.<name>.remote 与 branch.<name>.merge（克隆会自动写好）。
+    let upstream = repo
+        .config()
+        .ok()
+        .and_then(|config| {
+            let remote_name = config
+                .get_string(&format!("branch.{branch}.remote"))
+                .ok()?;
+            if remote_name == "." {
+                return None;
+            }
+            let merge = config
+                .get_string(&format!("branch.{branch}.merge"))
+                .ok()?;
+            let short = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
+            Some(format!("{remote_name}/{short}"))
+        });
+
+    Some(WorkspaceRemote {
+        name,
+        url,
+        branch,
+        upstream,
+    })
 }
 
 /// 原子写入：同目录临时文件 + `rename`（ADR §8）。
