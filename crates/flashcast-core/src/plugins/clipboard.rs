@@ -143,7 +143,8 @@ impl PluginScope for ClipboardScope {
         let mut items = Vec::new();
         for event in &events {
             let metadata = metadata_for(event);
-            if let Some(score) = score_match(&query, &event.summary, &metadata) {
+            let metadata_refs: Vec<&str> = metadata.iter().map(String::as_str).collect();
+            if let Some(score) = score_match(&query, &event.summary, &metadata_refs) {
                 items.push(clipboard_item(event, score));
             }
         }
@@ -151,19 +152,29 @@ impl PluginScope for ClipboardScope {
     }
 }
 
-/// 参与匹配的元数据：完整文字、来源应用与格式名。
-fn metadata_for(event: &ClipboardEvent) -> Vec<&str> {
-    let mut metadata: Vec<&str> = Vec::new();
+/// 参与匹配的元数据：完整文字、来源应用、格式名与**文件名称/类型**。
+///
+/// 文件列表没有可索引文字（spec「不承诺 OCR」），因此名称与元数据是唯一的检索入口：
+/// 每个文件的名称、MIME 与路径都参与匹配。
+fn metadata_for(event: &ClipboardEvent) -> Vec<String> {
+    let mut metadata: Vec<String> = Vec::new();
     if let Some(text) = event.text.as_deref() {
-        metadata.push(text);
+        metadata.push(text.to_string());
     }
     if let Some(source) = &event.source {
-        metadata.push(source.app_id.as_str());
+        metadata.push(source.app_id.clone());
         if let Some(title) = source.title.as_deref() {
-            metadata.push(title);
+            metadata.push(title.to_string());
         }
     }
-    metadata.extend(event.format_labels());
+    metadata.extend(event.format_labels().into_iter().map(str::to_string));
+    for view in event.file_views() {
+        metadata.push(view.name.clone());
+        if let Some(mime) = view.mime.clone() {
+            metadata.push(mime);
+        }
+        metadata.push(view.path.to_string_lossy().into_owned());
+    }
     metadata
 }
 
@@ -179,18 +190,81 @@ pub fn clipboard_item(event: &ClipboardEvent, score: Score) -> SearchItem {
         // 默认操作是粘贴（ADR §4）；自动粘贴不可用时由宿主降级为
         // 「已复制，请手动粘贴」，反馈路径与备忘录完全一致（ticket 08）。
         default_action: DefaultAction::Paste,
-        preview: Preview::Text {
-            title: Some(event.summary.clone()),
-            body: event
-                .text
-                .clone()
-                .unwrap_or_else(|| "（该条目没有可显示的文字内容）".to_string()),
-        },
+        preview: clipboard_preview(event),
         score,
     }
 }
 
-/// 结果副标题：置顶标记、格式、来源应用与相对时间。
+/// 预览：文件列表逐条给出「引用 / 已保存副本」与当前是否可恢复，文字走原文。
+///
+/// 状态是**按当前文件系统**算出来的，不是捕获时的快照：原文件被删除后再次预览必须显示
+/// 不可恢复（spec「原文件失效时引用显示不可恢复状态」）。
+pub fn clipboard_preview(event: &ClipboardEvent) -> Preview {
+    if event.is_file_list() {
+        return Preview::Text {
+            title: Some(event.summary.clone()),
+            body: file_list_preview_body(event),
+        };
+    }
+    Preview::Text {
+        title: Some(event.summary.clone()),
+        body: event
+            .text
+            .clone()
+            .unwrap_or_else(|| "（该条目没有可显示的文字内容）".to_string()),
+    }
+}
+
+/// 文件列表预览正文：第一行是数量汇总，之后每个文件一行状态。
+pub fn file_list_preview_body(event: &ClipboardEvent) -> String {
+    let views = event.file_views();
+    let (references, copies) = event.file_counts();
+    let mut lines = vec![format!(
+        "{count} 个文件 · {references} 个引用{spec}",
+        count = views.len(),
+        spec = if copies > 0 {
+            format!(" · {copies} 个已保存副本")
+        } else {
+            String::new()
+        }
+    )];
+    for view in &views {
+        let state = if view.recoverable {
+            "可恢复".to_string()
+        } else {
+            format!(
+                "不可恢复：{}",
+                view.problem.as_deref().unwrap_or("原因未知")
+            )
+        };
+        lines.push(format!(
+            "{} — {}（{}）· {}",
+            view.name,
+            view.kind_label_zh(),
+            state,
+            describe_bytes(view.bytes)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// 人类可读的字节数。
+pub fn describe_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// 结果副标题：置顶标记、格式、**引用/副本数量**、来源应用与相对时间。
 pub fn clipboard_subtitle(event: &ClipboardEvent) -> String {
     let mut parts: Vec<String> = Vec::new();
     if event.pinned {
@@ -199,6 +273,14 @@ pub fn clipboard_subtitle(event: &ClipboardEvent) -> String {
     let labels = event.format_labels();
     if !labels.is_empty() {
         parts.push(labels.join("/"));
+    }
+    if event.is_file_list() {
+        let (references, copies) = event.file_counts();
+        let mut file_part = format!("{references} 个引用");
+        if copies > 0 {
+            file_part.push_str(&format!(" · {copies} 个已保存副本"));
+        }
+        parts.push(file_part);
     }
     if let Some(source) = &event.source {
         let name = source

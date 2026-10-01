@@ -256,6 +256,9 @@ pub struct PastePlan {
     pub epoch: u64,
     /// 写入剪贴板的字节数，供核对（不重复携带正文）。
     pub text_bytes: usize,
+    /// 本次复制的是**文件列表**时的文件个数；文字为 0（ticket 12）。
+    #[serde(default)]
+    pub files: usize,
 }
 
 /// 命令入口的返回。

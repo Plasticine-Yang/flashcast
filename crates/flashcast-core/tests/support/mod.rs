@@ -1214,6 +1214,12 @@ impl ClipboardHarness {
         self.host.capture_clipboard_once()
     }
 
+    /// 模拟一次外部**文件列表**复制（ticket 12）并同步捕获一次。
+    pub fn copy_files(&self, paths: &[std::path::PathBuf]) -> ClipboardCaptureOutcome {
+        self.watcher.set_files(paths);
+        self.host.capture_clipboard_once()
+    }
+
     /// 当前历史（置顶在前，然后按时间倒序）。
     pub fn entries(&self) -> Vec<ClipboardEvent> {
         self.host.clipboard_entries(None)

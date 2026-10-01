@@ -213,7 +213,11 @@ fn wait_bounded(
                 let _ = child.wait();
                 return Err(error(timeout));
             }
-            Err(error) => return Err(ClipboardError::Failed(format!("等待 osascript 失败：{error}"))),
+            Err(error) => {
+                return Err(ClipboardError::Failed(format!(
+                    "等待 osascript 失败：{error}"
+                )))
+            }
         }
     }
 }
@@ -250,24 +254,15 @@ impl ClipboardWatcher for MacosClipboardWatcher {
         if let Some(paths) = files {
             let print = fingerprint_files(&paths);
             {
-                let mut own = self
-                    .own_files
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner());
+                let mut own = self.own_files.lock().unwrap_or_else(|p| p.into_inner());
                 if let Some(index) = own.iter().position(|item| *item == print) {
                     own.remove(index);
-                    *self
-                        .last_files
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner()) = Some(print);
+                    *self.last_files.lock().unwrap_or_else(|p| p.into_inner()) = Some(print);
                     return Ok(ClipboardPoll::Unchanged);
                 }
             }
             {
-                let mut last = self
-                    .last_files
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner());
+                let mut last = self.last_files.lock().unwrap_or_else(|p| p.into_inner());
                 if *last == Some(print) {
                     return Ok(ClipboardPoll::Unchanged);
                 }

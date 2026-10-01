@@ -817,6 +817,7 @@ fn capture_formats_are_recorded_from_the_platform_layer() {
     let capture = flashcast_platform::clipboard::ClipboardCapture {
         formats: vec![ClipboardFormatKind::Text],
         text: Some("带格式的文本".to_string()),
+        files: Vec::new(),
         source: None,
     };
     let event = flashcast_core::event_from_capture(&capture, 1_700_000_000_000)

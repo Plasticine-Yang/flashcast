@@ -122,13 +122,7 @@ impl LinuxClipboard {
                 (
                     "xclip",
                     path,
-                    vec![
-                        "-selection",
-                        "clipboard",
-                        "-t",
-                        URI_LIST,
-                        "-in",
-                    ],
+                    vec!["-selection", "clipboard", "-t", URI_LIST, "-in"],
                 )
             })
         };
@@ -149,7 +143,8 @@ impl LinuxClipboard {
             })
         };
         let wayland = |mime: &'static str| {
-            find_program("wl-paste").map(|path| ("wl-paste", path, vec!["--no-newline", "--type", mime]))
+            find_program("wl-paste")
+                .map(|path| ("wl-paste", path, vec!["--no-newline", "--type", mime]))
         };
         let (first, second): (
             fn(&'static str) -> Option<Backend>,
@@ -300,24 +295,15 @@ impl LinuxClipboardWatcher {
         };
         let print = fingerprint_files(&paths);
         {
-            let mut own = self
-                .own_files
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut own = self.own_files.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(index) = own.iter().position(|item| *item == print) {
                 own.remove(index);
-                *self
-                    .last_files
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner()) = Some(print);
+                *self.last_files.lock().unwrap_or_else(|p| p.into_inner()) = Some(print);
                 return Ok(None);
             }
         }
         {
-            let mut last = self
-                .last_files
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
+            let mut last = self.last_files.lock().unwrap_or_else(|p| p.into_inner());
             if *last == Some(print) {
                 return Ok(None);
             }

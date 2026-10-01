@@ -217,6 +217,8 @@ impl FocusTracker for FakeFocusTracker {
 pub struct FakePaster {
     pastes: Mutex<usize>,
     text_at_paste: Mutex<Vec<Option<String>>>,
+    /// 每次注入时剪贴板里的**文件列表**（ticket 12）。
+    files_at_paste: Mutex<Vec<Option<Vec<PathBuf>>>>,
     failures: Mutex<Vec<PasteError>>,
     clipboard: Mutex<Option<Arc<FakeClipboard>>>,
 }
@@ -232,6 +234,7 @@ impl FakePaster {
         Self {
             pastes: Mutex::new(0),
             text_at_paste: Mutex::new(Vec::new()),
+            files_at_paste: Mutex::new(Vec::new()),
             failures: Mutex::new(Vec::new()),
             clipboard: Mutex::new(Some(clipboard)),
         }
@@ -255,6 +258,11 @@ impl FakePaster {
     pub fn text_at_paste(&self) -> Vec<Option<String>> {
         lock(&self.text_at_paste).clone()
     }
+
+    /// 每次注入时剪贴板里的文件列表（`None` 表示当时剪贴板没有文件列表）。
+    pub fn files_at_paste(&self) -> Vec<Option<Vec<PathBuf>>> {
+        lock(&self.files_at_paste).clone()
+    }
 }
 
 impl Paster for FakePaster {
@@ -268,9 +276,21 @@ impl Paster for FakePaster {
         drop(failures);
         // 先取到句柄再释放锁，避免与剪贴板替身形成嵌套锁。
         let clipboard = lock(&self.clipboard).clone();
-        let text = clipboard.and_then(|clipboard| clipboard.last_write());
+        let (text, files) = match clipboard {
+            Some(clipboard) => {
+                let files = clipboard.last_write_files();
+                let text = if files.is_some() {
+                    None
+                } else {
+                    clipboard.last_write()
+                };
+                (text, files)
+            }
+            None => (None, None),
+        };
         *lock(&self.pastes) += 1;
         lock(&self.text_at_paste).push(text);
+        lock(&self.files_at_paste).push(files);
         Ok(())
     }
 }
