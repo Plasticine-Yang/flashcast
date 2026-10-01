@@ -125,7 +125,10 @@ impl LinuxClipboard {
     /// 类型，此时如实返回 `None`（不猜一个格式出来）。
     ///
     /// 读取同样**有界**（[`crate::clipboard::READ_TIMEOUT`]），不会让后台轮询线程卡住。
-    pub(crate) fn read_typed(&self, mime: &str) -> Result<Option<String>, ClipboardError> {
+    ///
+    /// 公开（`pub`）是给 `flashcast-platform-check` 用的：真实平台检查就靠它报告
+    /// 「按 MIME 类型读取」这条路径在当前选区上是否真的可用。
+    pub fn read_typed(&self, mime: &str) -> Result<Option<String>, ClipboardError> {
         let (name, program, args) = self.read_backend()?;
         match name {
             "wl-paste" => {
