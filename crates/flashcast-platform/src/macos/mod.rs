@@ -16,6 +16,7 @@ pub mod focus;
 pub mod hotkeys;
 pub mod icons;
 pub mod launcher;
+pub mod paste;
 
 #[cfg(target_os = "macos")]
 pub mod catalog;
@@ -31,3 +32,5 @@ pub use focus::{accessibility_granted, MacosFocusTracker};
 pub use hotkeys::MacosHotkeyManager;
 #[cfg(target_os = "macos")]
 pub use launcher::MacosLauncher;
+#[cfg(target_os = "macos")]
+pub use paste::MacosPaster;

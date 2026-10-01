@@ -233,7 +233,29 @@ pub enum ActionStatus {
     Done,
     /// 已复制到剪贴板，但需要用户手动粘贴。
     CopiedNeedsManualPaste,
+    /// 已复制到剪贴板，等待外壳关闭浮窗后完成自动粘贴。
+    ///
+    /// 这个状态**只在宿主内部出现**：外壳必须先关闭窗口、恢复目标应用，再调用
+    /// [`crate::Host::complete_paste`]，把结果换成 `Done` 或 `CopiedNeedsManualPaste`
+    /// 之后才交给 UI。之所以要有它，是因为「准备剪贴板」与「注入粘贴」之间必须插入
+    /// 关窗动作，而关窗是外壳的职责（spec「粘贴是宿主级操作」）。
+    PastePending,
     Failed,
+}
+
+/// 一次自动粘贴的计划。由 [`crate::Host::execute`] 产出、[`crate::Host::complete_paste`] 消费。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PastePlan {
+    /// 唤起前处于前台的应用程序：粘贴的目标。
+    pub target: flashcast_platform::FocusedApp,
+    /// 内容的显示名（备忘录标题 / 剪贴板条目摘要），用于中文反馈。
+    pub label: String,
+    /// 本次执行的序号。`complete_paste` 只完成最新的计划，过期的计划一律丢弃，
+    /// 因此快速连续执行、切换结果或关闭窗口都不会粘贴到上一次的选择。
+    pub epoch: u64,
+    /// 写入剪贴板的字节数，供核对（不重复携带正文）。
+    pub text_bytes: usize,
 }
 
 /// 命令入口的返回。
@@ -243,6 +265,9 @@ pub struct ActionOutcome {
     pub status: ActionStatus,
     /// 面向用户的中文反馈。
     pub message: Option<String>,
+    /// 需要外壳先关闭浮窗、再调用 `Host::complete_paste()` 的粘贴计划。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paste: Option<PastePlan>,
 }
 
 impl ActionOutcome {
@@ -250,14 +275,25 @@ impl ActionOutcome {
         Self {
             status: ActionStatus::Done,
             message,
+            paste: None,
         }
     }
 
-    /// 已复制到剪贴板，但需要用户手动粘贴（自动粘贴不可用或尚未提供）。
+    /// 已复制到剪贴板，但需要用户手动粘贴（自动粘贴不可用或失败）。
     pub fn copied_needs_manual_paste(message: impl Into<String>) -> Self {
         Self {
             status: ActionStatus::CopiedNeedsManualPaste,
             message: Some(message.into()),
+            paste: None,
+        }
+    }
+
+    /// 已复制到剪贴板，并给出待完成的粘贴计划。
+    pub fn paste_pending(plan: PastePlan, message: impl Into<String>) -> Self {
+        Self {
+            status: ActionStatus::PastePending,
+            message: Some(message.into()),
+            paste: Some(plan),
         }
     }
 
@@ -265,6 +301,7 @@ impl ActionOutcome {
         Self {
             status: ActionStatus::Failed,
             message: Some(message.into()),
+            paste: None,
         }
     }
 

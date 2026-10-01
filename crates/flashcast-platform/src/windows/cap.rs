@@ -46,6 +46,11 @@ impl CapabilityProbe for WindowsCapabilityProbe {
              没有开始菜单快捷方式、也没有可推导 .exe 的注册表条目会被丢弃。"
                 .to_string(),
         );
+        notes.push(
+            "自动粘贴用 SendInput 注入 Ctrl+V，并带 dwExtraInfo 标记；受 UIPI 限制，\
+             无法注入到以管理员身份运行的前台窗口（那种情况下会如实退回手动粘贴提示）。"
+                .to_string(),
+        );
 
         Capabilities {
             os: OsKind::Windows,
@@ -85,17 +90,17 @@ fn clipboard_support(desktop_available: bool) -> Support {
     }
 }
 
-/// 自动粘贴支持。ticket 02 尚未实现自动粘贴，因此同样保持「未覆盖」。
+/// 自动粘贴支持（ticket 08 实现）。
+///
+/// `SendInput` 在有交互桌面的 Windows 上始终可用，因此这里报「支持」；但 UIPI 限制
+/// 必须作为限制说明写进 `notes`，不能让用户以为任何前台窗口都能注入。
 fn auto_paste_support(desktop_available: bool) -> Support {
     if !desktop_available {
         return Support::Unsupported {
             reason: "当前没有可交互的桌面会话，无法注入按键".to_string(),
         };
     }
-    Support::Unknown {
-        reason: "自动粘贴适配尚未实现（ticket 08 覆盖）；Windows 可用 SendInput 注入按键"
-            .to_string(),
-    }
+    Support::Supported
 }
 
 /// 从注册表读取系统版本描述。

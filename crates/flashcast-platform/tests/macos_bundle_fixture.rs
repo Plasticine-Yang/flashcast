@@ -733,7 +733,9 @@ fn capability_snapshot_reports_macos_without_claiming_unimplemented_features() {
 }
 
 #[test]
-fn granted_accessibility_still_does_not_claim_auto_paste_works() {
+fn granted_accessibility_reports_auto_paste_supported() {
+    // ticket 08 实现了 `MacosPaster`（CGEvent 注入 Cmd+V），因此已授权时报「支持」；
+    // 未授权仍然是「不支持」并给出设置入口（上一个用例）。
     let caps = capabilities_for(
         MacosEnvironment {
             desktop_available: true,
@@ -743,11 +745,7 @@ fn granted_accessibility_still_does_not_claim_auto_paste_works() {
         "x86_64".to_string(),
     );
     assert_eq!(caps.hotkey, Support::Supported);
-    assert!(
-        matches!(caps.auto_paste, Support::Unknown { .. }),
-        "适配未实现时只能是未覆盖：{:?}",
-        caps.auto_paste
-    );
+    assert_eq!(caps.auto_paste, Support::Supported);
     assert!(caps
         .notes
         .iter()

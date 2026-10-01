@@ -6,7 +6,7 @@
 //! 该模块只在 X11 会话下有实际意义；Wayland 会话下即便存在 XWayland 的
 //! `DISPLAY`，也只能看到 X11 客户端窗口，不能代表整个桌面。
 
-use x11rb::connection::Connection;
+use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ClientMessageEvent, ConnectionExt, EventMask, PropMode, Window,
 };
@@ -110,8 +110,14 @@ pub fn activate_window(window: u64) -> Result<(), String> {
         .map_err(|_| "窗口 id 超出 X11 范围".to_string())?;
 
     // 1. 直接写根窗口属性：对不实现 EWMH 的窗口管理器也有效。
-    conn.change_property32(PropMode::REPLACE, root, net_active, AtomEnum::WINDOW, &[target])
-        .map_err(|e| e.to_string())?;
+    conn.change_property32(
+        PropMode::REPLACE,
+        root,
+        net_active,
+        AtomEnum::WINDOW,
+        &[target],
+    )
+    .map_err(|e| e.to_string())?;
 
     // 2. 发送 EWMH 客户端消息：source indication = 2（分页器/用户显式请求）。
     let event = ClientMessageEvent::new(32, target, net_active, [2, 0, 0, 0, 0]);
@@ -124,17 +130,28 @@ pub fn activate_window(window: u64) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     // 3. 把目标窗口切到当前桌面，避免焦点发给其他桌面上的窗口。
-    let _ = conn.get_property(
-        false,
-        root,
-        net_current,
-        AtomEnum::CARDINAL,
-        0,
-        1,
-    );
+    let _ = conn.get_property(false, root, net_current, AtomEnum::CARDINAL, 0, 1);
     conn.flush().map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// X11 服务器是否提供 XTEST 扩展。
+///
+/// 自动粘贴依赖 XTEST 注入按键（研究 §4.3），因此能力探测必须先问服务器，而不是假定
+/// 「有 DISPLAY 就能注入」：没有该扩展时如实报告不支持，而不是在用户按下回车后才失败。
+pub fn xtest_available() -> bool {
+    let Ok((conn, _screen)) = connect() else {
+        return false;
+    };
+    matches!(
+        conn.extension_information(XTEST_EXTENSION).ok().flatten(),
+        Some(_)
+    )
+}
+
+/// XTEST 扩展名。这里不引入 x11rb 的 `xtest` feature：本模块只查询扩展是否存在，
+/// 真正的注入由合成输入库完成。
+const XTEST_EXTENSION: &str = "XTEST";
 
 /// X11 诊断信息，供真实平台检查使用。
 pub fn diagnostics() -> X11Diagnostics {
@@ -220,7 +237,10 @@ fn read_text_property(conn: &impl Connection, window: Window, name: &[u8]) -> Op
     (!text.is_empty()).then_some(text)
 }
 
-fn read_wm_class(conn: &impl Connection, window: Window) -> Option<(Option<String>, Option<String>)> {
+fn read_wm_class(
+    conn: &impl Connection,
+    window: Window,
+) -> Option<(Option<String>, Option<String>)> {
     let atom = intern(conn, b"WM_CLASS").ok()?;
     let reply = conn
         .get_property(false, window, atom, AtomEnum::STRING, 0, 1024)

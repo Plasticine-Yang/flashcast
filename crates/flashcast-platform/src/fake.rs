@@ -13,6 +13,7 @@ use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
 use crate::launch::{AppLauncher, LaunchError, LaunchReceipt};
 use crate::launch_request::LaunchRequest;
+use crate::paste::{PasteError, Paster};
 use crate::shortcut::{HotkeyError, HotkeyHandle, HotkeyManager, PressCallback};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -133,6 +134,8 @@ impl AppLauncher for FakeLauncher {
 pub struct FakeFocusTracker {
     active: Mutex<Option<FocusedApp>>,
     error: Mutex<Option<FocusError>>,
+    /// 只让 `restore` 失败（例如「唤起前的应用已退出」），`capture` 仍然可用。
+    restore_error: Mutex<Option<FocusError>>,
     restored: Mutex<Vec<FocusedApp>>,
 }
 
@@ -142,6 +145,7 @@ impl FakeFocusTracker {
         Self {
             active: Mutex::new(Some(app)),
             error: Mutex::new(None),
+            restore_error: Mutex::new(None),
             restored: Mutex::new(Vec::new()),
         }
     }
@@ -153,6 +157,17 @@ impl FakeFocusTracker {
             error: Mutex::new(Some(FocusError::Unsupported {
                 reason: reason.to_string(),
             })),
+            restore_error: Mutex::new(None),
+            restored: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// 模拟「唤起前的应用已退出」：`capture` 正常，`restore` 失败。
+    pub fn restore_fails(error: FocusError) -> Self {
+        Self {
+            active: Mutex::new(None),
+            error: Mutex::new(None),
+            restore_error: Mutex::new(Some(error)),
             restored: Mutex::new(Vec::new()),
         }
     }
@@ -178,7 +193,76 @@ impl FocusTracker for FakeFocusTracker {
         if let Some(error) = lock(&self.error).clone() {
             return Err(error);
         }
+        if let Some(error) = lock(&self.restore_error).clone() {
+            return Err(error);
+        }
         lock(&self.restored).push(app.clone());
+        Ok(())
+    }
+}
+
+/// 记录合成粘贴的替身。
+///
+/// 除了「注入了几次」，它还记录**注入时剪贴板里是什么**：这是验证「不会粘贴过期选择」
+/// 最直接的证据——宿主必须在同一轮执行里先把该条正文写进剪贴板，再注入粘贴。
+#[derive(Default)]
+pub struct FakePaster {
+    pastes: Mutex<usize>,
+    text_at_paste: Mutex<Vec<Option<String>>>,
+    failures: Mutex<Vec<PasteError>>,
+    clipboard: Mutex<Option<Arc<FakeClipboard>>>,
+}
+
+impl FakePaster {
+    /// 总是成功，但不观察剪贴板。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 总是成功，并记录每次注入时的剪贴板内容。
+    pub fn observing(clipboard: Arc<FakeClipboard>) -> Self {
+        Self {
+            pastes: Mutex::new(0),
+            text_at_paste: Mutex::new(Vec::new()),
+            failures: Mutex::new(Vec::new()),
+            clipboard: Mutex::new(Some(clipboard)),
+        }
+    }
+
+    /// 注入失败（按顺序返回，用尽后重复最后一个）。
+    pub fn with_failures(failures: Vec<PasteError>) -> Self {
+        assert!(!failures.is_empty(), "至少需要一次粘贴结果");
+        Self {
+            failures: Mutex::new(failures),
+            ..Self::default()
+        }
+    }
+
+    /// 已注入的次数。
+    pub fn paste_count(&self) -> usize {
+        *lock(&self.pastes)
+    }
+
+    /// 每次注入时剪贴板里的文本（`None` 表示当时剪贴板没有内容）。
+    pub fn text_at_paste(&self) -> Vec<Option<String>> {
+        lock(&self.text_at_paste).clone()
+    }
+}
+
+impl Paster for FakePaster {
+    fn paste(&self) -> Result<(), PasteError> {
+        let failures = lock(&self.failures);
+        if !failures.is_empty() {
+            let index = (*lock(&self.pastes)).min(failures.len() - 1);
+            *lock(&self.pastes) += 1;
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        // 先取到句柄再释放锁，避免与剪贴板替身形成嵌套锁。
+        let clipboard = lock(&self.clipboard).clone();
+        let text = clipboard.and_then(|clipboard| clipboard.last_write());
+        *lock(&self.pastes) += 1;
+        lock(&self.text_at_paste).push(text);
         Ok(())
     }
 }

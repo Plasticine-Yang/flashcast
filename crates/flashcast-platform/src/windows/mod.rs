@@ -34,6 +34,8 @@ pub mod hotkeys;
 #[cfg(target_os = "windows")]
 pub mod launcher;
 #[cfg(target_os = "windows")]
+pub mod paste;
+#[cfg(target_os = "windows")]
 pub mod session;
 
 #[cfg(target_os = "windows")]
@@ -48,3 +50,5 @@ pub use focus::WindowsFocusTracker;
 pub use hotkeys::WindowsHotkeyManager;
 #[cfg(target_os = "windows")]
 pub use launcher::WindowsLauncher;
+#[cfg(target_os = "windows")]
+pub use paste::WindowsPaster;

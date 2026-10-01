@@ -104,9 +104,8 @@ pub fn capabilities_for(
                 .to_string(),
         },
         auto_paste: if environment.accessibility_granted {
-            Support::Unknown {
-                reason: "自动粘贴适配尚未实现（ticket 08 覆盖）；已获得辅助功能权限".to_string(),
-            }
+            // 已授权：CGEvent 可以注入（ticket 08 的 `MacosPaster`）。
+            Support::Supported
         } else {
             Support::Unsupported {
                 reason: format!(
