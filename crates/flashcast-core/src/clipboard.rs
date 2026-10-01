@@ -32,7 +32,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flashcast_platform::clipboard::{ClipboardCapture, ClipboardFormatKind, ClipboardSourceApp};
+use flashcast_platform::clipboard::{
+    ClipboardCapture, ClipboardFormatKind, ClipboardImage, ClipboardSourceApp,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -136,48 +138,120 @@ impl ClipboardFormat {
 /// 返回 `None` 表示这次变化里没有任何本版本能保存的内容（例如只有非文本格式，
 /// 而文本以外的捕获在 tickets 10–12）。**不**返回一个空条目：那会让历史出现
 /// 「点开什么都没有」的条目。
-pub fn event_from_capture(capture: &ClipboardCapture, now_ms: i64) -> Option<ClipboardEvent> {
-    let text = capture.text.clone().filter(|text| !text.is_empty())?;
+///
+/// 图片（ticket 10）在这里映射成 [`ClipboardFormat::Image`] 加一条
+/// [`ClipboardAttachment`]：附件路径落在 `attachments_dir` 下，字节由调用方
+/// （[`ClipboardRuntime`]）在入库成功后写进去——先生成条目再发现写不进去，就会留下
+/// 一条「看起来保存了、其实恢复不了」的历史。
+///
+/// `capture.image_problem`（有图片但无法保存）不在这里处理：它没有可落库的内容，
+/// 由捕获管线转成一次如实的失败。
+pub fn event_from_capture(
+    capture: &ClipboardCapture,
+    now_ms: i64,
+    attachments_dir: &Path,
+) -> Option<ClipboardEvent> {
+    // 空字符串不算文字内容：剪贴板里常常同时有「空文本目标」与图片。
+    let text = capture.text.clone().filter(|text| !text.is_empty());
+    let image = capture.image.as_ref();
+    if text.is_none() && image.is_none() {
+        return None;
+    }
+
     let mut formats: Vec<ClipboardFormat> = Vec::new();
-    for kind in &capture.formats {
-        let format = match kind {
-            ClipboardFormatKind::Text => ClipboardFormat::Text { bytes: text.len() },
-            ClipboardFormatKind::Html => ClipboardFormat::Html { bytes: 0 },
-            ClipboardFormatKind::Rtf => ClipboardFormat::Rtf { bytes: 0 },
-            ClipboardFormatKind::Image => ClipboardFormat::Image {
-                mime: "image/png".to_string(),
-                width: 0,
-                height: 0,
-                bytes: 0,
-            },
-            ClipboardFormatKind::Files => ClipboardFormat::Files {
-                count: 0,
-                names: Vec::new(),
-            },
-        };
+    let mut push = |format: ClipboardFormat| {
         if !formats
             .iter()
             .any(|existing| existing.tag() == format.tag())
         {
             formats.push(format);
         }
+    };
+    if let Some(text) = &text {
+        push(ClipboardFormat::Text { bytes: text.len() });
+    }
+    if let Some(image) = image {
+        push(ClipboardFormat::Image {
+            mime: image.mime.clone(),
+            width: image.width,
+            height: image.height,
+            bytes: image.bytes.len(),
+        });
+    }
+    for kind in &capture.formats {
+        // 文字与图片的元数据以真实内容为准，已经在上面加过。
+        let format = match kind {
+            ClipboardFormatKind::Text | ClipboardFormatKind::Image => continue,
+            ClipboardFormatKind::Html => ClipboardFormat::Html { bytes: 0 },
+            ClipboardFormatKind::Rtf => ClipboardFormat::Rtf { bytes: 0 },
+            ClipboardFormatKind::Files => ClipboardFormat::Files {
+                count: 0,
+                names: Vec::new(),
+            },
+        };
+        push(format);
     }
     if formats.is_empty() {
+        let text = text.as_ref()?;
         formats.push(ClipboardFormat::Text { bytes: text.len() });
     }
+
+    let attachment = image.map(|image| {
+        let id = new_attachment_id();
+        // 附件是本机副本（`depends_on_source = false`）：原来源消失后仍可恢复
+        // （spec「图片及已保存文件副本在原来源消失后仍可恢复」）。
+        ClipboardAttachment {
+            path: attachments_dir.join(format!("{id}.png")),
+            name: attachment_name(image),
+            mime: Some(image.mime.clone()),
+            bytes: image.bytes.len() as u64,
+            depends_on_source: false,
+            created_at_ms: now_ms,
+            kind: AttachmentKind::Image,
+            id,
+        }
+    });
+
+    let content_hash = match (&text, image) {
+        (Some(text), _) => content_hash_text(text),
+        (None, Some(image)) => content_hash_image(&image.bytes),
+        (None, None) => return None,
+    };
+    let summary = match &text {
+        Some(text) => summary_for_text(text),
+        None => summary_for_image(image.expect("上面已经排除了两者都为空")),
+    };
+
     Some(ClipboardEvent {
         id: new_event_id(),
         captured_at_ms: now_ms,
-        content_hash: content_hash_text(&text),
-        summary: summary_for_text(&text),
-        text: Some(text),
+        content_hash,
+        summary,
+        text,
         formats,
-        attachments: Vec::new(),
+        attachments: attachment.into_iter().collect(),
         payloads: Vec::new(),
         source: capture.source.clone(),
         pinned: false,
         copies: 1,
     })
+}
+
+/// 生成一个新的附件标识。
+pub fn new_attachment_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
+    format!("att-{:x}-{counter:x}", now_ms())
+}
+
+/// 附件在历史里的显示名。
+fn attachment_name(image: &ClipboardImage) -> String {
+    if image.width > 0 && image.height > 0 {
+        format!("图片 {}×{}.png", image.width, image.height)
+    } else {
+        "剪贴板图片.png".to_string()
+    }
 }
 
 /// 需要原样保留的载荷（HTML / RTF 等）。
@@ -302,6 +376,18 @@ impl ClipboardEvent {
     pub fn format_labels(&self) -> Vec<&'static str> {
         self.formats.iter().map(ClipboardFormat::label_zh).collect()
     }
+
+    /// 这条历史里的图片附件（ticket 10）。没有图片时返回 `None`。
+    pub fn image_attachment(&self) -> Option<&ClipboardAttachment> {
+        self.attachments
+            .iter()
+            .find(|attachment| attachment.kind == AttachmentKind::Image)
+    }
+
+    /// 图片格式的「类型 + 尺寸」描述（用于结果副标题）。
+    pub fn image_label(&self) -> Option<String> {
+        self.formats.iter().find_map(image_label)
+    }
 }
 
 /// 从结果标识还原事件标识。
@@ -352,6 +438,68 @@ pub fn summary_for_text(text: &str) -> String {
         summary.push('…');
     }
     summary
+}
+
+/// 图片内容的去重键。
+///
+/// 用同一套 FNV-1a 64（理由见 [`content_hash_text`]），但**必须**带 `image:` 前缀：
+/// 文字与图片共用一张表，没有前缀时一段文字与一份图片字节可能算出同一个键，
+/// 跨类型误判成「同一条内容」会让用户复制图片时看到的却是一条旧文字。
+pub fn content_hash_image(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("image:{hash:016x}")
+}
+
+/// 由图片元数据生成可读摘要（结果标题，也是这类条目唯一可检索的文字，spec「不承诺 OCR」）。
+pub fn summary_for_image(image: &ClipboardImage) -> String {
+    let kind = mime_short_label(&image.mime);
+    let size = human_bytes(image.bytes.len() as u64);
+    if image.width > 0 && image.height > 0 {
+        format!("图片 {kind} {}×{}（{size}）", image.width, image.height)
+    } else {
+        format!("图片 {kind}（{size}）")
+    }
+}
+
+/// MIME 的短标签（`image/png` → `PNG`），用于结果副标题与摘要。
+pub fn mime_short_label(mime: &str) -> String {
+    let subtype = mime.rsplit('/').next().unwrap_or(mime);
+    match subtype.to_ascii_lowercase().as_str() {
+        "jpeg" | "jpg" => "JPEG".to_string(),
+        other => other.to_ascii_uppercase(),
+    }
+}
+
+/// 人类可读的字节数（结果副标题用，精确到一位小数）。
+pub fn human_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// 图片格式的「类型 + 尺寸」描述，例如 `PNG 1920×1080`；不是图片时返回 `None`。
+pub fn image_label(format: &ClipboardFormat) -> Option<String> {
+    match format {
+        ClipboardFormat::Image {
+            mime,
+            width,
+            height,
+            ..
+        } => Some(if *width > 0 && *height > 0 {
+            format!("{} {}×{}", mime_short_label(mime), width, height)
+        } else {
+            format!("{} 尺寸未知", mime_short_label(mime))
+        }),
+        _ => None,
+    }
 }
 
 /// 相对时间的可读描述，用于结果副标题。
@@ -787,6 +935,33 @@ impl ClipboardStore {
         })?;
         report.attachments = self.reclaim_attachment_files()?;
         Ok(report)
+    }
+
+    /// 把附件字节写进本机附件目录（ticket 10 的图片）。
+    ///
+    /// 先写临时文件再 `rename`：`rename` 在同一文件系统内是原子的，因此不会出现
+    /// 「数据库里有一条指向半截文件的附件」这种状态。目录不存在时创建。
+    pub fn write_attachment(&self, path: &Path, bytes: &[u8]) -> Result<(), ClipboardStoreError> {
+        let dir = self.attachments_dir();
+        std::fs::create_dir_all(&dir).map_err(|error| {
+            ClipboardStoreError::Unavailable(format!("无法创建附件目录 {}：{error}", dir.display()))
+        })?;
+        let temp = match path.file_name() {
+            Some(name) => dir.join(format!("{}.part", name.to_string_lossy())),
+            None => {
+                return Err(ClipboardStoreError::Unavailable(format!(
+                    "附件路径没有文件名：{}",
+                    path.display()
+                )))
+            }
+        };
+        std::fs::write(&temp, bytes).map_err(|error| {
+            ClipboardStoreError::Unavailable(format!("无法写入附件 {}：{error}", temp.display()))
+        })?;
+        std::fs::rename(&temp, path).map_err(|error| {
+            let _ = std::fs::remove_file(&temp);
+            ClipboardStoreError::Unavailable(format!("无法保存附件 {}：{error}", path.display()))
+        })
     }
 
     /// 删除附件目录里不再被任何附件行引用的文件。
@@ -1615,7 +1790,14 @@ impl ClipboardRuntime {
         if paused {
             return ClipboardCaptureOutcome::Paused;
         }
-        let Some(event) = event_from_capture(&capture, now_ms()) else {
+        // 有图片但无法保存（超大 / 头部损坏 / 格式不支持）：如实报一次失败，绝不生成
+        // 一条「看起来保存成功、实际恢复不了」的历史（spec 用户故事 53）。
+        let attachments_dir = self.store.attachments_dir();
+        let Some(event) = event_from_capture(&capture, now_ms(), &attachments_dir) else {
+            if let Some(problem) = capture.image_problem.clone() {
+                self.record_failure(problem.clone());
+                return ClipboardCaptureOutcome::Failed { message: problem };
+            }
             return ClipboardCaptureOutcome::Uncapturable;
         };
         if self.consume_own_write(&event.content_hash) {
@@ -1625,6 +1807,19 @@ impl ClipboardRuntime {
         }
         match self.store.insert(&event, capacity) {
             Ok(InsertOutcome::Inserted { id }) => {
+                // 图片字节必须真的落盘，而且必须在**入库成功之后**写：写不进去时把刚插入
+                // 的条目删掉并如实报错，而不是留下一条恢复不了的历史。
+                if let (Some(image), Some(attachment)) =
+                    (capture.image.as_ref(), event.image_attachment())
+                {
+                    if let Err(error) = self.store.write_attachment(&attachment.path, &image.bytes)
+                    {
+                        let message = format!("无法保存图片附件：{error}");
+                        let _ = self.store.delete(&event.id);
+                        self.record_failure(message.clone());
+                        return ClipboardCaptureOutcome::Failed { message };
+                    }
+                }
                 let summary = event.summary.clone();
                 self.after_insert(capacity, retention_days);
                 ClipboardCaptureOutcome::Captured { id, summary }

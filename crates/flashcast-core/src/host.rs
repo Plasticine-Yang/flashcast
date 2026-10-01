@@ -1550,8 +1550,24 @@ impl Host {
         // 剪贴板历史：预览按**当前**存储内容返回，列表快照可能是上一次查询的。
         if let Some(event_id) = crate::clipboard::event_id_from_item_id(item_id) {
             if let Ok(Some(event)) = self.clipboard.store().find(event_id) {
+                // 图片（ticket 10）：按需展开完整图片。附件文件已经不在时如实说明，
+                // 而不是给 UI 一个必然加载失败的路径。
+                if let Some(attachment) = event.image_attachment() {
+                    if attachment.path.is_file() {
+                        return Some(Preview::Image {
+                            path: attachment.path.clone(),
+                        });
+                    }
+                    return Some(Preview::Text {
+                        title: Some(event.summary.clone()),
+                        body: format!(
+                            "图片附件已不在本机：{}\n它可能已被手动删除；历史条目本身仍然保留。",
+                            attachment.path.display()
+                        ),
+                    });
+                }
                 return Some(Preview::Text {
-                    title: Some(event.summary),
+                    title: Some(event.summary.clone()),
                     body: event
                         .text
                         .unwrap_or_else(|| "（该条目没有可显示的文字内容）".to_string()),
@@ -2572,6 +2588,19 @@ impl Host {
     /// 决策只依据两件事：平台能力报告（Wayland / 缺权限 / 未覆盖都算不能）与
     /// 唤起时捕获到的目标应用。任何一项不成立都**不**尝试注入。
     pub fn finish_copy_for_paste(&self, label: &str, text: &str) -> ActionOutcome {
+        self.finish_paste_after_copy(label, text.len())
+    }
+
+    /// 与 [`Self::finish_copy_for_paste`] 相同，只是这次写进剪贴板的不是文字
+    /// （ticket 10 的图片就是这种情形）：计划里记的是写入的**载荷字节数**。
+    ///
+    /// 恢复顺序、目标核对与降级路径与文字完全一致——「先写剪贴板，再关窗、恢复目标、
+    /// 核对前台、注入粘贴」是宿主级流程，与内容类型无关。
+    pub fn finish_copy_for_paste_bytes(&self, label: &str, payload_bytes: usize) -> ActionOutcome {
+        self.finish_paste_after_copy(label, payload_bytes)
+    }
+
+    fn finish_paste_after_copy(&self, label: &str, payload_bytes: usize) -> ActionOutcome {
         let capabilities = self.capabilities();
         let target = { lock(&self.paste).target.clone() };
         let Some(target) = target else {
@@ -2594,7 +2623,7 @@ impl Host {
             target,
             label: label.to_string(),
             epoch,
-            text_bytes: text.len(),
+            text_bytes: payload_bytes,
         };
         {
             // 覆盖旧计划：只有最新一次执行会被粘贴。
@@ -2756,18 +2785,43 @@ impl Host {
             }
             Err(error) => return ActionOutcome::failed(error.to_string()),
         };
-        let Some(text) = event.text.clone() else {
-            // 「超出容量、格式不支持或文件失效时看到明确状态」：图片与文件历史的恢复在
-            // tickets 10–12，这里如实说明，而不是假装粘贴成功。
-            return ActionOutcome::failed(format!(
-                "「{}」没有可直接粘贴的文字内容：图片与文件历史的恢复将在后续版本提供",
-                event.summary
-            ));
-        };
-        if let Err(error) = self.write_clipboard_text(&text) {
-            return ActionOutcome::failed(format!("无法复制「{}」：{error}", event.summary));
+        if let Some(text) = event.text.clone().filter(|text| !text.is_empty()) {
+            if let Err(error) = self.write_clipboard_text(&text) {
+                return ActionOutcome::failed(format!("无法复制「{}」：{error}", event.summary));
+            }
+            return self.finish_copy_for_paste(&event.summary, &text);
         }
-        self.finish_copy_for_paste(&event.summary, &text)
+        // 图片（ticket 10）：把本机附件的内容写回剪贴板，再走同一套恢复 + 注入路径。
+        if let Some(attachment) = event.image_attachment() {
+            let bytes = match std::fs::read(&attachment.path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    // 「文件失效时看到明确状态」：附件被删掉之后不能再假装粘得出来。
+                    return ActionOutcome::failed(format!(
+                        "「{}」的图片附件无法读取（{}）：{error}",
+                        event.summary,
+                        attachment.path.display()
+                    ));
+                }
+            };
+            let image = flashcast_platform::clipboard::ClipboardImage::new(
+                attachment
+                    .mime
+                    .clone()
+                    .unwrap_or_else(|| flashcast_platform::clipboard::IMAGE_MIME_PNG.to_string()),
+                bytes,
+            );
+            if let Err(error) = self.deps.clipboard.write_image(&image) {
+                return ActionOutcome::failed(format!("无法复制「{}」：{error}", event.summary));
+            }
+            return self.finish_copy_for_paste_bytes(&event.summary, image.bytes.len());
+        }
+        // 「超出容量、格式不支持或文件失效时看到明确状态」：文件列表历史的恢复在
+        // ticket 12，这里如实说明，而不是假装粘贴成功。
+        ActionOutcome::failed(format!(
+            "「{}」没有可直接粘贴的内容：文件历史的恢复将在后续版本提供",
+            event.summary
+        ))
     }
 
     fn execute_application(&self, item: &SearchItem) -> ActionOutcome {

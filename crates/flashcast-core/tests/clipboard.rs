@@ -817,9 +817,12 @@ fn capture_formats_are_recorded_from_the_platform_layer() {
     let capture = flashcast_platform::clipboard::ClipboardCapture {
         formats: vec![ClipboardFormatKind::Text],
         text: Some("带格式的文本".to_string()),
+        image: None,
+        image_problem: None,
         source: None,
     };
-    let event = flashcast_core::event_from_capture(&capture, 1_700_000_000_000)
+    let attachments = unique_dir("clipboard-formats-attachments");
+    let event = flashcast_core::event_from_capture(&capture, 1_700_000_000_000, &attachments)
         .expect("有文本内容就必须能构造事件");
     assert_eq!(
         event.formats,
