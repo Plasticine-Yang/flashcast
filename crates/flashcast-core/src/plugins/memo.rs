@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::memo::{Memo, MemoBook};
 use crate::model::{DefaultAction, ItemKind, MatchTier, Preview, Score, SearchItem};
 use crate::plugin::{
-    FeaturePlugin, Keyword, PluginError, PluginManifest, PluginScope, SearchContext,
+    strip_keyword, FeaturePlugin, Keyword, PluginError, PluginManifest, PluginScope, SearchContext,
     CAP_CLIPBOARD_WRITE,
 };
 use crate::ranking::score_match;
@@ -138,22 +138,6 @@ impl PluginScope for MemoScope {
         }
         items.truncate(ctx.limit.min(SCOPE_LIMIT));
         Ok(items)
-    }
-}
-
-/// 去掉输入里已经用于进入范围的关键词前缀。
-///
-/// 用户输入「备忘录」后通常会在同一个输入框里继续写查询，因此范围把关键词本身
-/// 视为空查询，并把 `备忘录 回复` 之类的前缀剥掉。
-fn strip_keyword(query: &str, keyword: &str) -> String {
-    let query = query.trim().to_lowercase();
-    let keyword = keyword.trim().to_lowercase();
-    if query == keyword {
-        return String::new();
-    }
-    match query.strip_prefix(&keyword) {
-        Some(rest) => rest.trim().to_string(),
-        None => query,
     }
 }
 

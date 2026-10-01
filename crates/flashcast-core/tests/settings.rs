@@ -28,12 +28,20 @@ fn settings_round_trip_json_and_toml() {
         quick_access_limit: 8,
         plugin_timeout_ms: 250,
         disabled_plugins: vec!["memo".to_string()],
+        // 剪贴板历史的记录范围同为可迁移偏好：暂停、保留期限与容量。
+        clipboard: flashcast_core::ClipboardSettings {
+            paused: true,
+            retention_days: 7,
+            capacity: 42,
+        },
     };
 
-    let from_json = Settings::from_json(&settings.to_json().expect("序列化 JSON")).expect("反序列化");
+    let from_json =
+        Settings::from_json(&settings.to_json().expect("序列化 JSON")).expect("反序列化");
     assert_eq!(from_json, settings);
 
-    let from_toml = Settings::from_toml(&settings.to_toml().expect("序列化 TOML")).expect("反序列化");
+    let from_toml =
+        Settings::from_toml(&settings.to_toml().expect("序列化 TOML")).expect("反序列化");
     assert_eq!(from_toml, settings);
 }
 
@@ -73,7 +81,9 @@ fn invalid_settings_are_rejected_and_previous_state_is_kept() {
         launch_at_startup: true,
         ..before.clone()
     };
-    let applied = host.update_settings(valid.clone()).expect("有效设置应被接受");
+    let applied = host
+        .update_settings(valid.clone())
+        .expect("有效设置应被接受");
     assert_eq!(applied, valid);
     assert_eq!(host.settings().hotkey, "Super+Space");
     assert!(host.settings().launch_at_startup);

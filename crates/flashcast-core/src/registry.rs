@@ -43,8 +43,12 @@ impl PluginRegistry {
     }
 
     /// 注册插件。重复 id 会被忽略（保留先注册的那个）。
+    ///
+    /// 初始启用状态来自 [`FeaturePlugin::default_enabled`]：剪贴板历史据此默认关闭，
+    /// 只有用户显式启用后才开始后台捕获。
     pub fn register(&self, plugin: Arc<dyn FeaturePlugin>) {
         let manifest = plugin.manifest();
+        let default_enabled = plugin.default_enabled();
         let mut plugins = lock(&self.plugins);
         if plugins.iter().any(|p| p.manifest.id == manifest.id) {
             return;
@@ -55,7 +59,7 @@ impl PluginRegistry {
         plugins.push(RegisteredPlugin {
             plugin,
             manifest,
-            enabled: true,
+            enabled: default_enabled,
         });
     }
 

@@ -16,7 +16,7 @@ use flashcast_platform::catalog::{AppCatalog, AppEntry};
 use flashcast_platform::chrome::{
     build_open_args, validate_open_url, ChromeLaunchRequest, ChromeProvider,
 };
-use flashcast_platform::clipboard::ClipboardAccess;
+use flashcast_platform::clipboard::{ClipboardAccess, ClipboardWatcher};
 use flashcast_platform::focus::{same_app, FocusTracker, FocusedApp};
 use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
@@ -25,6 +25,9 @@ use flashcast_platform::paste::{manual_paste_message, Paster};
 use crate::chrome::{
     BookmarkEntry, BookmarkIndex, ChromeAssociation, ChromeBookmarkError, ChromeProfileView,
     ChromeState, KEY_CHROME_ASSOCIATION,
+};
+use crate::clipboard::{
+    ClipboardActionError, ClipboardCaptureOutcome, ClipboardState, ClipboardStore, CLIPBOARD_DIR,
 };
 use crate::clone::{self, CloneControl, CloneOutcome, CloneProgress, CredentialProvider};
 use crate::device::{CredentialStore, DeviceStore, StoredToken};
@@ -36,7 +39,9 @@ use crate::model::{
     PluginFailure, Preview, QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES,
     COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
-use crate::plugin::{PluginKind, PluginScope, SearchContext, CAP_CLIPBOARD_WRITE};
+use crate::plugin::{
+    PluginKind, PluginScope, SearchContext, CAP_CLIPBOARD_READ, CAP_CLIPBOARD_WRITE,
+};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
 use crate::registry::PluginRegistry;
 use crate::settings::{Settings, SettingsError};
@@ -61,6 +66,9 @@ pub struct HostDeps {
     /// 剪贴板（ADR §5）。只有宿主在命令入口里经权限校验后调用它；
     /// 功能插件拿不到这个句柄。
     pub clipboard: Arc<dyn ClipboardAccess>,
+    /// 剪贴板变化监听（ADR §5，ticket 09）。宿主在插件启用且声明了
+    /// `clipboard.read` 时才会轮询它；功能插件拿不到这个句柄。
+    pub clipboard_watcher: Arc<dyn ClipboardWatcher>,
     /// Chrome 发现与启动（ADR §5 的 `ChromeProvider`）。只有宿主在命令入口里经权限
     /// 校验后调用它；功能插件拿不到这个句柄。
     pub chrome: Arc<dyn ChromeProvider>,
@@ -170,6 +178,11 @@ pub struct Host {
     memos: Arc<MemoBook>,
     /// Chrome 书签索引：可随时从 `Bookmarks` 文件重建（文件是唯一事实来源）。
     bookmarks: Arc<BookmarkIndex>,
+    /// 剪贴板历史的本机存储与后台捕获运行时（ticket 09）。
+    ///
+    /// 单独持有、不放进 `inner`：轮询剪贴板与写 SQLite 都是慢操作，
+    /// 绝不能在持有宿主的全局锁时做。
+    clipboard: Arc<crate::clipboard::ClipboardRuntime>,
     /// 设备本地存储：位于应用数据目录，与配置工作区分离。
     device: DeviceStore,
     /// 设备本地的 Git 凭证（https 令牌）；与工作区严格分离。
@@ -216,6 +229,13 @@ fn auto_paste_blocker(capabilities: &Capabilities) -> Option<String> {
 
 /// [`Host::wait_for_workspace_change`] 的轮询间隔。
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// 剪贴板后台捕获的轮询间隔。
+///
+/// 剪贴板库没有变化事件（research `app-discovery-and-focus.md`），只能轮询。500ms 是
+/// 「用户复制后切回 Flashcast 就会看到」与「不空耗 CPU」之间的折中；每次轮询在 Linux
+/// 上会起一个 `wl-paste` / `xclip` 进程，不能再密。
+const CLIPBOARD_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// 查询方式：用户输入会改变输入状态，快照类操作不会。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,6 +287,12 @@ impl Host {
                 reloads: 0,
             }),
             seq: AtomicU64::new(0),
+            // 先克隆监听句柄（`deps` 随后被移动进结构体）。
+            clipboard: Arc::new(crate::clipboard::ClipboardRuntime::new(
+                Arc::new(ClipboardStore::open(deps.device_dir.join(CLIPBOARD_DIR))),
+                Arc::clone(&deps.clipboard_watcher),
+                CLIPBOARD_POLL_INTERVAL,
+            )),
             deps,
             memos: Arc::new(MemoBook::new()),
             bookmarks: Arc::new(BookmarkIndex::new()),
@@ -311,12 +337,16 @@ impl Host {
     pub fn update_settings(&self, settings: Settings) -> Result<Settings, SettingsError> {
         settings.validate()?;
         let applied_hash = self.persist_settings(&settings)?;
-        let mut inner = lock(&self.inner);
-        inner.settings = settings.clone();
-        // 应用写入也是一次「已应用内容」的变化：设置与哈希在同一把锁内更新。
-        if let Some(hash) = applied_hash {
-            inner.applied_settings_hash = Some(hash);
+        {
+            let mut inner = lock(&self.inner);
+            inner.settings = settings.clone();
+            // 应用写入也是一次「已应用内容」的变化：设置与哈希在同一把锁内更新。
+            if let Some(hash) = applied_hash {
+                inner.applied_settings_hash = Some(hash);
+            }
         }
+        // 剪贴板的暂停 / 保留期限 / 容量改动立刻作用到后台捕获。
+        self.sync_clipboard_runtime();
         Ok(settings)
     }
 
@@ -944,6 +974,9 @@ impl Host {
         // 外部修改的插件启停也要真正生效。清单是唯一权威，因此这里无条件按清单
         // 重放一次启停（幂等；避免上一次请求留下的注册表状态覆盖刚读到的清单）。
         self.apply_manifest_plugin_state();
+        // 外部改了剪贴板设置（暂停 / 保留期限 / 容量）或插件启停时同样立刻生效：
+        // 后台捕获线程与记录范围都跟着更新。
+        self.sync_clipboard_runtime();
         if applied {
             self.record_outcome(changed, "applied");
         } else if messages.is_empty() {
@@ -1201,6 +1234,8 @@ impl Host {
         if let Err(error) = self.device.set_workspace_path(Some(workspace.root())) {
             lock(&self.inner).workspace_error = Some(error.to_string());
         }
+        // 新工作区里的插件启停与剪贴板设置随即生效（后台捕获也跟着启停）。
+        self.sync_clipboard_runtime();
         Ok(self.workspace_status())
     }
 
@@ -1226,7 +1261,12 @@ impl Host {
     /// 再把清单里的启停应用到注册表。`Host::new` **不**自动调用它，因为清单的补全
     /// 会改变「只有默认主题」时的清单内容；外壳与需要真实插件的调用方显式调用。
     pub fn install_official_plugins(&self) {
-        crate::plugins::register_official(&self.deps.plugins, &self.memos, &self.bookmarks);
+        crate::plugins::register_official(
+            &self.deps.plugins,
+            &self.memos,
+            &self.bookmarks,
+            self.clipboard.store(),
+        );
         let merged = {
             let inner = lock(&self.inner);
             let (merged, _) = inner
@@ -1237,6 +1277,8 @@ impl Host {
         };
         lock(&self.inner).manifest = merged;
         self.apply_manifest_plugin_state();
+        // 剪贴板历史默认关闭：只有清单里明确启用后，后台捕获线程才会启动。
+        self.sync_clipboard_runtime();
     }
 
     /// 一次性迁移 ticket 01/05 的历史字段 `disabledPlugins`。
@@ -1505,6 +1547,17 @@ impl Host {
                 });
             }
         }
+        // 剪贴板历史：预览按**当前**存储内容返回，列表快照可能是上一次查询的。
+        if let Some(event_id) = crate::clipboard::event_id_from_item_id(item_id) {
+            if let Ok(Some(event)) = self.clipboard.store().find(event_id) {
+                return Some(Preview::Text {
+                    title: Some(event.summary),
+                    body: event
+                        .text
+                        .unwrap_or_else(|| "（该条目没有可显示的文字内容）".to_string()),
+                });
+            }
+        }
         self.item_by_id(item_id).map(|item| item.preview)
     }
 
@@ -1554,6 +1607,198 @@ impl Host {
         true
     }
 
+    // -----------------------------------------------------------------------
+    // 剪贴板历史（ticket 09）
+    // -----------------------------------------------------------------------
+
+    /// 剪贴板历史插件是否存在于清单中且处于启用状态。
+    ///
+    /// 停用插件后既不贡献结果也不做后台捕获：这一条同时是搜索与捕获的判据。
+    pub fn clipboard_plugin_enabled(&self) -> bool {
+        lock(&self.inner)
+            .manifest
+            .get(crate::plugins::CLIPBOARD_PLUGIN_ID)
+            .map(|entry| entry.kind == PluginKind::Feature && entry.enabled)
+            .unwrap_or(false)
+            && self
+                .deps
+                .plugins
+                .is_enabled(crate::plugins::CLIPBOARD_PLUGIN_ID)
+    }
+
+    /// 读取剪贴板是否已获授权。
+    ///
+    /// 原生边界上的权限校验（ADR §6）：编译进来的插件实现与清单里的记录都必须声明
+    /// `clipboard.read`。手写清单删掉这条能力后捕获会停止，而不是继续默默读取剪贴板。
+    fn clipboard_read_authorized(&self) -> bool {
+        let compiled = self
+            .deps
+            .plugins
+            .manifests()
+            .into_iter()
+            .find(|(manifest, _)| manifest.id == crate::plugins::CLIPBOARD_PLUGIN_ID)
+            .map(|(manifest, _)| manifest);
+        let Some(compiled) = compiled else {
+            return false;
+        };
+        if !compiled.requires(CAP_CLIPBOARD_READ) {
+            return false;
+        }
+        lock(&self.inner)
+            .manifest
+            .get(crate::plugins::CLIPBOARD_PLUGIN_ID)
+            .map(|entry| entry.to_feature_manifest().requires(CAP_CLIPBOARD_READ))
+            .unwrap_or(false)
+    }
+
+    /// 把设置里的记录范围同步给运行时，并按插件启用状态启停后台捕获。
+    ///
+    /// 停用插件会**停止后台线程**，而不只是让它空转（spec「停用插件同时停止搜索贡献
+    /// 和后台活动」）。本方法幂等，可以在任何配置变化后安全重放。
+    pub fn sync_clipboard_runtime(&self) {
+        let (paused, retention_days, capacity) = {
+            let inner = lock(&self.inner);
+            let clipboard = &inner.settings.clipboard;
+            (
+                clipboard.paused,
+                clipboard.retention_days,
+                clipboard.capacity,
+            )
+        };
+        self.clipboard.configure(paused, retention_days, capacity);
+        if self.clipboard_plugin_enabled() && self.clipboard_read_authorized() {
+            self.clipboard.start();
+        } else {
+            self.clipboard.stop();
+        }
+    }
+
+    /// 后台捕获线程是否正在运行。
+    pub fn clipboard_capture_active(&self) -> bool {
+        self.clipboard.is_running()
+    }
+
+    /// 显式开始后台捕获（插件未启用时不会启动）。外壳启动时调用。
+    pub fn start_clipboard_capture(&self) {
+        self.sync_clipboard_runtime();
+    }
+
+    /// 显式停止后台捕获（不改变插件启用状态）。
+    ///
+    /// 测试用它取得确定性：停止线程后再手动调用 [`Host::capture_clipboard_once`]，
+    /// 结果就完全由测试驱动。
+    pub fn stop_clipboard_capture(&self) {
+        self.clipboard.stop();
+    }
+
+    /// 同步地捕获一次剪贴板。
+    ///
+    /// 这是后台轮询线程与集成测试共用的**唯一**捕获入口：
+    ///
+    /// 1. 插件未启用 → [`ClipboardCaptureOutcome::Disabled`]，且**不读取**剪贴板；
+    /// 2. 未声明 `clipboard.read` → 如实失败；
+    /// 3. 其余交给运行时：暂停、去重、自身写入抑制、容量与回收都在那里。
+    pub fn capture_clipboard_once(&self) -> ClipboardCaptureOutcome {
+        if !self.clipboard_plugin_enabled() {
+            return ClipboardCaptureOutcome::Disabled;
+        }
+        if !self.clipboard_read_authorized() {
+            return ClipboardCaptureOutcome::Failed {
+                message: "剪贴板插件没有声明 clipboard.read 能力，宿主不会读取剪贴板".to_string(),
+            };
+        }
+        self.clipboard.capture_once()
+    }
+
+    /// 剪贴板历史的完整状态（面向 UI 与诊断）。
+    ///
+    /// 只读入口，不会启动后台线程；配置变化由
+    /// [`Host::sync_clipboard_runtime`] 的各个调用点负责同步。
+    pub fn clipboard_state(&self) -> ClipboardState {
+        let store = self.clipboard.store();
+        let stats = store.stats().unwrap_or_default();
+        let snapshot = self.clipboard.snapshot();
+        let settings = lock(&self.inner).settings.clipboard.clone();
+        let storage_error = store.storage_error();
+        ClipboardState {
+            enabled: self.clipboard_plugin_enabled(),
+            paused: settings.paused,
+            capture_active: self.clipboard.is_running(),
+            storage_ok: storage_error.is_none(),
+            last_error: snapshot
+                .last_error
+                .clone()
+                .or_else(|| storage_error.clone()),
+            storage_error,
+            storage_path: store.db_path(),
+            entries: stats.total,
+            pinned: stats.pinned,
+            attachments: stats.attachments,
+            capacity: settings.capacity,
+            retention_days: settings.retention_days,
+            capacity_reached: snapshot.capacity_reached,
+            last_capture_ms: snapshot.last_capture_ms,
+            suppressed: snapshot.suppressed,
+        }
+    }
+
+    /// 当前历史里的条目（置顶在前，然后按时间倒序）。`query` 为空时列出全部。
+    pub fn clipboard_entries(&self, query: Option<&str>) -> Vec<crate::clipboard::ClipboardEvent> {
+        self.clipboard.store().list(query, 200).unwrap_or_default()
+    }
+
+    /// 置顶 / 取消置顶一条历史。找不到时返回中文原因。
+    pub fn pin_clipboard_entry(&self, id: &str, pinned: bool) -> Result<(), ClipboardActionError> {
+        match self.clipboard.store().set_pinned(id, pinned) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(ClipboardActionError::NotFound(id.to_string())),
+            Err(error) => Err(ClipboardActionError::Storage(error.to_string())),
+        }
+    }
+
+    /// 删除一条历史（同时回收不再被引用的附件）。
+    pub fn delete_clipboard_entry(&self, id: &str) -> Result<(), ClipboardActionError> {
+        match self.clipboard.store().delete(id) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(ClipboardActionError::NotFound(id.to_string())),
+            Err(error) => Err(ClipboardActionError::Storage(error.to_string())),
+        }
+    }
+
+    /// 清空历史（用户在设置里的显式操作，置顶条目也会被清掉）。
+    pub fn clear_clipboard_history(&self) -> Result<usize, ClipboardActionError> {
+        self.clipboard
+            .store()
+            .clear()
+            .map_err(|error| ClipboardActionError::Storage(error.to_string()))
+    }
+
+    /// 暂停 / 恢复记录。设置会随其它偏好写进配置工作区。
+    pub fn set_clipboard_paused(&self, paused: bool) -> Result<Settings, SettingsError> {
+        let mut settings = self.settings();
+        settings.clipboard.paused = paused;
+        self.update_settings(settings)
+    }
+
+    /// 设置保留期限与容量，并立即按新范围回收一次。
+    pub fn set_clipboard_limits(
+        &self,
+        retention_days: u32,
+        capacity: usize,
+    ) -> Result<Settings, SettingsError> {
+        let mut settings = self.settings();
+        settings.clipboard.retention_days = retention_days;
+        settings.clipboard.capacity = capacity;
+        let applied = self.update_settings(settings)?;
+        let now = crate::clipboard::now_ms();
+        // 立即回收：用户把容量改小之后不该等到下一次复制才生效。
+        let _ = self.clipboard.store().reclaim(
+            applied.clipboard.retention_days,
+            applied.clipboard.capacity,
+            now,
+        );
+        Ok(applied)
+    }
     // -----------------------------------------------------------------------
     // Chrome 书签（ticket 13）
     // -----------------------------------------------------------------------
@@ -2005,6 +2250,8 @@ impl Host {
             lock(&self.inner).theme_error = Some(notice);
         }
         if feature_changed {
+            // 启停也可能改变后台活动：启用剪贴板历史即开始捕获，停用即停止线程。
+            self.sync_clipboard_runtime();
             // 启停改变了「哪些来源参与搜索」，按当前输入重算，让界面立刻反映新状态。
             let input = lock(&self.inner).input.clone();
             let seq = self.next_seq();
@@ -2265,10 +2512,8 @@ impl Host {
             ItemKind::Application => self.execute_application(item),
             ItemKind::Command => self.execute_command(item),
             ItemKind::Memo => self.execute_memo(item),
+            ItemKind::ClipboardEntry => self.execute_clipboard_entry(item),
             ItemKind::Bookmark => self.execute_bookmark(item),
-            other => ActionOutcome::failed(format!(
-                "当前版本尚不支持执行这类条目（{other:?}），相关功能将在后续版本提供"
-            )),
         }
     }
 
@@ -2448,10 +2693,72 @@ impl Host {
             ));
         };
         let (label, text) = (memo.title.clone(), memo.body.clone());
-        if let Err(error) = self.deps.clipboard.write_text(&text) {
+        if let Err(error) = self.write_clipboard_text(&text) {
             return ActionOutcome::failed(format!("无法复制「{label}」：{error}"));
         }
         self.finish_copy_for_paste(&label, &text)
+    }
+
+    /// 把内容写进系统剪贴板，并登记「这是 Flashcast 自己的写入」。
+    ///
+    /// 所有宿主写剪贴板的路径都必须经过这里：没有登记的写入会被自己的后台捕获重新收成
+    /// 一条新历史，而「粘贴历史条目 → 又被捕获 → 再粘贴」正是 spec 明确禁止的循环。
+    fn write_clipboard_text(&self, text: &str) -> Result<(), flashcast_platform::ClipboardError> {
+        self.deps.clipboard.write_text(text)?;
+        self.clipboard.note_own_write(text);
+        Ok(())
+    }
+
+    /// 剪贴板历史条目的默认操作：把**当前**内容写进剪贴板，然后尽力粘贴回唤起前的应用。
+    ///
+    /// 权限校验放在**原生边界**：来源插件必须在清单里、已启用，并且声明了
+    /// `clipboard.write`；随后才调用平台剪贴板适配层。恢复与复制回退全部复用
+    /// ticket 08 的 [`Host::finish_copy_for_paste`]。
+    fn execute_clipboard_entry(&self, item: &SearchItem) -> ActionOutcome {
+        let Some(event_id) = crate::clipboard::event_id_from_item_id(&item.id) else {
+            return ActionOutcome::failed(format!("无法识别的剪贴板条目：{}", item.id));
+        };
+        let entry = lock(&self.inner).manifest.get(&item.source).cloned();
+        let Some(entry) = entry.filter(|entry| entry.kind == PluginKind::Feature) else {
+            return ActionOutcome::failed(format!(
+                "结果来源「{}」不在插件清单里，已拒绝执行",
+                item.source
+            ));
+        };
+        if !entry.enabled || !self.deps.plugins.is_enabled(&item.source) {
+            return ActionOutcome::failed(format!("插件「{}」已停用，已拒绝执行", entry.name));
+        }
+        if !entry.to_feature_manifest().requires(CAP_CLIPBOARD_WRITE) {
+            return ActionOutcome::failed(format!(
+                "插件「{}」没有声明 {} 能力，宿主不会替它写入剪贴板",
+                entry.name, CAP_CLIPBOARD_WRITE
+            ));
+        }
+        if let Support::Unsupported { reason } = self.capabilities().clipboard {
+            return ActionOutcome::failed(format!("系统剪贴板不可用：{reason}"));
+        }
+        let event = match self.clipboard.store().find(event_id) {
+            Ok(Some(event)) => event,
+            Ok(None) => {
+                return ActionOutcome::failed(format!(
+                    "找不到「{}」对应的剪贴板历史，可能已被删除或过期回收，请重新查询",
+                    item.title
+                ))
+            }
+            Err(error) => return ActionOutcome::failed(error.to_string()),
+        };
+        let Some(text) = event.text.clone() else {
+            // 「超出容量、格式不支持或文件失效时看到明确状态」：图片与文件历史的恢复在
+            // tickets 10–12，这里如实说明，而不是假装粘贴成功。
+            return ActionOutcome::failed(format!(
+                "「{}」没有可直接粘贴的文字内容：图片与文件历史的恢复将在后续版本提供",
+                event.summary
+            ));
+        };
+        if let Err(error) = self.write_clipboard_text(&text) {
+            return ActionOutcome::failed(format!("无法复制「{}」：{error}", event.summary));
+        }
+        self.finish_copy_for_paste(&event.summary, &text)
     }
 
     fn execute_application(&self, item: &SearchItem) -> ActionOutcome {

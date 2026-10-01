@@ -61,13 +61,16 @@ pub use model::{
     SearchItem, SourceId, COMMAND_CAPABILITIES, COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
 pub use plugin::{
-    is_valid_plugin_id, FeaturePlugin, Keyword, PluginError, PluginKind, PluginManifest,
-    PluginScope, SearchContext, CAP_CLIPBOARD_WRITE,
+    is_valid_plugin_id, strip_keyword, FeaturePlugin, Keyword, PluginError, PluginKind,
+    PluginManifest, PluginScope, SearchContext, CAP_CLIPBOARD_READ, CAP_CLIPBOARD_WRITE,
 };
-pub use plugins::{MemoPlugin, MEMO_PLUGIN_ID};
+pub use plugins::{
+    ClipboardPlugin, MemoPlugin, CLIPBOARD_KEYWORD_ALT_ZH, CLIPBOARD_KEYWORD_EN,
+    CLIPBOARD_KEYWORD_ZH, MEMO_PLUGIN_ID,
+};
 pub use ranking::{score_match, sort_ranked, RankedItem};
 pub use registry::{PluginRegistry, PluginSearchOutcome};
-pub use settings::{Settings, SettingsError};
+pub use settings::{ClipboardSettings, Settings, SettingsError};
 pub use sync::{
     DirtyDetail, PullOutcome, PullReport, PullResult, PushOutcome, PushReport, PushUpdateView,
     SyncBlock, SyncBlockKind, SyncControl, SyncError, SyncPhase, SyncProgress, SyncStatus,

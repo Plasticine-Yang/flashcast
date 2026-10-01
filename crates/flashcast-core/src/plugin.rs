@@ -13,6 +13,29 @@ use crate::model::{QueryScope, SearchItem};
 /// 校验声明，未声明的插件拿不到原生能力（ADR §6）。
 pub const CAP_CLIPBOARD_WRITE: &str = "clipboard.write";
 
+/// 能力标识：读取系统剪贴板内容（剪贴板历史的捕获依据）。
+///
+/// 后台捕获对隐私敏感，因此宿主只在来源插件**声明并启用**时才启动轮询；
+/// 「启用插件」与「授权读取剪贴板」是同一件事的两面（spec「剪贴板在用户启用后后台监听」）。
+pub const CAP_CLIPBOARD_READ: &str = "clipboard.read";
+
+/// 去掉输入里已经用于进入范围的关键词前缀。
+///
+/// 用户输入「备忘录」后通常会在同一个输入框里继续写查询，因此范围把关键词本身
+/// 视为空查询，并把 `备忘录 回复` 之类的前缀剥掉。多个插件共用同一套判断，
+/// 避免各自的实现出现细微差异。
+pub fn strip_keyword(query: &str, keyword: &str) -> String {
+    let query = query.trim().to_lowercase();
+    let keyword = keyword.trim().to_lowercase();
+    if query == keyword {
+        return String::new();
+    }
+    match query.strip_prefix(&keyword) {
+        Some(rest) => rest.trim().to_string(),
+        None => query,
+    }
+}
+
 /// 插件种类。v0.1.0 的功能插件使用 `Feature`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,6 +184,15 @@ pub trait PluginScope: Send + Sync {
 /// 功能插件。
 pub trait FeaturePlugin: Send + Sync {
     fn manifest(&self) -> PluginManifest;
+
+    /// 首次写入插件清单时的默认启用状态。
+    ///
+    /// 默认启用。剪贴板历史把它改成 `false`：后台捕获用户复制的内容是隐私敏感行为，
+    /// 必须由用户显式启用（spec「剪贴板在用户启用后后台监听」）。它的取值只在清单里
+    /// **还没有**这条记录时生效；此后清单是唯一权威。
+    fn default_enabled(&self) -> bool {
+        true
+    }
 
     /// 是否参与首屏搜索。
     fn contributes_to_home(&self) -> bool;

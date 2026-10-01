@@ -893,8 +893,8 @@ fn official_host_with_chrome_with_registry(
 ) -> (Host, Arc<FakeChrome>, PathBuf) {
     use flashcast_core::HostDeps;
     use flashcast_platform::fake::{
-        FakeAppCatalog, FakeCapabilityProbe, FakeClipboard, FakeFocusTracker, FakeLauncher,
-        FakePaster,
+        FakeAppCatalog, FakeCapabilityProbe, FakeClipboard, FakeClipboardWatcher, FakeFocusTracker,
+        FakeLauncher, FakePaster,
     };
 
     let device_dir = unique_dir("device");
@@ -903,6 +903,7 @@ fn official_host_with_chrome_with_registry(
         launcher: Arc::new(FakeLauncher::always_succeeds()),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
+        clipboard_watcher: Arc::new(FakeClipboardWatcher::new()),
         chrome: Arc::clone(&chrome) as Arc<dyn ChromeProvider>,
         focus: Arc::new(FakeFocusTracker::default()),
         paster: Arc::new(FakePaster::new()),

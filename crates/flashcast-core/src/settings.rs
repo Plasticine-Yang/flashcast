@@ -36,6 +36,40 @@ pub struct Settings {
     pub plugin_timeout_ms: u64,
     /// 历史字段：旧工作区记录的停用插件。见类型文档。
     pub disabled_plugins: Vec<String>,
+    /// 剪贴板历史的记录范围（暂停、保留期限、容量）。见 [`ClipboardSettings`]。
+    pub clipboard: ClipboardSettings,
+}
+
+/// 剪贴板历史的用户控制项。
+///
+/// 这些都是**可迁移的偏好**，因此与其它设置一起写在工作区的 `settings.toml` 里；
+/// 历史内容与附件是本机数据，绝不进入工作区（ADR §8、spec 用户故事 30）。
+///
+/// ```toml
+/// [clipboard]
+/// paused = false
+/// retentionDays = 30
+/// capacity = 500
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct ClipboardSettings {
+    /// 暂停记录：暂停期间复制的内容不会被保存（轮询仍然推进，恢复后不会补记旧内容）。
+    pub paused: bool,
+    /// 保留期限（天）。超过期限的非置顶条目会被回收。
+    pub retention_days: u32,
+    /// 容量上限（条目数，含置顶条目）。超出时先回收最旧的未置顶条目。
+    pub capacity: usize,
+}
+
+impl Default for ClipboardSettings {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            retention_days: 30,
+            capacity: 500,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -47,6 +81,7 @@ impl Default for Settings {
             quick_access_limit: 6,
             plugin_timeout_ms: 400,
             disabled_plugins: Vec::new(),
+            clipboard: ClipboardSettings::default(),
         }
     }
 }
@@ -59,6 +94,10 @@ pub enum SettingsError {
     InvalidQuickAccessLimit(usize),
     #[error("插件超时必须在 10 到 5000 毫秒之间，当前为 {0}")]
     InvalidPluginTimeout(u64),
+    #[error("剪贴板保留期限必须在 1 到 3650 天之间，当前为 {0}")]
+    InvalidClipboardRetention(u32),
+    #[error("剪贴板容量必须在 1 到 100000 条之间，当前为 {0}")]
+    InvalidClipboardCapacity(usize),
     #[error("设置序列化失败：{0}")]
     Serialize(String),
     #[error("设置无法写入配置工作区：{0}")]
@@ -77,6 +116,16 @@ impl Settings {
         }
         if !(10..=5000).contains(&self.plugin_timeout_ms) {
             return Err(SettingsError::InvalidPluginTimeout(self.plugin_timeout_ms));
+        }
+        if !(1..=3650).contains(&self.clipboard.retention_days) {
+            return Err(SettingsError::InvalidClipboardRetention(
+                self.clipboard.retention_days,
+            ));
+        }
+        if !(1..=100_000).contains(&self.clipboard.capacity) {
+            return Err(SettingsError::InvalidClipboardCapacity(
+                self.clipboard.capacity,
+            ));
         }
         Ok(())
     }

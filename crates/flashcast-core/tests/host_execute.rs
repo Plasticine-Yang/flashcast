@@ -10,8 +10,8 @@ use flashcast_core::{
 };
 use flashcast_platform::catalog::{AppEntry, AppSource};
 use flashcast_platform::fake::{
-    FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeFocusTracker, FakeLauncher,
-    FakePaster,
+    FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeClipboardWatcher,
+    FakeFocusTracker, FakeLauncher, FakePaster,
 };
 use flashcast_platform::launch::LaunchError;
 use support::{app, fast_settings, host_with};
@@ -108,6 +108,7 @@ fn launch_failure_produces_chinese_feedback() {
         })),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
+        clipboard_watcher: Arc::new(FakeClipboardWatcher::new()),
         chrome: Arc::new(FakeChrome::not_installed("测试环境未配置 Chrome")),
         focus: Arc::new(FakeFocusTracker::default()),
         paster: Arc::new(FakePaster::new()),
@@ -159,14 +160,15 @@ fn execute_stale_application_item_reports_failure() {
     assert!(message.contains("重新扫描"), "应给出可操作建议：{message}");
 }
 
-/// 尚不支持的条目种类给出明确反馈，而不是静默失败。
+/// 来源插件不在清单里时，执行必须给出明确的中文反馈，而不是静默失败。
 ///
-/// ticket 07 起备忘录已经可以执行（复制），因此这里改用仍未实现的剪贴板历史条目：
-/// 断言的是「未知种类不会静默失败」这条行为，而不是某一个具体种类。
+/// ticket 07 起备忘录可以执行、ticket 09 起剪贴板历史也可以执行，因此这里用「剪贴板
+/// 条目但没有安装对应插件」这个真实场景：断言的是「未授权的来源一律拒绝并说明原因」
+/// 这条行为，而不是某一个具体种类。
 #[test]
-fn execute_unsupported_item_kind_reports_failure() {
+fn execute_clipboard_entry_without_installed_plugin_reports_failure() {
     let (host, _launcher) = host_with(vec![app("a", "Alpha")], fast_settings());
-    let memo = SearchItem {
+    let clipboard = SearchItem {
         id: "clipboard:1".to_string(),
         title: "剪贴板条目".to_string(),
         subtitle: None,
@@ -178,10 +180,16 @@ fn execute_unsupported_item_kind_reports_failure() {
         score: Score::unordered(),
     };
 
-    let outcome = host.execute(&memo);
+    let outcome = host.execute(&clipboard);
 
     assert_eq!(outcome.status, ActionStatus::Failed);
-    assert!(outcome.message.expect("应有反馈").contains("后续版本"));
+    assert!(
+        outcome
+            .message
+            .expect("应有反馈")
+            .contains("不在插件清单里"),
+        "必须说明来源插件不存在，而不是静默失败"
+    );
 }
 
 /// 空查询中的「重新扫描软件」快速访问项可以执行，并给出反馈。

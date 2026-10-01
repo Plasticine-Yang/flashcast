@@ -29,7 +29,8 @@
 //! （保留期限、容量、暂停开关，见 [`crate::settings`]）。
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use flashcast_platform::clipboard::{ClipboardCapture, ClipboardFormatKind, ClipboardSourceApp};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -351,6 +352,32 @@ pub fn summary_for_text(text: &str) -> String {
         summary.push('…');
     }
     summary
+}
+
+/// 相对时间的可读描述，用于结果副标题。
+///
+/// 只精确到天：历史条目的价值在内容而不是秒级时间，跨越一周以上也不必为此引入
+/// 日期格式化依赖（这里只做减法）。
+pub fn describe_age(captured_at_ms: i64, now: i64) -> String {
+    let delta = now.saturating_sub(captured_at_ms);
+    if delta < 60_000 {
+        "刚刚".to_string()
+    } else if delta < 3_600_000 {
+        format!("{} 分钟前", delta / 60_000)
+    } else if delta < 86_400_000 {
+        format!("{} 小时前", delta / 3_600_000)
+    } else {
+        format!("{} 天前", delta / 86_400_000)
+    }
+}
+
+/// 剪贴板历史**管理操作**（置顶、删除、清空）的失败原因，面向用户的中文。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ClipboardActionError {
+    #[error("找不到这条剪贴板历史：{0}")]
+    NotFound(String),
+    #[error("{0}")]
+    Storage(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1366,5 +1393,373 @@ mod tests {
         assert!(store.list(Some("%"), 10).expect("搜索").is_empty());
         store.set_pinned("clip-1", true).expect("置顶");
         assert_eq!(store.list(None, 10).expect("列表")[0].id, "clip-1");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 后台捕获运行时
+// ---------------------------------------------------------------------------
+
+/// 一次捕获尝试的结果。每一种都必须能被调用方区分：
+/// 「没有新内容」「暂停了」「存进去了」「被自己抑制了」「容量满了」「失败了」是六件事。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardCaptureOutcome {
+    /// 插件未启用：不轮询、不保存（spec「停用插件停止后台活动」）。
+    Disabled,
+    /// 没有新的复制事件。
+    Unchanged,
+    /// 有新的复制事件，但内容不是本版本能保存的（例如只有非文本格式）。
+    Uncapturable,
+    /// 正在暂停记录：轮询照常推进，但不保存。
+    Paused,
+    /// 已保存为新条目。
+    Captured { id: String, summary: String },
+    /// 同一内容已经存在：合并到已有条目。
+    Deduplicated { id: String, copies: u32 },
+    /// 这次写入来自 Flashcast 自己：丢弃，避免自身写入循环。
+    Suppressed,
+    /// 容量已满且全部是置顶条目：如实拒绝。
+    CapacityReached { entries: usize, capacity: usize },
+    /// 读取或存储失败，附中文原因。
+    Failed { message: String },
+}
+
+/// 面向 UI 与诊断的剪贴板历史状态。
+///
+/// 每个字段都必须如实反映当前情况：存储失败、容量触顶、捕获失败各有自己的字段，
+/// 不能都折成「正常」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardState {
+    /// 插件是否已启用（用户在清单里打开）。
+    pub enabled: bool,
+    /// 是否暂停记录。
+    pub paused: bool,
+    /// 后台捕获线程是否正在运行。
+    pub capture_active: bool,
+    /// 存储是否可用。
+    pub storage_ok: bool,
+    /// 存储失败的中文原因。
+    pub storage_error: Option<String>,
+    /// 本机数据库路径（设备本地目录，不在配置工作区里）。
+    pub storage_path: PathBuf,
+    pub entries: usize,
+    pub pinned: usize,
+    pub attachments: usize,
+    pub capacity: usize,
+    pub retention_days: u32,
+    /// 容量已满的说明；`None` 表示没有触顶。
+    pub capacity_reached: Option<String>,
+    /// 最近一次捕获或存储失败的中文原因。
+    pub last_error: Option<String>,
+    /// 最近一次成功保存的时间（Unix 毫秒）。
+    pub last_capture_ms: Option<i64>,
+    /// 被自身写入抑制丢弃的次数。
+    pub suppressed: u64,
+}
+
+/// 后台捕获线程的观测快照。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClipboardRuntimeSnapshot {
+    pub paused: bool,
+    pub retention_days: u32,
+    pub capacity: usize,
+    /// 最近一次失败的中文原因（成功一次即清空）。
+    pub last_error: Option<String>,
+    /// 最近一次成功保存的时间（Unix 毫秒）。
+    pub last_capture_ms: Option<i64>,
+    /// 被自身写入抑制丢弃的次数。
+    pub suppressed: u64,
+    /// 容量已满的说明；`None` 表示没有触顶。
+    pub capacity_reached: Option<String>,
+}
+
+struct ClipboardRuntimeState {
+    paused: bool,
+    retention_days: u32,
+    capacity: usize,
+    last_error: Option<String>,
+    last_capture_ms: Option<i64>,
+    suppressed: u64,
+    capacity_reached: Option<String>,
+    /// 自身写入的内容指纹，一次性消费。
+    own_writes: Vec<String>,
+}
+
+impl Default for ClipboardRuntimeState {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            retention_days: 0,
+            capacity: 0,
+            last_error: None,
+            last_capture_ms: None,
+            suppressed: 0,
+            capacity_reached: None,
+            own_writes: Vec::new(),
+        }
+    }
+}
+
+/// 后台捕获线程的句柄。
+struct ClipboardPump {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ClipboardPump {
+    fn stop_and_join(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        // 先标记为「已停止」再 join：`is_running()` 不必等线程退出就已经准确。
+        self.running
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// 剪贴板后台捕获运行时：把「轮询 → 去重 → 自身写入抑制 → 落库 → 回收」这条管线
+/// 集中在一处，宿主与后台线程共用同一个实例。
+///
+/// 线程只持有这个运行时（不持有 `Host`），因此不会反过来调用宿主方法，
+/// 也就不可能在与宿主锁的交互中形成死锁。
+pub struct ClipboardRuntime {
+    store: Arc<ClipboardStore>,
+    watcher: Arc<dyn flashcast_platform::clipboard::ClipboardWatcher>,
+    poll_interval: Duration,
+    state: Mutex<ClipboardRuntimeState>,
+    pump: Mutex<Option<ClipboardPump>>,
+}
+
+impl ClipboardRuntime {
+    pub fn new(
+        store: Arc<ClipboardStore>,
+        watcher: Arc<dyn flashcast_platform::clipboard::ClipboardWatcher>,
+        poll_interval: Duration,
+    ) -> Self {
+        Self {
+            store,
+            watcher,
+            poll_interval,
+            state: Mutex::new(ClipboardRuntimeState::default()),
+            pump: Mutex::new(None),
+        }
+    }
+
+    pub fn store(&self) -> &Arc<ClipboardStore> {
+        &self.store
+    }
+
+    /// 更新暂停开关、保留期限与容量。每次成功保存后按它们回收。
+    pub fn configure(&self, paused: bool, retention_days: u32, capacity: usize) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.paused = paused;
+        state.retention_days = retention_days;
+        state.capacity = capacity;
+    }
+
+    pub fn snapshot(&self) -> ClipboardRuntimeSnapshot {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        ClipboardRuntimeSnapshot {
+            paused: state.paused,
+            retention_days: state.retention_days,
+            capacity: state.capacity,
+            last_error: state.last_error.clone(),
+            last_capture_ms: state.last_capture_ms,
+            suppressed: state.suppressed,
+            capacity_reached: state.capacity_reached.clone(),
+        }
+    }
+
+    /// 登记一次由 Flashcast 自己发起的写入。
+    ///
+    /// 两层抑制：告知适配层（它按平台的变更序号/指纹跳过），并在宿主侧按内容指纹
+    /// 兜底消费一次。两层各自成立：适配层失效时宿主仍然不会把自身写入收成新条目。
+    pub fn note_own_write(&self, text: &str) {
+        self.watcher.note_own_write(text);
+        if text.is_empty() {
+            return;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let hash = content_hash_text(text);
+        state.own_writes.push(hash);
+        // 只保留最近若干次：抑制窗口不需要无限长，太多会误伤用户随后真的复制同样内容。
+        const MAX_REMEMBERED: usize = 8;
+        if state.own_writes.len() > MAX_REMEMBERED {
+            let excess = state.own_writes.len() - MAX_REMEMBERED;
+            state.own_writes.drain(..excess);
+        }
+    }
+
+    /// 轮询一次并处理结果。暂停时仍然轮询（推进适配层的变更序号），只是不保存。
+    pub fn capture_once(&self) -> ClipboardCaptureOutcome {
+        // 平台调用不能在持有状态锁时进行：读取可能阻塞数秒。
+        let poll = self.watcher.poll();
+        let (paused, capacity, retention_days) = {
+            let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            (state.paused, state.capacity, state.retention_days)
+        };
+        let capture = match poll {
+            Err(error) => {
+                let message = error.to_string();
+                self.record_failure(message.clone());
+                return ClipboardCaptureOutcome::Failed { message };
+            }
+            Ok(flashcast_platform::clipboard::ClipboardPoll::Unchanged) => {
+                return ClipboardCaptureOutcome::Unchanged
+            }
+            Ok(flashcast_platform::clipboard::ClipboardPoll::Changed(capture)) => capture,
+        };
+        if paused {
+            return ClipboardCaptureOutcome::Paused;
+        }
+        let Some(event) = event_from_capture(&capture, now_ms()) else {
+            return ClipboardCaptureOutcome::Uncapturable;
+        };
+        if self.consume_own_write(&event.content_hash) {
+            let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+            state.suppressed += 1;
+            return ClipboardCaptureOutcome::Suppressed;
+        }
+        match self.store.insert(&event, capacity) {
+            Ok(InsertOutcome::Inserted { id }) => {
+                let summary = event.summary.clone();
+                self.after_insert(capacity, retention_days);
+                ClipboardCaptureOutcome::Captured { id, summary }
+            }
+            Ok(InsertOutcome::Deduplicated { id, copies }) => {
+                self.after_insert(capacity, retention_days);
+                ClipboardCaptureOutcome::Deduplicated { id, copies }
+            }
+            Ok(InsertOutcome::CapacityReached { entries, capacity }) => {
+                let message = format!(
+                    "剪贴板历史已满（{entries}/{capacity}，剩下的都是置顶条目），这次复制不会被保存"
+                );
+                let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+                state.capacity_reached = Some(message);
+                ClipboardCaptureOutcome::CapacityReached { entries, capacity }
+            }
+            Err(error) => {
+                let message = error.to_string();
+                self.record_failure(message.clone());
+                ClipboardCaptureOutcome::Failed { message }
+            }
+        }
+    }
+
+    /// 成功保存之后：更新观测值，并按保留期限与容量回收。
+    fn after_insert(&self, capacity: usize, retention_days: u32) {
+        let report = self.store.reclaim(retention_days, capacity, now_ms());
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.last_capture_ms = Some(now_ms());
+        state.last_error = None;
+        match report {
+            Ok(report) => {
+                state.capacity_reached = if report.capacity_reached {
+                    Some(format!(
+                        "剪贴板历史已满（{}/{}，全部为置顶条目）",
+                        report.remaining, capacity
+                    ))
+                } else {
+                    None
+                };
+            }
+            Err(error) => state.last_error = Some(error.to_string()),
+        }
+    }
+
+    fn record_failure(&self, message: String) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.last_error = Some(message);
+    }
+
+    fn consume_own_write(&self, hash: &str) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        match state.own_writes.iter().position(|item| item == hash) {
+            Some(index) => {
+                state.own_writes.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 启动后台轮询。已经在跑时是空操作。
+    pub fn start(self: &Arc<Self>) {
+        let mut pump = self.pump.lock().unwrap_or_else(|p| p.into_inner());
+        if pump
+            .as_ref()
+            .map(|pump| pump.running.load(std::sync::atomic::Ordering::SeqCst))
+            .unwrap_or(false)
+        {
+            return;
+        }
+        // 取出旧句柄并在锁外结束它：join 可能等一个轮询周期。
+        let previous = pump.take();
+        drop(pump);
+        if let Some(mut previous) = previous {
+            previous.stop_and_join();
+        }
+
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let runtime = Arc::clone(self);
+        let thread_stop = std::sync::Arc::clone(&stop);
+        let thread_running = std::sync::Arc::clone(&running);
+        let spawned = std::thread::Builder::new()
+            .name("flashcast-clipboard-capture".to_string())
+            .spawn(move || {
+                while !thread_stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    let outcome = runtime.capture_once();
+                    if let ClipboardCaptureOutcome::Failed { message } = &outcome {
+                        // 失败已经记进状态；这里只留一条诊断线索，不重复上报。
+                        let _ = message;
+                    }
+                    // 分片睡眠：停止请求最多等一个分片就能生效。
+                    let step = Duration::from_millis(20);
+                    let mut waited = Duration::ZERO;
+                    while waited < runtime.poll_interval
+                        && !thread_stop.load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        std::thread::sleep(step);
+                        waited += step;
+                    }
+                }
+                thread_running.store(false, std::sync::atomic::Ordering::SeqCst);
+            });
+        match spawned {
+            Ok(handle) => {
+                *self.pump.lock().unwrap_or_else(|p| p.into_inner()) = Some(ClipboardPump {
+                    stop,
+                    running,
+                    handle: Some(handle),
+                });
+            }
+            Err(error) => {
+                let message = format!("无法启动剪贴板后台捕获线程：{error}");
+                self.record_failure(message);
+            }
+        }
+    }
+
+    /// 停止后台轮询并等待线程退出（最多一个轮询周期）。没有在跑时是空操作。
+    pub fn stop(&self) {
+        // 先把句柄从互斥量里取出来，再在锁外 join：避免长时间持锁。
+        let pump = self.pump.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(mut pump) = pump {
+            pump.stop_and_join();
+        }
+    }
+
+    /// 后台轮询是否正在运行。
+    pub fn is_running(&self) -> bool {
+        self.pump
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .map(|pump| pump.running.load(std::sync::atomic::Ordering::SeqCst))
+            .unwrap_or(false)
     }
 }

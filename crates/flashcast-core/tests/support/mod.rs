@@ -19,8 +19,8 @@ use flashcast_core::{
 use flashcast_platform::catalog::{AppEntry, AppSource, IconRef};
 use flashcast_platform::chrome::ChromeProvider;
 use flashcast_platform::fake::{
-    FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeFocusTracker, FakeLauncher,
-    FakePaster,
+    FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeClipboardWatcher,
+    FakeFocusTracker, FakeLauncher, FakePaster,
 };
 
 /// 构造一个软件条目。
@@ -139,6 +139,7 @@ pub fn host_restarted_with(
         launcher: Arc::new(FakeLauncher::always_succeeds()),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
+        clipboard_watcher: Arc::new(FakeClipboardWatcher::new()),
         chrome,
         focus: Arc::new(FakeFocusTracker::default()),
         paster: Arc::new(FakePaster::new()),
@@ -192,6 +193,7 @@ pub fn official_host_with_device(
         launcher: launcher.clone(),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: clipboard.clone(),
+        clipboard_watcher: Arc::new(FakeClipboardWatcher::new()),
         chrome: no_chrome(),
         focus: Arc::new(FakeFocusTracker::default()),
         paster: Arc::new(FakePaster::new()),
@@ -217,6 +219,7 @@ pub fn official_host_with_chrome(
         launcher: Arc::new(FakeLauncher::always_succeeds()),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
+        clipboard_watcher: Arc::new(FakeClipboardWatcher::new()),
         chrome: Arc::clone(&chrome) as Arc<dyn ChromeProvider>,
         focus: Arc::new(FakeFocusTracker::default()),
         paster: Arc::new(FakePaster::new()),
@@ -272,6 +275,7 @@ pub fn official_host_with_paste(
         launcher: Arc::new(FakeLauncher::always_succeeds()),
         capabilities,
         clipboard: clipboard.clone(),
+        clipboard_watcher: Arc::new(FakeClipboardWatcher::new()),
         chrome: no_chrome(),
         focus: focus_dep,
         paster: paster_dep,
@@ -304,6 +308,7 @@ pub fn official_host_with_plugins(
         launcher: launcher.clone(),
         capabilities,
         clipboard: clipboard.clone(),
+        clipboard_watcher: Arc::new(FakeClipboardWatcher::new()),
         chrome: no_chrome(),
         focus: Arc::new(FakeFocusTracker::default()),
         paster: Arc::new(FakePaster::new()),
@@ -327,6 +332,7 @@ fn build_host(
         launcher: launcher.clone(),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
+        clipboard_watcher: Arc::new(FakeClipboardWatcher::new()),
         chrome: no_chrome(),
         focus: Arc::new(FakeFocusTracker::default()),
         paster: Arc::new(FakePaster::new()),
@@ -635,20 +641,28 @@ pub fn git_resolve_all_conflicts(repo: &Path) {
 /// 定义的合法清单（原先手写的 `{"plugins": []}` 缺少 `schemaVersion`，会被判为
 /// 无效清单）。`theme.json` 保持 ticket 14 记录过的旧写法，`recorded_theme()` 仍能
 /// 如实读出 `dark`；拉取测试会换成 ticket 06 的合法格式来验证主题重新加载。
+///
+/// `settings.toml` 由 [`Settings::to_toml`] 生成，而不是手写字符串：新增设置字段
+/// （例如 ticket 09 的剪贴板暂停 / 保留期限 / 容量）时夹具与期望值会一起跟上，
+/// 不会出现「远端夹具缺字段、期望值有字段」这类只在个别用例上失败的分歧。
 pub fn workspace_files(hotkey: &str) -> Vec<(&'static str, String)> {
     let manifest = flashcast_core::PluginManifestFile::defaults()
         .to_json()
         .expect("序列化默认插件清单");
+    let settings = Settings {
+        hotkey: hotkey.to_string(),
+        ..Settings::default()
+    }
+    .to_toml()
+    .expect("序列化设置");
     vec![
-        (
-            "settings.toml",
-            format!(
-                "hotkey = \"{hotkey}\"\nlaunchAtStartup = false\nquickAccessLimit = 6\npluginTimeoutMs = 400\ndisabledPlugins = []\n"
-            ),
-        ),
+        ("settings.toml", settings),
         ("manifest.json", manifest),
         ("theme.json", "{\"theme\": \"dark\"}\n".to_string()),
-        ("memos/hello.md", "# 你好\n\n来自远端的备忘录。\n".to_string()),
+        (
+            "memos/hello.md",
+            "# 你好\n\n来自远端的备忘录。\n".to_string(),
+        ),
     ]
 }
 
