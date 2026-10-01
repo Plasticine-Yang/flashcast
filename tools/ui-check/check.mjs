@@ -43,6 +43,8 @@ const COMMIT_MESSAGE = '[data-testid="commit-message"]';
 const COMMIT_SUBMIT = '[data-testid="commit-submit"]';
 const HOTKEY_INPUT = '[data-testid="hotkey-input"]';
 const HOTKEY_STATUS = '[data-testid="hotkey-status"]';
+// 运行环境与能力报告（ticket 17）。
+const CAPABILITY_SECTION = '[data-testid="capability-section"]';
 const CLONE_URL_INPUT = '[data-testid="clone-url-input"]';
 const CLONE_BUTTON = '[data-testid="workspace-clone"]';
 const CLONE_CANCEL = '[data-testid="workspace-clone-cancel"]';
@@ -1059,6 +1061,103 @@ async function main() {
       const file = await shot(page, "13-settings-compact-window.png");
       await page.setViewportSize({ width: 900, height: 620 });
       return `640×420 下工作区、快捷键、克隆与同步区段均可见可操作，截图 ${file}`;
+    });
+
+    // -----------------------------------------------------------------------
+    // 运行环境与能力报告（ticket 17）。
+    //
+    // 检查的是「设置页如实显示平台层探测结果」，不是「平台真的支持」：
+    // 模拟宿主里 hotkey / clipboard 是「未覆盖」，autoPaste 是「不支持」或「支持」。
+    // 同时断言这份诊断不含任何剪贴板内容或凭证（与真实机器上的报告要求一致）。
+    // -----------------------------------------------------------------------
+
+    /** 读取能力区段的关键字段。 */
+    const readCapabilityPanel = () =>
+      page.evaluate((sel) => {
+        const root = document.querySelector(sel);
+        const text = (id) =>
+          root.querySelector(`[data-testid="capability-${id}"]`)?.textContent?.trim() ?? "";
+        const status = (id) =>
+          root.querySelector(`[data-testid="capability-${id}"]`)?.dataset.supportStatus ?? "";
+        return {
+          os: text("os"),
+          arch: text("arch"),
+          session: text("session"),
+          hotkey: text("hotkey"),
+          hotkeyStatus: status("hotkey"),
+          clipboard: text("clipboard"),
+          clipboardStatus: status("clipboard"),
+          autoPaste: text("auto-paste"),
+          autoPasteStatus: status("auto-paste"),
+          notes: text("notes"),
+          disclaimer: text("disclaimer"),
+          whole: root.textContent ?? "",
+        };
+      }, CAPABILITY_SECTION);
+
+    // 诊断不得包含历史内容或凭证：这些是模拟宿主里的剪贴板与备忘录样例。
+    const DIAGNOSTIC_CANARIES = [
+      "会议纪要草稿",
+      "https://example.com/report",
+      "上午十点在三楼会议室",
+      "sekret",
+      "alice:",
+    ];
+
+    // 10b. 运行环境与能力：如实区分「未覆盖」与「不支持」。
+    await check("设置页显示运行环境与能力状态，未覆盖不等于支持", async () => {
+      await page.locator(CAPABILITY_SECTION).scrollIntoViewIfNeeded();
+      assert(await page.isVisible(CAPABILITY_SECTION), "能力区段不可见");
+      const panel = await readCapabilityPanel();
+      assert(panel.os.includes("Linux"), `应显示操作系统：${panel.os}`);
+      assert(panel.os.includes("浏览器模拟环境"), `应显示系统版本：${panel.os}`);
+      assert(panel.arch === "x86_64", `应显示架构：${panel.arch}`);
+      assert(panel.session.includes("X11"), `应显示 Linux 会话类型：${panel.session}`);
+      assert(
+        panel.hotkeyStatus === "unknown" && panel.hotkey.includes("未覆盖"),
+        `全局快捷键应如实报未覆盖：${panel.hotkeyStatus}/${panel.hotkey}`,
+      );
+      assert(
+        panel.clipboardStatus === "unknown" && panel.clipboard.includes("未覆盖"),
+        `剪贴板应如实报未覆盖：${panel.clipboardStatus}/${panel.clipboard}`,
+      );
+      assert(
+        panel.autoPasteStatus === "unsupported" && panel.autoPaste.includes("不支持"),
+        `自动粘贴应报不支持并给出原因：${panel.autoPasteStatus}/${panel.autoPaste}`,
+      );
+      assert(
+        panel.disclaimer.includes("未覆盖") && panel.disclaimer.includes("不代表支持"),
+        `必须写明未覆盖不等于支持：${panel.disclaimer}`,
+      );
+      const leaked = DIAGNOSTIC_CANARIES.filter((needle) => panel.whole.includes(needle));
+      assert(leaked.length === 0, `能力报告不得包含剪贴板内容或凭证：${leaked.join("、")}`);
+      const file = await shot(page, "83-settings-capabilities.png");
+      return `系统 ${panel.os} / ${panel.arch} / ${panel.session}；快捷键与剪贴板未覆盖，自动粘贴不支持；无内容泄露，截图 ${file}`;
+    });
+
+    // 10c. 同一份报告在能力可用时必须改口（不能永远显示「未覆盖」）。
+    await check("能力可用时报告显示支持，仍不泄露历史内容", async () => {
+      await page.evaluate(() => window.__flashcastMock.setAutoPasteSupported(true));
+      await page.click('[data-testid="settings-back"]');
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await page.waitForFunction(
+        (sel) =>
+          document.querySelector(`${sel} [data-testid="capability-auto-paste"]`)?.dataset
+            .supportStatus === "supported",
+        CAPABILITY_SECTION,
+      );
+      const panel = await readCapabilityPanel();
+      assert(panel.autoPaste === "支持", `自动粘贴应显示支持：${panel.autoPaste}`);
+      assert(
+        panel.hotkeyStatus === "unknown",
+        `其余能力不应被连带改口：${panel.hotkeyStatus}`,
+      );
+      const leaked = DIAGNOSTIC_CANARIES.filter((needle) => panel.whole.includes(needle));
+      assert(leaked.length === 0, `能力报告不得包含剪贴板内容或凭证：${leaked.join("、")}`);
+      await page.evaluate(() => window.__flashcastMock.setAutoPasteSupported(false));
+      const file = await shot(page, "84-settings-capabilities-supported.png");
+      return `自动粘贴切换为「支持」后报告随之更新，截图 ${file}`;
     });
 
     // -----------------------------------------------------------------------
