@@ -2872,6 +2872,7 @@ impl Host {
             epoch,
             text_bytes: paths.iter().map(|path| path.as_os_str().len()).sum(),
             files: paths.len(),
+            formats_note: None,
         };
         {
             lock(&self.paste).plan = Some(plan.clone());
