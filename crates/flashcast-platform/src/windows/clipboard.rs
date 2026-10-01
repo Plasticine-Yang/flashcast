@@ -34,13 +34,13 @@ use windows::Win32::System::Memory::{
     GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
 };
 use windows::Win32::System::Ole::{CF_DIB, CF_UNICODETEXT};
-use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, RegisterClipboardFormatW};
+use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
 use crate::clipboard::{
-    cf_html_bytes, cf_html_fragment, check_image_write, check_text, dib_to_png, fingerprint_bytes,
-    image_from_bytes, png_to_dib, ClipboardAccess, ClipboardCapture, ClipboardContent,
-    ClipboardError, ClipboardFormatKind, ClipboardImage, ClipboardPoll, ClipboardSkippedFormat,
-    ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport, IMAGE_MIME_PNG, MAX_IMAGE_BYTES,
+    cf_html_bytes, cf_html_fragment, check_image_write, check_text, dib_to_png, image_from_bytes,
+    png_to_dib, ClipboardAccess, ClipboardCapture, ClipboardContent, ClipboardError,
+    ClipboardFormatKind, ClipboardImage, ClipboardPoll, ClipboardSkippedFormat, ClipboardSourceApp,
+    ClipboardWatcher, ClipboardWriteReport, IMAGE_MIME_PNG, MAX_IMAGE_BYTES,
 };
 
 /// Windows 上 HTML 载荷的剪贴板格式注册名（CF_HTML）。

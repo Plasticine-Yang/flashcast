@@ -997,6 +997,10 @@ pub fn check_image_write(image: &ClipboardImage) -> Result<(), ClipboardError> {
 ///
 /// 与 [`write_with_tool`] 同一套有界等待与标准错误处理（工具 fork 出守护进程后会一直
 /// 持有管道，因此不能同步读到 EOF）。
+///
+/// 只被 Linux 适配层使用（macOS 走临时文件 + osascript，Windows 走 Win32 API）：
+/// 按平台限定，避免在其它目标上变成死代码警告。
+#[cfg(target_os = "linux")]
 pub(crate) fn write_bytes_with_tool(
     program: &Path,
     args: &[&str],
@@ -1129,6 +1133,7 @@ pub(crate) fn read_with_tool(
 /// 几十 MB，`read_to_end` 会先把它们全部读进来才轮到容量判断。这里最多读
 /// `max_bytes + 1` 字节——多读的那 1 字节用来区分「刚好等于上限」与「超过上限」，
 /// 后者由 [`check_image`] 给出面向用户的原因。
+#[cfg(target_os = "linux")]
 pub(crate) fn read_bytes_bounded(
     program: &Path,
     args: &[&str],
