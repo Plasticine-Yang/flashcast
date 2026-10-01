@@ -334,6 +334,12 @@ const MOCK_BOOKMARKS: BookmarkEntry[] = [
     url: "https://intranet.example.com/login?token=abc&next=首页",
     folder: "其他书签",
   },
+  {
+    id: "11",
+    title: "分析工具",
+    url: "https://rust-analyzer.github.io/",
+    folder: "其他书签",
+  },
 ];
 
 // 浏览器模拟宿主的工作区：只模拟 UI 需要区分的几种结果。
@@ -775,7 +781,7 @@ class MockHost implements HostApi {
   /** 当前 Chrome 状态（与真实宿主的字段一一对应）。 */
   private chromeState(): ChromeState {
     return {
-      available: true,
+      available: this.chromeAvailable,
       brandLabel: "Google Chrome",
       customUserDataDir: false,
       binary: "/usr/bin/google-chrome",
