@@ -185,6 +185,58 @@ export interface Settings {
   quickAccessLimit: number;
   pluginTimeoutMs: number;
   disabledPlugins: string[];
+  /** 剪贴板历史的记录范围（可迁移偏好，随设置写进配置工作区）。 */
+  clipboard: ClipboardSettings;
+}
+
+/** 剪贴板历史的记录范围（对应 flashcast_core::ClipboardSettings）。 */
+export interface ClipboardSettings {
+  /** 暂停记录：暂停期间复制的内容不会被保存。 */
+  paused: boolean;
+  /** 保留期限（天）。 */
+  retentionDays: number;
+  /** 容量上限（条目数，含置顶条目）。 */
+  capacity: number;
+}
+
+/** 剪贴板历史里的一条记录（一次复制事件）。 */
+export interface ClipboardEntryView {
+  /** 稳定标识（不含 `clipboard:` 前缀）。 */
+  id: string;
+  summary: string;
+  text: string | null;
+  /** 格式的中文名，例如 `["文字"]`。 */
+  formats: string[];
+  source: string | null;
+  capturedAtMs: number;
+  pinned: boolean;
+  copies: number;
+  attachments: number;
+}
+
+/**
+ * 剪贴板历史状态（对应 flashcast_core::ClipboardState）。
+ *
+ * 存储失败、容量触顶与最近一次捕获失败各有自己的字段：界面必须能区分它们，
+ * 不能把任何一种折成「正常」。
+ */
+export interface ClipboardStateView {
+  enabled: boolean;
+  paused: boolean;
+  captureActive: boolean;
+  storageOk: boolean;
+  storageError: string | null;
+  storagePath: string;
+  entries: number;
+  pinned: number;
+  attachments: number;
+  capacity: number;
+  retentionDays: number;
+  capacityReached: string | null;
+  lastError: string | null;
+  lastCaptureMs: number | null;
+  suppressed: number;
+  items: ClipboardEntryView[];
 }
 
 /** 当前配置工作区与它的有效性（对应 flashcast_core::WorkspaceStatus）。 */

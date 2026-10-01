@@ -15,6 +15,8 @@ import type {
   ChangedFile,
   ChromeProfileView,
   ChromeState,
+  ClipboardEntryView,
+  ClipboardStateView,
   CloneOutcome,
   CloneProgress,
   CommitOutcome,
@@ -118,6 +120,18 @@ export interface HostApi {
   delete_memo(id: string): Promise<void>;
   /** 预览某条结果；未知 id 返回 null。 */
   preview(itemId: string): Promise<Preview | null>;
+  /** 剪贴板历史状态：启用、暂停、后台捕获、存储、容量与条目列表。 */
+  get_clipboard_state(): Promise<ClipboardStateView>;
+  /** 暂停 / 恢复记录。 */
+  set_clipboard_paused(paused: boolean): Promise<ClipboardStateView>;
+  /** 设置保留期限（天）与容量（条目数），并立即回收超出的条目。 */
+  set_clipboard_limits(retentionDays: number, capacity: number): Promise<ClipboardStateView>;
+  /** 置顶 / 取消置顶一条历史。 */
+  pin_clipboard_entry(id: string, pinned: boolean): Promise<ClipboardStateView>;
+  /** 删除一条历史。 */
+  delete_clipboard_entry(id: string): Promise<ClipboardStateView>;
+  /** 清空历史（置顶条目也会被清掉）。 */
+  clear_clipboard_history(): Promise<ClipboardStateView>;
   /** 当前 Chrome 状态：发现结果、profile 列表、关联状态与书签索引状态。 */
   get_chrome_state(): Promise<ChromeState>;
   /** 关联一个已发现的 Chrome profile（参数是目录名）。失败时 reject，原因为中文。 */
@@ -181,6 +195,13 @@ const tauriApi: HostApi = {
     tauriInvoke("update_memo", { id, title, tags, body }),
   delete_memo: (id) => tauriInvoke("delete_memo", { id }),
   preview: (itemId) => tauriInvoke("preview", { itemId }),
+  get_clipboard_state: () => tauriInvoke("get_clipboard_state"),
+  set_clipboard_paused: (paused) => tauriInvoke("set_clipboard_paused", { paused }),
+  set_clipboard_limits: (retentionDays, capacity) =>
+    tauriInvoke("set_clipboard_limits", { retentionDays, capacity }),
+  pin_clipboard_entry: (id, pinned) => tauriInvoke("pin_clipboard_entry", { id, pinned }),
+  delete_clipboard_entry: (id) => tauriInvoke("delete_clipboard_entry", { id }),
+  clear_clipboard_history: () => tauriInvoke("clear_clipboard_history"),
   get_chrome_state: () => tauriInvoke("get_chrome_state"),
   associate_chrome_profile: (profileDir) =>
     tauriInvoke("associate_chrome_profile", { profileDir }),
@@ -283,8 +304,41 @@ export const MOCK_MEMOS: Memo[] = [
 /** Chrome 书签插件在模拟宿主里的 id（与 flashcast-core 一致）。 */
 export const MOCK_CHROME_PLUGIN_ID = "chrome-bookmarks";
 
-/** Chrome 书签插件的关键词别名（与 flashcast-core 的插件清单一致）。 */
 export const MOCK_CHROME_KEYWORDS = ["chrome bookmarks", "chrome 书签"];
+
+/**
+ * 剪贴板历史插件在模拟宿主里的 id 与关键词别名（与 flashcast-core 一致）。
+ *
+ * 「剪贴板」与「剪切板」是**同一个**插件的两个输入别名：模拟宿主里也只有一份历史。
+ */
+export const MOCK_CLIPBOARD_PLUGIN_ID = "clipboard";
+export const MOCK_CLIPBOARD_KEYWORDS = ["剪贴板", "剪切板", "clipboard"];
+
+/** 模拟历史里的初始条目（真实行为由 crates/flashcast-core/tests/clipboard.rs 验证）。 */
+const MOCK_CLIPBOARD_ENTRIES: ClipboardEntryView[] = [
+  {
+    id: "clip-mock-1",
+    summary: "会议纪要草稿 上午十点在三楼会议室",
+    text: "会议纪要草稿\n上午十点在三楼会议室\n确认一下参加人",
+    formats: ["文字"],
+    source: "Firefox",
+    capturedAtMs: Date.now() - 3 * 60 * 1000,
+    pinned: false,
+    copies: 1,
+    attachments: 0,
+  },
+  {
+    id: "clip-mock-2",
+    summary: "https://example.com/report",
+    text: "https://example.com/report",
+    formats: ["文字"],
+    source: null,
+    capturedAtMs: Date.now() - 40 * 60 * 1000,
+    pinned: true,
+    copies: 2,
+    attachments: 0,
+  },
+];
 
 /**
  * 浏览器模拟宿主里的 Chrome profile 与书签。语义与真实宿主一致：
@@ -527,6 +581,8 @@ class MockHost implements HostApi {
     quickAccessLimit: 6,
     pluginTimeoutMs: 400,
     disabledPlugins: [],
+    // 与 flashcast_core::ClipboardSettings::default 一致。
+    clipboard: { paused: false, retentionDays: 30, capacity: 500 },
   };
   private workspace: WorkspaceStatus = {
     path: null,
@@ -623,6 +679,23 @@ class MockHost implements HostApi {
   /** 模拟用户数据目录是否在默认位置之外。 */
   private customChromeUserDataDir = false;
 
+  // ---- 剪贴板历史（浏览器模拟） ----
+  /**
+   * 剪贴板历史插件的启用状态。默认**关闭**，与真实宿主一致：
+   * 后台捕获用户复制的内容是隐私敏感行为，必须由用户显式启用。
+   */
+  private clipboardPluginEnabled = false;
+  private clipboardEntries: ClipboardEntryView[] = MOCK_CLIPBOARD_ENTRIES.map((entry) => ({
+    ...entry,
+    formats: [...entry.formats],
+  }));
+  /** 模拟的存储失败原因；非空时如实展示，而不是假装历史为空。 */
+  private clipboardStorageError: string | null = null;
+  /** 模拟的最近一次捕获失败原因。 */
+  private clipboardLastError: string | null = null;
+  /** 被自身写入抑制丢弃的次数（诊断用）。 */
+  private clipboardSuppressed = 0;
+
   private emit(event: string, payload?: unknown) {
     for (const handler of this.handlers.get(event) ?? []) {
       handler(payload);
@@ -649,9 +722,13 @@ class MockHost implements HostApi {
           : query.startsWith(keyword)
             ? query.slice(keyword.length).trim()
             : query;
-      return this.scope.id === MOCK_CHROME_PLUGIN_ID
-        ? this.chromeItems(rest)
-        : this.memoItems(rest);
+      if (this.scope.id === MOCK_CHROME_PLUGIN_ID) {
+        return this.chromeItems(rest);
+      }
+      if (this.scope.id === MOCK_CLIPBOARD_PLUGIN_ID) {
+        return this.clipboardItems(rest);
+      }
+      return this.memoItems(rest);
     }
 
     const commandItems: QueryView["items"] = [
@@ -742,6 +819,114 @@ class MockHost implements HostApi {
     );
     const items = ranked.map((entry) => entry.item);
     return collisionEntry ? [collisionEntry, ...items] : items;
+  }
+
+  /** 剪贴板历史范围内的一条结果：默认操作是粘贴（复用备忘录的粘贴路径）。 */
+  private clipboardItem(
+    entry: ClipboardEntryView,
+    score: QueryView["items"][number]["score"],
+  ): QueryView["items"][number] {
+    const parts: string[] = [];
+    if (entry.pinned) {
+      parts.push("已置顶");
+    }
+    parts.push(...entry.formats);
+    if (entry.source) {
+      parts.push(`来自 ${entry.source}`);
+    }
+    if (entry.copies > 1) {
+      parts.push(`复制过 ${entry.copies} 次`);
+    }
+    return {
+      id: `clipboard:${entry.id}`,
+      title: entry.summary,
+      subtitle: parts.join(" · "),
+      iconDataUrl: null,
+      source: MOCK_CLIPBOARD_PLUGIN_ID,
+      kind: "clipboardEntry",
+      defaultAction: "paste",
+      defaultActionLabel: "粘贴",
+      score,
+    };
+  }
+
+  /** 范围内的历史检索：文字与来源（`rest` 已剥掉关键词前缀）。 */
+  private clipboardItems(rest: string): QueryView["items"] {
+    if (!this.clipboardPluginEnabled) {
+      return [];
+    }
+    // 存储失败时列表为空，原因由设置页与状态字段给出（与真实宿主一致，不伪造结果）。
+    if (this.clipboardStorageError) {
+      return [];
+    }
+    const query = rest.trim().toLowerCase();
+    const ordered = [...this.clipboardEntries].sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) || b.capturedAtMs - a.capturedAtMs,
+    );
+    if (query.length === 0) {
+      return ordered.map((entry) =>
+        this.clipboardItem(entry, { tier: "titlePrefix", relevance: 0 }),
+      );
+    }
+    return ordered
+      .map((entry) => {
+        const title = entry.summary.toLowerCase();
+        const text = (entry.text ?? "").toLowerCase();
+        if (title === query) return { entry, tier: "titlePrefix" as const, relevance: 100 };
+        if (title.startsWith(query)) return { entry, tier: "titlePrefix" as const, relevance: 80 };
+        if (title.includes(query)) return { entry, tier: "titleSubstring" as const, relevance: 55 };
+        if (text.includes(query)) {
+          return { entry, tier: "metadataSubstring" as const, relevance: 40 };
+        }
+        if ((entry.source ?? "").toLowerCase().includes(query)) {
+          return { entry, tier: "metadataSubstring" as const, relevance: 30 };
+        }
+        return null;
+      })
+      .filter((value): value is NonNullable<typeof value> => value !== null)
+      .sort(
+        (a, b) =>
+          MATCH_TIER_ORDER[a.tier] - MATCH_TIER_ORDER[b.tier] ||
+          b.relevance - a.relevance ||
+          b.entry.capturedAtMs - a.entry.capturedAtMs,
+      )
+      .map(({ entry, tier, relevance }) => this.clipboardItem(entry, { tier, relevance }));
+  }
+
+  /** 当前剪贴板历史状态（含条目列表），与真实宿主的字段一一对应。 */
+  clipboardStateView(): ClipboardStateView {
+    const paused = this.settings.clipboard?.paused ?? false;
+    return {
+      enabled: this.clipboardPluginEnabled,
+      paused,
+      captureActive: this.clipboardPluginEnabled && !paused,
+      storageOk: this.clipboardStorageError === null,
+      storageError: this.clipboardStorageError,
+      storagePath: "/home/user/.local/share/flashcast/clipboard/history.sqlite3",
+      entries: this.clipboardEntries.length,
+      pinned: this.clipboardEntries.filter((entry) => entry.pinned).length,
+      attachments: this.clipboardEntries.reduce((sum, entry) => sum + entry.attachments, 0),
+      capacity: this.settings.clipboard?.capacity ?? 500,
+      retentionDays: this.settings.clipboard?.retentionDays ?? 30,
+      capacityReached: null,
+      lastError: this.clipboardLastError ?? this.clipboardStorageError,
+      lastCaptureMs: this.clipboardEntries.length > 0 ? Date.now() : null,
+      suppressed: this.clipboardSuppressed,
+      items: [...this.clipboardEntries]
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.capturedAtMs - a.capturedAtMs)
+        .map((entry) => ({ ...entry, formats: [...entry.formats] })),
+    };
+  }
+
+  /** 浏览器交互检查用的钩子：模拟本机存储失败。 */
+  simulateClipboardStorageFailure(reason: string | null): void {
+    this.clipboardStorageError = reason;
+  }
+
+  /** 浏览器交互检查用的钩子：模拟捕获失败（例如拿不到剪贴板选区）。 */
+  simulateClipboardCaptureFailure(reason: string | null): void {
+    this.clipboardLastError = reason;
   }
 
   /** 书签范围内的一条结果：默认操作是在 Chrome 打开。 */
@@ -960,6 +1145,9 @@ class MockHost implements HostApi {
       this.memoPluginEnabled && MOCK_MEMO_KEYWORDS.includes(normalized);
     const isChromeKeyword =
       this.chromePluginEnabled && MOCK_CHROME_KEYWORDS.includes(normalized);
+    // 「剪贴板」与「剪切板」都进入同一个插件：两个别名共用一份历史。
+    const isClipboardKeyword =
+      this.clipboardPluginEnabled && MOCK_CLIPBOARD_KEYWORDS.includes(normalized);
     // 关键词与标签冲突（ADR §4）：输入正好是插件关键词、同时又有备忘录带这个标签时，
     // 留在首屏并同时给出「插件入口 + 标签命中」；已经在范围内则不算冲突。
     const collides =
@@ -967,7 +1155,7 @@ class MockHost implements HostApi {
       this.scope.kind === "home" &&
       this.memoEntries.some((memo) => memo.tags.some((tag) => tag.toLowerCase() === normalized));
     // 关键词完整匹配即进入插件范围；已在范围内改用另一个别名时更新记下的关键词。
-    if (isChromeKeyword || (isMemoKeyword && !collides)) {
+    if (isClipboardKeyword || isChromeKeyword || (isMemoKeyword && !collides)) {
       if (this.scope.kind === "home") {
         this.history.push({
           input: this.input,
@@ -975,9 +1163,11 @@ class MockHost implements HostApi {
           scope: this.scope,
         });
       }
-      this.scope = isChromeKeyword
-        ? { kind: "plugin", id: MOCK_CHROME_PLUGIN_ID, keyword: normalized }
-        : { kind: "plugin", id: MOCK_MEMO_PLUGIN_ID, keyword: normalized };
+      this.scope = isClipboardKeyword
+        ? { kind: "plugin", id: MOCK_CLIPBOARD_PLUGIN_ID, keyword: normalized }
+        : isChromeKeyword
+          ? { kind: "plugin", id: MOCK_CHROME_PLUGIN_ID, keyword: normalized }
+          : { kind: "plugin", id: MOCK_MEMO_PLUGIN_ID, keyword: normalized };
     } else if (this.scope.kind === "plugin" && normalized.length === 0) {
       // 清空输入即离开插件范围。
       this.scope = { kind: "home" };
@@ -1044,6 +1234,40 @@ class MockHost implements HostApi {
       this.items = this.buildItems();
       return { status: "done", message: `已进入「备忘录」范围（关键词 ${keyword}）` };
     }
+    // 剪贴板历史的默认操作同样是粘贴：复用与备忘录完全相同的路径。
+    if (itemId.startsWith("clipboard:")) {
+      if (!this.clipboardPluginEnabled) {
+        return { status: "failed", message: "插件「剪贴板历史」已停用，已拒绝执行" };
+      }
+      const id = itemId.slice("clipboard:".length);
+      const entry = this.clipboardEntries.find((candidate) => candidate.id === id) ?? null;
+      if (!entry || entry.text === null) {
+        return {
+          status: "failed",
+          message: `找不到「${itemId}」对应的剪贴板历史，可能已被删除或过期回收，请重新查询`,
+        };
+      }
+      // 自身写入抑制：这次写入不得再被自己捕获成新条目。
+      this.clipboardSuppressed += 1;
+      this.lastCopied = entry.text;
+      const target = this.previousApp;
+      if (!this.autoPasteSupported || !target) {
+        const reason = target
+          ? "浏览器模拟宿主没有可注入按键的桌面会话"
+          : "没有记录到唤起前的应用，无法确定粘贴目标";
+        return {
+          status: "copiedNeedsManualPaste",
+          message: `已复制「${entry.summary}」到剪贴板；${reason}；请切换到目标应用后按 Ctrl+V 手动粘贴`,
+        };
+      }
+      this.lastPaste = {
+        content: this.lastCopied,
+        target: target.name,
+        sequence: ["copied", "windowHidden", "restored", "pasted"],
+      };
+      this.hidden = true;
+      return { status: "done", message: `已粘贴「${entry.summary}」到「${target.name}」` };
+    }
     // 备忘录的默认操作是粘贴：先准备剪贴板，再按能力决定能否自动粘贴。
     const memo = this.memoFromItemId(itemId);
     if (memo) {
@@ -1102,7 +1326,76 @@ class MockHost implements HostApi {
     if (memo) {
       return { kind: "text", title: memo.title, body: memo.body };
     }
+    if (itemId.startsWith("clipboard:")) {
+      const id = itemId.slice("clipboard:".length);
+      const entry = this.clipboardEntries.find((candidate) => candidate.id === id);
+      return entry
+        ? { kind: "text", title: entry.summary, body: entry.text ?? "（没有可显示的文字内容）" }
+        : null;
+    }
     return null;
+  }
+
+  async get_clipboard_state(): Promise<ClipboardStateView> {
+    return this.clipboardStateView();
+  }
+
+  async set_clipboard_paused(paused: boolean): Promise<ClipboardStateView> {
+    this.settings = { ...this.settings, clipboard: { ...this.settings.clipboard, paused } };
+    return this.clipboardStateView();
+  }
+
+  async set_clipboard_limits(
+    retentionDays: number,
+    capacity: number,
+  ): Promise<ClipboardStateView> {
+    if (retentionDays < 1 || retentionDays > 3650) {
+      throw `剪贴板保留期限必须在 1 到 3650 天之间，当前为 ${retentionDays}`;
+    }
+    if (capacity < 1 || capacity > 100000) {
+      throw `剪贴板容量必须在 1 到 100000 条之间，当前为 ${capacity}`;
+    }
+    this.settings = {
+      ...this.settings,
+      clipboard: { ...this.settings.clipboard, retentionDays, capacity },
+    };
+    // 与真实宿主一致：改小容量立刻回收最旧的未置顶条目。
+    const ordered = [...this.clipboardEntries].sort(
+      (a, b) => b.capturedAtMs - a.capturedAtMs,
+    );
+    const keep = new Set<string>();
+    let used = 0;
+    for (const entry of ordered) {
+      if (entry.pinned || used < capacity) {
+        keep.add(entry.id);
+        used += 1;
+      }
+    }
+    this.clipboardEntries = this.clipboardEntries.filter((entry) => keep.has(entry.id));
+    return this.clipboardStateView();
+  }
+
+  async pin_clipboard_entry(id: string, pinned: boolean): Promise<ClipboardStateView> {
+    const entry = this.clipboardEntries.find((candidate) => candidate.id === id);
+    if (!entry) {
+      throw `找不到这条剪贴板历史：${id}`;
+    }
+    entry.pinned = pinned;
+    return this.clipboardStateView();
+  }
+
+  async delete_clipboard_entry(id: string): Promise<ClipboardStateView> {
+    const before = this.clipboardEntries.length;
+    this.clipboardEntries = this.clipboardEntries.filter((entry) => entry.id !== id);
+    if (this.clipboardEntries.length === before) {
+      throw `找不到这条剪贴板历史：${id}`;
+    }
+    return this.clipboardStateView();
+  }
+
+  async clear_clipboard_history(): Promise<ClipboardStateView> {
+    this.clipboardEntries = [];
+    return this.clipboardStateView();
   }
 
   async get_chrome_state(): Promise<ChromeState> {
@@ -1193,8 +1486,22 @@ class MockHost implements HostApi {
   }
 
   async set_feature_plugin_enabled(id: string, enabled: boolean): Promise<PluginView[]> {
-    if (id !== MOCK_MEMO_PLUGIN_ID && id !== MOCK_CHROME_PLUGIN_ID) {
+    if (
+      id !== MOCK_MEMO_PLUGIN_ID &&
+      id !== MOCK_CHROME_PLUGIN_ID &&
+      id !== MOCK_CLIPBOARD_PLUGIN_ID
+    ) {
       throw `插件清单里没有这个标识：${id}`;
+    }
+    if (id === MOCK_CLIPBOARD_PLUGIN_ID) {
+      this.clipboardPluginEnabled = enabled;
+      // 停用即停止后台活动（真实宿主会停掉轮询线程）；离开该范围并重算。
+      if (!enabled && this.scope.kind === "plugin" && this.scope.id === id) {
+        this.scope = { kind: "home" };
+      }
+      this.items = this.buildItems();
+      const status = await this.get_status();
+      return status.plugins;
     }
     if (id === MOCK_CHROME_PLUGIN_ID) {
       this.chromePluginEnabled = enabled;
@@ -1302,6 +1609,13 @@ class MockHost implements HostApi {
           version: "0.1.0",
           keywords: [...MOCK_CHROME_KEYWORDS],
           enabled: this.chromePluginEnabled,
+        },
+        {
+          id: MOCK_CLIPBOARD_PLUGIN_ID,
+          name: "剪贴板历史",
+          version: "0.1.0",
+          keywords: [...MOCK_CLIPBOARD_KEYWORDS],
+          enabled: this.clipboardPluginEnabled,
         },
       ],
     };

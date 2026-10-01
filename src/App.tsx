@@ -19,6 +19,7 @@ import type {
   WorkspaceChanges,
   WorkspaceEvent,
   WorkspaceStatus,
+  ClipboardStateView,
 } from "./types";
 import { ActionBar } from "./components/ActionBar";
 import { MemoPreview } from "./components/MemoPreview";
@@ -95,6 +96,8 @@ export default function App() {
   const [memos, setMemos] = useState<Memo[]>([]);
   const [memoProblems, setMemoProblems] = useState<MemoProblem[]>([]);
   const [chrome, setChrome] = useState<ChromeState | null>(null);
+  /** 剪贴板历史状态与管理列表（ticket 09）。 */
+  const [clipboard, setClipboard] = useState<ClipboardStateView | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(true);
 
@@ -232,6 +235,7 @@ export default function App() {
     void loadPlugins();
     void loadMemos();
     void loadChrome();
+    void loadClipboard();
   };
 
   /** 读取随应用提供的功能插件与启用状态（备忘录的启停入口用）。 */
@@ -250,6 +254,15 @@ export default function App() {
       const [next, problems] = await Promise.all([api.memos(), api.memo_problems()]);
       setMemos(next);
       setMemoProblems(problems);
+    } catch (error) {
+      setSettingsMessage({ level: "error", text: String(error) });
+    }
+  };
+
+  /** 读取剪贴板历史状态与管理列表（含存储 / 容量 / 最近失败的准确状态）。 */
+  const loadClipboard = async () => {
+    try {
+      setClipboard(await api.get_clipboard_state());
     } catch (error) {
       setSettingsMessage({ level: "error", text: String(error) });
     }
@@ -309,6 +322,69 @@ export default function App() {
         // 停用后工作区内容不变，但管理入口与搜索结果都要按新状态重算。
         void loadMemos();
         void loadChrome();
+        void loadClipboard();
+        void api.query(input).then(apply);
+      },
+    );
+  };
+
+  /** 暂停 / 恢复剪贴板记录。 */
+  const handleToggleClipboardPaused = (paused: boolean) => {
+    void runSettingsAction(
+      () => api.set_clipboard_paused(paused),
+      (next) => {
+        setClipboard(next);
+        setSettingsMessage({
+          level: "info",
+          text: paused ? "已暂停记录剪贴板" : "已恢复记录剪贴板",
+        });
+      },
+    );
+  };
+
+  /** 保存保留期限与容量；改小容量会立刻回收超出的条目。 */
+  const handleSaveClipboardLimits = (retentionDays: number, capacity: number) => {
+    void runSettingsAction(
+      () => api.set_clipboard_limits(retentionDays, capacity),
+      (next) => {
+        setClipboard(next);
+        setSettingsMessage({
+          level: "info",
+          text: `剪贴板历史范围已更新：保留 ${next.retentionDays} 天，容量 ${next.capacity} 条`,
+        });
+        void api.query(input).then(apply);
+      },
+    );
+  };
+
+  const handlePinClipboardEntry = (id: string, pinned: boolean) => {
+    void runSettingsAction(
+      () => api.pin_clipboard_entry(id, pinned),
+      (next) => {
+        setClipboard(next);
+        // 置顶会影响搜索结果的排序，当前查询要重算。
+        void api.query(input).then(apply);
+      },
+    );
+  };
+
+  const handleDeleteClipboardEntry = (id: string) => {
+    void runSettingsAction(
+      () => api.delete_clipboard_entry(id),
+      (next) => {
+        setClipboard(next);
+        setSettingsMessage({ level: "info", text: "已删除这条剪贴板历史" });
+        void api.query(input).then(apply);
+      },
+    );
+  };
+
+  const handleClearClipboardHistory = () => {
+    void runSettingsAction(
+      () => api.clear_clipboard_history(),
+      (next) => {
+        setClipboard(next);
+        setSettingsMessage({ level: "info", text: "已清空剪贴板历史" });
         void api.query(input).then(apply);
       },
     );
@@ -900,6 +976,7 @@ export default function App() {
           memoProblems={memoProblems}
           memoEnabled={memoPlugin?.enabled ?? false}
           chrome={chrome}
+          clipboard={clipboard}
           onSelectWorkspace={handleSelectWorkspace}
           onInitWorkspace={handleInitWorkspace}
           onSaveHotkey={handleSaveHotkey}
@@ -925,6 +1002,11 @@ export default function App() {
           onCreateMemo={handleCreateMemo}
           onUpdateMemo={handleUpdateMemo}
           onDeleteMemo={handleDeleteMemo}
+          onToggleClipboardPaused={handleToggleClipboardPaused}
+          onSaveClipboardLimits={handleSaveClipboardLimits}
+          onPinClipboardEntry={handlePinClipboardEntry}
+          onDeleteClipboardEntry={handleDeleteClipboardEntry}
+          onClearClipboardHistory={handleClearClipboardHistory}
         />
       ) : (
         <>

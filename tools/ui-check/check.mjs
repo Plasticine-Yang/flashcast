@@ -2422,6 +2422,225 @@ async function main() {
       return `组合中回车未复制（lastCopied=null）→ 组合结束后回车复制「${copied.slice(0, 8)}…」，截图 ${file}`;
     });
 
+    // 67. 剪贴板历史：两个中文别名进入同一个插件，并共享同一份历史。
+    await check("剪贴板与剪切板是同一个插件并共享历史", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      // 默认关闭：经设置页的插件开关显式启用（真实宿主同样要求用户先启用）。
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      const pluginState = page.locator(
+        '[data-plugin-id="clipboard"] [data-testid="plugin-state"]',
+      );
+      assert(
+        (await pluginState.textContent())?.includes("已停用"),
+        "剪贴板历史必须默认关闭（隐私敏感）",
+      );
+      await page.click('[data-plugin-id="clipboard"] [data-testid="plugin-toggle"]');
+      await page.waitForFunction(
+        () =>
+          document.querySelector('[data-plugin-id="clipboard"]')?.dataset.enabled === "true",
+      );
+      await page.click('[data-testid="settings-back"]');
+      await page.waitForSelector(ROW);
+
+      await page.fill(INPUT, "剪贴板");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some(
+            (row) => row.dataset.kind === "clipboardEntry",
+          ),
+        ROW,
+      );
+      const zh = await rows(page);
+      const subtitles = await page.$$eval(ROW, (nodes) =>
+        nodes.map((node) => node.querySelector(".result-subtitle")?.textContent ?? ""),
+      );
+      assert(zh.length === 2, `模拟历史应有 2 条，实际 ${zh.length}`);
+      assert(
+        zh[0].title.includes("example.com/report"),
+        `置顶条目必须排在最前，实际「${zh[0].title}」`,
+      );
+      assert(
+        subtitles[0].includes("已置顶") && subtitles[0].includes("文字"),
+        `副标题要显示置顶与格式，实际「${subtitles[0]}」`,
+      );
+      const file = await shot(page, "67-clipboard-scope.png");
+
+      // 「剪切板」是同一个插件的别名：看到完全相同的条目。
+      await page.fill(INPUT, "剪切板");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some(
+            (row) => row.dataset.kind === "clipboardEntry",
+          ),
+        ROW,
+      );
+      const alt = await rows(page);
+      assert(
+        JSON.stringify(alt.map((row) => row.id)) === JSON.stringify(zh.map((row) => row.id)),
+        `两个别名必须看到同一份历史：${alt.map((r) => r.title).join("/")}`,
+      );
+      return `「剪贴板」与「剪切板」各 ${alt.length} 条且条目一致，截图 ${file}`;
+    });
+
+    // 68. 剪贴板历史：范围内的文字检索、完整预览与回车粘贴。
+    await check("剪贴板条目可按文字检索、预览并粘贴到唤起前的应用", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+      await page.evaluate(() => window.__flashcastMock.setAutoPasteSupported(true));
+
+      // 先输入关键词进入范围，再在同一个输入框里继续写检索词（与 Chrome / 备忘录同一路径）。
+      await page.fill(INPUT, "剪贴板");
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SCOPE_LABEL, expected: "剪贴板 范围" },
+      );
+      await page.fill(INPUT, "剪贴板 会议室");
+      await waitForRowCount(page, 1);
+      const hits = await rows(page);
+      assert(hits.length === 1, `按正文检索应命中 1 条，实际 ${hits.length}`);
+      assert(
+        hits[0].title.includes("会议纪要"),
+        `命中的应是会议纪要那条，实际「${hits[0].title}」`,
+      );
+
+      // 预览给出完整正文。
+      await page.waitForSelector(MEMO_PREVIEW_BODY);
+      const body = await page.textContent(MEMO_PREVIEW_BODY);
+      assert(
+        body.includes("确认一下参加人"),
+        `预览必须是完整正文，实际「${body}」`,
+      );
+      const file = await shot(page, "68-clipboard-preview.png");
+
+      // 回车：外壳顺序必须是 复制 → 关窗 → 恢复目标 → 注入粘贴。
+      await page.evaluate(() => {
+        window.__flashcastMock.lastPaste = null;
+      });
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => window.__flashcastMock.lastPaste !== null);
+      const pasted = await page.evaluate(() => window.__flashcastMock.lastPaste);
+      assert(
+        pasted.content.includes("确认一下参加人"),
+        `粘贴的必须是这条历史的完整正文，实际「${pasted.content}」`,
+      );
+      assert(
+        pasted.sequence.join(" → ") === "copied → windowHidden → restored → pasted",
+        `外壳顺序不对：${pasted.sequence.join(" → ")}`,
+      );
+      return `检索命中 1 条、预览完整、粘贴到「${pasted.target}」，截图 ${file}`;
+    });
+
+    // 69. 设置页的剪贴板历史管理：状态、暂停、置顶、删除与清空。
+    await check("设置页展示剪贴板状态并可暂停、置顶、删除与清空", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await page.waitForSelector('[data-testid="clipboard-section"]');
+      await page.waitForSelector('[data-testid="clipboard-item"]');
+
+      const summary = await page.textContent('[data-testid="clipboard-state-summary"]');
+      assert(
+        summary.includes("后台捕获运行中") && summary.includes("本机条目"),
+        `状态摘要必须说明捕获与容量，实际「${summary}」`,
+      );
+      const storageHint = await page.textContent('[data-testid="clipboard-section"]');
+      assert(
+        storageHint.includes("history.sqlite3"),
+        "必须说明历史保存在本机数据目录",
+      );
+
+      // 暂停 / 恢复。
+      await page.click('[data-testid="clipboard-pause"]');
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-testid="clipboard-state-summary"]')
+            ?.textContent?.includes("已暂停记录") === true,
+      );
+      await page.click('[data-testid="clipboard-pause"]');
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector('[data-testid="clipboard-state-summary"]')
+            ?.textContent?.includes("正在记录") === true,
+      );
+
+      // 置顶：挑一条未置顶的（模拟历史里有的条目本来就置顶），置顶后它排到最前。
+      const unpinnedId = await page.$eval(
+        '[data-testid="clipboard-item"][data-pinned="false"]',
+        (node) => node.dataset.entryId,
+      );
+      await page.click(
+        `[data-testid="clipboard-item"][data-entry-id="${unpinnedId}"] [data-testid="clipboard-pin"]`,
+      );
+      await page.waitForFunction(
+        (id) =>
+          document.querySelector(`[data-testid="clipboard-item"][data-entry-id="${id}"]`)
+            ?.dataset.pinned === "true",
+        unpinnedId,
+      );
+      const pinnedFirst = await page.$eval(
+        '[data-testid="clipboard-item"]',
+        (node) => node.dataset.entryId,
+      );
+      assert(
+        pinnedFirst === unpinnedId,
+        `置顶的条目必须排到最前：置顶 ${unpinnedId}，实际最前 ${pinnedFirst}`,
+      );
+
+      // 删除一条。
+      const before = await page.locator('[data-testid="clipboard-item"]').count();
+      await page.locator('[data-testid="clipboard-item"]').last().locator('[data-testid="clipboard-delete"]').click();
+      await page.waitForFunction(
+        (expected) =>
+          document.querySelectorAll('[data-testid="clipboard-item"]').length === expected - 1,
+        before,
+      );
+      const file = await shot(page, "69-settings-clipboard.png");
+
+      // 清空：第一次点击是确认，第二次才真的清空。
+      await page.click('[data-testid="clipboard-clear"]');
+      await page.click('[data-testid="clipboard-clear"]');
+      await page.waitForSelector('[data-testid="clipboard-empty"]');
+      return `状态/暂停/置顶/删除/清空均生效（删除前 ${before} 条），截图 ${file}`;
+    });
+
+    // 70. 停用插件：不捕获、也不返回任何条目。
+    await check("停用剪贴板插件后关键词不再返回条目", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      // 默认关闭状态：输入关键词也不得出现历史条目。
+      await page.fill(INPUT, "剪贴板");
+      await page.waitForTimeout(200);
+      const items = await rows(page);
+      assert(
+        !items.some((item) => item.kind === "clipboardEntry"),
+        `停用时不得返回历史条目：${items.map((item) => item.title).join("/")}`,
+      );
+
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await page.waitForSelector('[data-testid="clipboard-section"]');
+      const summary = await page.textContent('[data-testid="clipboard-state-summary"]');
+      assert(
+        summary.includes("未启用") && summary.includes("后台捕获未运行"),
+        `停用时状态必须写明未启用且没有后台活动，实际「${summary}」`,
+      );
+      const pausedDisabled = await page.locator('[data-testid="clipboard-pause"]').isDisabled();
+      assert(pausedDisabled, "停用时不得提供暂停入口");
+      const file = await shot(page, "70-settings-clipboard-disabled.png");
+      return `停用时关键词不返回条目、状态显示未启用，截图 ${file}`;
+    });
+
     const failed = results.filter((result) => !result.ok).length;
     log("");
     log(`汇总：通过 ${results.length - failed}，失败 ${failed}（共 ${results.length} 项）`);

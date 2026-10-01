@@ -13,9 +13,11 @@ import type {
   ThemeState,
   WorkspaceChanges,
   WorkspaceStatus,
+  ClipboardStateView,
 } from "../types";
 import { ChangesPanel } from "./ChangesPanel";
 import { ChromePanel } from "./ChromePanel";
+import { ClipboardPanel } from "./ClipboardPanel";
 import { FeaturePluginsPanel } from "./FeaturePluginsPanel";
 import { MemoPanel } from "./MemoPanel";
 
@@ -117,6 +119,8 @@ interface Props {
   memoEnabled: boolean;
   /** 当前 Chrome 状态：发现结果、profile 关联与书签索引。 */
   chrome: ChromeState | null;
+  /** 剪贴板历史状态：启用、暂停、存储、容量与条目列表。 */
+  clipboard: ClipboardStateView | null;
   onBack: () => void;
   onSelectWorkspace: (path: string) => void;
   onInitWorkspace: (path: string) => void;
@@ -147,6 +151,11 @@ interface Props {
   onCreateMemo: (title: string, tags: string[], body: string) => Promise<void>;
   onUpdateMemo: (id: string, title: string, tags: string[], body: string) => Promise<void>;
   onDeleteMemo: (id: string) => Promise<void>;
+  onToggleClipboardPaused: (paused: boolean) => void;
+  onSaveClipboardLimits: (retentionDays: number, capacity: number) => void;
+  onPinClipboardEntry: (id: string, pinned: boolean) => void;
+  onDeleteClipboardEntry: (id: string) => void;
+  onClearClipboardHistory: () => void;
 }
 
 /**
@@ -175,6 +184,7 @@ export function SettingsScreen({
   memoProblems,
   memoEnabled,
   chrome,
+  clipboard,
   onBack,
   onSelectWorkspace,
   onInitWorkspace,
@@ -201,6 +211,11 @@ export function SettingsScreen({
   onCreateMemo,
   onUpdateMemo,
   onDeleteMemo,
+  onToggleClipboardPaused,
+  onSaveClipboardLimits,
+  onPinClipboardEntry,
+  onDeleteClipboardEntry,
+  onClearClipboardHistory,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
@@ -726,6 +741,16 @@ export function SettingsScreen({
           busy={busy}
           onAssociate={onAssociateChromeProfile}
           onRefresh={onRefreshChromeBookmarks}
+        />
+
+        <ClipboardPanel
+          clipboard={clipboard}
+          busy={busy}
+          onTogglePaused={onToggleClipboardPaused}
+          onSaveLimits={onSaveClipboardLimits}
+          onPin={onPinClipboardEntry}
+          onDelete={onDeleteClipboardEntry}
+          onClear={onClearClipboardHistory}
         />
 
         <MemoPanel
