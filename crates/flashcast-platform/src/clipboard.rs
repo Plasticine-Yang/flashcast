@@ -32,6 +32,23 @@
 //!
 //! Windows 没有等价的可靠命令行工具（`clip.exe` 按控制台代码页解析输入，中文会乱码），
 //! 因此 Windows 使用 `Win32` 剪贴板 API。
+//!
+//! ## 富文本格式（HTML / RTF）
+//!
+//! 一次复制事件可能同时带纯文本与 HTML/RTF。适配层的责任是：**捕获时把同一次事件的
+//! 全部格式一起读出来**（[`ClipboardCapture`]），**恢复时把同一次事件的公开格式一起
+//! 写回去**（[`ClipboardAccess::write_content`]），让目标应用自己挑。哪些格式真的可用
+//! 取决于平台：
+//!
+//! - Windows：`CF_UNICODETEXT` + `HTML Format` + `Rich Text Format` 可以在一次剪贴板
+//!   打开里同时提供，是唯一三种格式齐全的实现；
+//! - Linux：`wl-paste` / `xclip` 能按 MIME 类型**读**（`--type text/html`、
+//!   `-t text/rtf`），但写回时 `wl-copy` 一次只能指定一个 `--type`，再调用一次会接管
+//!   选区并让上一个格式消失，因此只能提供纯文本，其余格式如实报告为未提供；
+//! - macOS：`pbcopy` / `pbpaste` 只处理纯文本（`-Prefer rtf` 在没有 RTF 时会退回文本
+//!   风味，无法区分，因此不声称支持），只提供纯文本。
+//!
+//! **从不声称**保留了任意应用私有格式：只有上面这些公开格式会被保存与恢复。
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -68,6 +85,136 @@ pub trait ClipboardAccess: Send + Sync {
     fn read_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
         Ok(None)
     }
+
+    /// 按**平台公开格式**一次写入同一次复制的内容：纯文本必选，HTML/RTF 可选。
+    ///
+    /// 目标应用自己挑它要的格式：富文本目标取 HTML/RTF（保留样式），纯文本目标取文本。
+    /// 返回的 [`ClipboardWriteReport`] 必须**如实**说明哪种格式真的进了系统剪贴板；
+    /// 平台后端做不到「一次提供多种格式」时（见 [`ClipboardWriteReport`]），
+    /// 默认实现退化为只写纯文本并报告其余格式被跳过，**不**假装全部保留。
+    fn write_content(
+        &self,
+        content: &ClipboardContent,
+    ) -> Result<ClipboardWriteReport, ClipboardError> {
+        self.write_text(&content.text)?;
+        Ok(ClipboardWriteReport::text_only(
+            "当前平台的剪贴板后端一次只能提供纯文本",
+            content
+                .requested_formats()
+                .into_iter()
+                .filter(|kind| *kind != ClipboardFormatKind::Text),
+        ))
+    }
+}
+
+/// 要写进剪贴板的一次内容：纯文本必选，HTML/RTF 可选。
+///
+/// 这是恢复剪贴板历史时交给系统的东西——**同一次复制**的全部公开格式放在一起，
+/// 让目标应用自己选，而不是由 Flashcast 猜。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ClipboardContent {
+    pub text: String,
+    pub html: Option<String>,
+    pub rtf: Option<String>,
+}
+
+impl ClipboardContent {
+    /// 只有文本的内容。
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            html: None,
+            rtf: None,
+        }
+    }
+
+    /// 附上 HTML 载荷（空串按「没有这个格式」处理）。
+    pub fn with_html(mut self, html: Option<String>) -> Self {
+        self.html = html.filter(|value| !value.is_empty());
+        self
+    }
+
+    /// 附上 RTF 载荷（空串按「没有这个格式」处理）。
+    pub fn with_rtf(mut self, rtf: Option<String>) -> Self {
+        self.rtf = rtf.filter(|value| !value.is_empty());
+        self
+    }
+
+    /// 请求写入的格式集合，顺序固定：文本、HTML、RTF。
+    pub fn requested_formats(&self) -> Vec<ClipboardFormatKind> {
+        let mut formats = vec![ClipboardFormatKind::Text];
+        if self.html.is_some() {
+            formats.push(ClipboardFormatKind::Html);
+        }
+        if self.rtf.is_some() {
+            formats.push(ClipboardFormatKind::Rtf);
+        }
+        formats
+    }
+
+    /// 有没有富文本载荷。
+    pub fn has_rich(&self) -> bool {
+        self.html.is_some() || self.rtf.is_some()
+    }
+}
+
+/// 一种没能写进系统剪贴板的格式与中文原因。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardSkippedFormat {
+    pub kind: ClipboardFormatKind,
+    pub reason: String,
+}
+
+/// 一次写入之后，系统剪贴板里**真的**有哪几种格式。
+///
+/// 这是「如实降级」的载体：平台的剪贴板后端可能无法一次提供多种格式——例如 Wayland
+/// 的 `wl-copy` 每次调用只能指定**一个** `--type`，再调用一次会接管选区并让上一次的
+/// 格式消失（`wl-clipboard 2.2.1` 的 man page：`-t` 决定「wl-copy 提供内容的类型」，
+/// 单数）。这种情况下报告必须写明实际提供的格式与未提供的格式及原因，宿主据此给用户
+/// 准确的中文反馈，而不是声称富文本样式已经保留。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ClipboardWriteReport {
+    /// 真的进了系统剪贴板的格式。
+    pub formats: Vec<ClipboardFormatKind>,
+    /// 没能写进去的格式与原因。
+    pub skipped: Vec<ClipboardSkippedFormat>,
+}
+
+impl ClipboardWriteReport {
+    /// 只写入了文本，并如实记下被跳过的富文本格式（都被同一个原因跳过）。
+    pub fn text_only(reason: &str, skipped: impl IntoIterator<Item = ClipboardFormatKind>) -> Self {
+        Self {
+            formats: vec![ClipboardFormatKind::Text],
+            skipped: skipped
+                .into_iter()
+                .map(|kind| ClipboardSkippedFormat {
+                    kind,
+                    reason: reason.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    /// 有没有格式被跳过（即这次恢复没能把全部格式交回系统）。
+    pub fn degraded(&self) -> bool {
+        !self.skipped.is_empty()
+    }
+
+    /// 面向用户的中文说明：实际提供了哪些格式，哪些没有以及为什么。
+    pub fn describe_zh(&self) -> String {
+        let provided: Vec<&str> = self.formats.iter().map(|kind| kind.label_zh()).collect();
+        let mut text = format!("剪贴板已提供：{}", provided.join("、"));
+        if self.skipped.is_empty() {
+            return text;
+        }
+        let skipped: Vec<String> = self
+            .skipped
+            .iter()
+            .map(|item| format!("{}（{}）", item.kind.label_zh(), item.reason))
+            .collect();
+        text.push_str(&format!("；未提供：{}", skipped.join("、")));
+        text
+    }
 }
 
 /// 一次复制事件里存在的格式。v0.1.0 只捕获文本，其余取值是 ticket 10–12 的扩展点：
@@ -91,6 +238,17 @@ impl ClipboardFormatKind {
             ClipboardFormatKind::Rtf => "rtf",
             ClipboardFormatKind::Image => "image",
             ClipboardFormatKind::Files => "files",
+        }
+    }
+
+    /// 面向用户的中文格式名（结果副标题与恢复反馈都用它）。
+    pub fn label_zh(self) -> &'static str {
+        match self {
+            ClipboardFormatKind::Text => "文字",
+            ClipboardFormatKind::Html => "HTML",
+            ClipboardFormatKind::Rtf => "RTF",
+            ClipboardFormatKind::Image => "图片",
+            ClipboardFormatKind::Files => "文件",
         }
     }
 }
@@ -182,12 +340,19 @@ pub fn mime_for_path(path: &Path) -> Option<String> {
 }
 
 /// 轮询到的一次新复制事件。
+///
+/// 一次复制事件的**全部**格式在同一个结构体里：纯文本与它受支持的富文本格式必须一起
+/// 进入同一条历史，不允许按格式拆成多条记录（那样历史里会出现互相重复的条目）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardCapture {
     /// 本次事件里存在的格式集合。
     pub formats: Vec<ClipboardFormatKind>,
-    /// 文本内容（ticket 09）。文件列表事件通常没有它。
+    /// 文本内容（可索引的检索文字；富文本载荷**不**参与检索）。文件列表事件通常没有它。
     pub text: Option<String>,
+    /// HTML 载荷（平台公开的 `text/html`）。没有时如实为 `None`。
+    pub html: Option<String>,
+    /// RTF 载荷（平台公开的 `text/rtf` 或 Windows 的 `Rich Text Format`）。
+    pub rtf: Option<String>,
     /// 文件列表（ticket 12）。空表示这次复制事件里没有文件。
     pub files: Vec<ClipboardFileEntry>,
     /// 来源应用（平台可提供时）。
@@ -201,6 +366,8 @@ impl ClipboardCapture {
             formats: vec![ClipboardFormatKind::Text],
             text: Some(text.into()),
             files: Vec::new(),
+            html: None,
+            rtf: None,
             source: None,
         }
     }
@@ -211,6 +378,32 @@ impl ClipboardCapture {
             formats: vec![ClipboardFormatKind::Files],
             text: None,
             files: file_entries(paths),
+            html: None,
+            rtf: None,
+            source: None,
+        }
+    }
+
+    /// 一次携带 HTML / RTF 的复制事件。
+    ///
+    /// 空串按「没有这个格式」处理：宁可不声称，也不留下一个空载荷。格式集合由**真的
+    /// 带来了内容**的字段推导，因此宿主记录的格式集合与载荷始终一致。
+    pub fn rich(text: impl Into<String>, html: Option<String>, rtf: Option<String>) -> Self {
+        let html = html.filter(|value| !value.is_empty());
+        let rtf = rtf.filter(|value| !value.is_empty());
+        let mut formats = vec![ClipboardFormatKind::Text];
+        if html.is_some() {
+            formats.push(ClipboardFormatKind::Html);
+        }
+        if rtf.is_some() {
+            formats.push(ClipboardFormatKind::Rtf);
+        }
+        Self {
+            formats,
+            text: Some(text.into()),
+            html,
+            rtf,
+            files: Vec::new(),
             source: None,
         }
     }
@@ -218,6 +411,18 @@ impl ClipboardCapture {
     /// 这次事件是否带有文件列表。
     pub fn has_files(&self) -> bool {
         !self.files.is_empty()
+    }
+
+    /// 本次捕获里真的带来了内容的富文本格式。
+    pub fn rich_formats(&self) -> Vec<ClipboardFormatKind> {
+        let mut formats = Vec::new();
+        if self.html.as_deref().is_some_and(|html| !html.is_empty()) {
+            formats.push(ClipboardFormatKind::Html);
+        }
+        if self.rtf.as_deref().is_some_and(|rtf| !rtf.is_empty()) {
+            formats.push(ClipboardFormatKind::Rtf);
+        }
+        formats
     }
 }
 
@@ -407,6 +612,87 @@ pub fn format_uri_list(paths: &[PathBuf]) -> String {
         out.push_str("\r\n");
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// Windows 的 `HTML Format`（CF_HTML）
+// ---------------------------------------------------------------------------
+
+/// `HTML Format` 头部里的片段起始键。
+const CF_HTML_START: &str = "StartFragment:";
+/// `HTML Format` 头部里的片段结束键。
+const CF_HTML_END: &str = "EndFragment:";
+
+/// CF_HTML 头部的唯一拼装点。四个偏移都用 `{:010}` 定宽输出，因此格式化后的头部长度与
+/// 偏移值无关——这正是 CF_HTML 偏移可以自洽回填的前提。
+fn cf_html_head(
+    start_html: usize,
+    end_html: usize,
+    start_fragment: usize,
+    end_fragment: usize,
+) -> String {
+    use std::fmt::Write;
+    let mut head = String::new();
+    // `write!` 到 String 不会失败；偏移超过 10 位时长度会变，因此下面用断言兜住。
+    let _ = write!(
+        head,
+        "Version:1.0\r\nStartHTML:{start_html:010}\r\nEndHTML:{end_html:010}\r\nStartFragment:{start_fragment:010}\r\nEndFragment:{end_fragment:010}\r\n"
+    );
+    head
+}
+
+/// 把一段 HTML 片段编码成 Windows `HTML Format`（CF_HTML）载荷。
+///
+/// CF_HTML 是「头部 + 完整文档」的字节串，头部里的偏移是**从字节串开头算起的字节数**，
+/// 而且是定宽 10 位十进制。先用全 0 偏移量一次头部长度（与真实头部等长），再回填真实
+/// 偏移并断言长度未变。
+///
+/// 这个函数是**纯逻辑**，放在跨平台模块里，好让 Linux 开发机上也能用真实字节验证编码
+/// （Windows 适配层本身只能在 Windows 上编译与运行）。
+pub fn cf_html_bytes(fragment: &str) -> Vec<u8> {
+    let head_len = cf_html_head(0, 0, 0, 0).len();
+    const OPEN: &str = "<html><body><!--StartFragment-->";
+    const CLOSE: &str = "<!--EndFragment--></body></html>";
+    let start_fragment = head_len + OPEN.len();
+    let end_fragment = start_fragment + fragment.len();
+    let end_html = end_fragment + CLOSE.len();
+    let head = cf_html_head(head_len, end_html, start_fragment, end_fragment);
+    debug_assert_eq!(head.len(), head_len, "CF_HTML 头部必须是定宽偏移");
+    let mut bytes = head.into_bytes();
+    bytes.extend_from_slice(OPEN.as_bytes());
+    bytes.extend_from_slice(fragment.as_bytes());
+    bytes.extend_from_slice(CLOSE.as_bytes());
+    bytes
+}
+
+/// 从 Windows `HTML Format` 载荷里取出 HTML 片段。
+///
+/// 返回 `None` 表示载荷不是 CF_HTML（没有可解析的 `StartFragment` / `EndFragment`），
+/// 调用方据此决定是拒绝还是原样保留——本适配层选择不猜。
+pub fn cf_html_fragment(payload: &str) -> Option<String> {
+    // 头部里的键在文档开始之前；只在开头一段里找，避免正文里的同名文本被误当成头部。
+    let head_end = payload
+        .find("<html")
+        .or_else(|| payload.find("<!DOCTYPE"))
+        .unwrap_or(payload.len())
+        .min(payload.len());
+    let head = &payload[..head_end];
+    let start = cf_html_offset(head, CF_HTML_START)?;
+    let end = cf_html_offset(head, CF_HTML_END)?;
+    // 偏移颠倒或越界说明头部不可信；相等是合法的（空片段）。
+    if start > end || end > payload.len() {
+        return None;
+    }
+    // 偏移落在字符边界之外时 `get` 返回 `None`，同样视为不可解析。
+    payload.get(start..end).map(|fragment| fragment.to_string())
+}
+
+/// 从 CF_HTML 头部里读一个字节偏移。
+fn cf_html_offset(head: &str, key: &str) -> Option<usize> {
+    head.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(key))
+        .and_then(|value| value.trim().parse::<usize>().ok())
 }
 
 /// 剪贴板操作的失败原因。全部为面向用户的中文描述。
@@ -739,5 +1025,58 @@ mod tests {
             .collect();
         assert!(check_files(&over).is_err());
         assert!(check_files(&[PathBuf::from("/tmp/ok.txt")]).is_ok());
+    }
+}
+
+/// CF_HTML 编解码是**纯逻辑**，在 Linux 上也要有真实字节覆盖：Windows 适配层只能在
+/// Windows 上编译运行，如果把它写进 `cfg(target_os = "windows")` 就永远没有本地证据。
+#[cfg(test)]
+mod cf_html_tests {
+    use super::{cf_html_bytes, cf_html_fragment};
+
+    /// 头部里的偏移必须真的指向片段：按偏移切出来的字节就是原文。
+    #[test]
+    fn cf_html_offsets_point_at_the_fragment() {
+        let fragment = "<b>加粗</b>与中文";
+        let payload = cf_html_bytes(fragment);
+        let payload = String::from_utf8(payload).expect("CF_HTML 头部是 ASCII + UTF-8 正文");
+        assert!(payload.starts_with("Version:1.0\r\nStartHTML:"));
+        // 头部是定宽的：StartHTML 的值就是正文开始的位置。
+        let head_len: usize = payload
+            .lines()
+            .find_map(|line| line.strip_prefix("StartHTML:"))
+            .and_then(|value| value.trim().parse().ok())
+            .expect("头部必须有 StartHTML");
+        assert_eq!(
+            &payload[head_len..head_len + "<html>".len()],
+            "<html>",
+            "StartHTML 必须指向 <html> 的开头"
+        );
+        assert_eq!(cf_html_fragment(&payload).as_deref(), Some(fragment));
+    }
+
+    /// 空片段与含 CRLF 的片段同样往返成功。
+    #[test]
+    fn cf_html_round_trips_empty_and_newline_fragments() {
+        for fragment in ["", "第一行\r\n第二行", "<p>a</p><p>b</p>"] {
+            let payload = String::from_utf8(cf_html_bytes(fragment)).expect("UTF-8");
+            assert_eq!(
+                cf_html_fragment(&payload).as_deref(),
+                Some(fragment),
+                "片段「{fragment}」必须原样取回"
+            );
+        }
+    }
+
+    /// 不是 CF_HTML 的载荷（例如浏览器直接给的 HTML 片段）返回 `None`，调用方据此不猜。
+    #[test]
+    fn non_cf_html_payload_is_not_parsed() {
+        assert_eq!(cf_html_fragment("<b>纯 HTML，没有头部</b>"), None);
+        assert_eq!(cf_html_fragment(""), None);
+        // 偏移越界 / 颠倒时同样不猜，也不 panic。
+        assert_eq!(
+            cf_html_fragment("StartHTML:0000000000\r\nStartFragment:0000000099\r\nEndFragment:0000000001\r\n<html></html>"),
+            None
+        );
     }
 }

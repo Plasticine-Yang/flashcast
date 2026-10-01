@@ -51,7 +51,10 @@ pub use device::{
     GIT_CREDENTIALS_FILE, KEY_WORKSPACE_PATH,
 };
 pub use git::{ChangedFile, CommitOutcome, GitError, WorkspaceChanges, MAX_DIFF_CHARS};
-pub use host::{plugin_entry_item, quick_access_commands, Host, HostDeps, PLUGIN_ENTRY_PREFIX};
+pub use host::{
+    clipboard_content_for, plugin_entry_item, quick_access_commands, Host, HostDeps,
+    PLUGIN_ENTRY_PREFIX,
+};
 pub use manifest::{
     ManifestEntry, ManifestError, PluginManifestFile, PluginOrigin, MANIFEST_SCHEMA_VERSION,
 };

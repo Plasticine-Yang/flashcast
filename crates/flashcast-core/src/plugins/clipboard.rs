@@ -156,6 +156,8 @@ impl PluginScope for ClipboardScope {
 ///
 /// 文件列表没有可索引文字（spec「不承诺 OCR」），因此名称与元数据是唯一的检索入口：
 /// 每个文件的名称、MIME 与路径都参与匹配。
+/// **不包含** HTML/RTF 载荷原文（ticket 11）：可索引文字是唯一的检索内容，
+/// 富文本载荷绝不能变成搜索键——否则历史里会凭空多出用户在界面上看不到的匹配项。
 fn metadata_for(event: &ClipboardEvent) -> Vec<String> {
     let mut metadata: Vec<String> = Vec::new();
     if let Some(text) = event.text.as_deref() {
@@ -179,6 +181,14 @@ fn metadata_for(event: &ClipboardEvent) -> Vec<String> {
 }
 
 /// 一条剪贴板历史结果的统一构造：稳定 id、来源、默认操作与完整预览。
+///
+/// ## 预览为什么是惰性文本（ticket 11）
+///
+/// 预览只取 [`ClipboardEvent::text`]——用户可读的**纯文本**——并用 [`Preview::Text`]
+/// 交给 UI 渲染成 React 文本节点。HTML/RTF 载荷既不进 `SearchItem`，也不以任何形式
+/// 插入 DOM，因此剪贴板里带的 `<script>`、`onerror`、远端 `<img>` 既不会执行，也不会
+/// 触发网络请求。这里选择「渲染成惰性文本」而不是「先消毒再以 HTML 插入」：消毒器的
+/// 绕过面就是攻击面，而纯文本渲染在结构上不可能执行内容，也更容易被测试断言。
 pub fn clipboard_item(event: &ClipboardEvent, score: Score) -> SearchItem {
     SearchItem {
         id: event.item_id(),

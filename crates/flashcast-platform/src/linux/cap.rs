@@ -104,7 +104,7 @@ fn clipboard_support(session: SessionType) -> Support {
         SessionType::Wayland => match wayland_tool {
             Some(tool) => Support::Unknown {
                 reason: format!(
-                    "文本复制已由 ticket 07 实现；图片、富文本与文件列表尚未实现（ticket 09/10 覆盖）；环境已具备 {tool}"
+                    "文字与 HTML/RTF 公开格式已实现（ticket 09/11：读按 MIME 类型，写只提供纯文本）；图片与文件列表尚未实现（ticket 10/12 覆盖）；环境已具备 {tool}"
                 ),
             },
             None => Support::Unsupported {
@@ -114,7 +114,7 @@ fn clipboard_support(session: SessionType) -> Support {
         _ => match x11_tool {
             Some(tool) => Support::Unknown {
                 reason: format!(
-                    "文本复制已由 ticket 07 实现；图片、富文本与文件列表尚未实现（ticket 09/10 覆盖）；环境已具备 {tool}"
+                    "文字与 HTML/RTF 公开格式已实现（ticket 09/11：读按 MIME 类型，写只提供纯文本）；图片与文件列表尚未实现（ticket 10/12 覆盖）；环境已具备 {tool}"
                 ),
             },
             None => Support::Unsupported {

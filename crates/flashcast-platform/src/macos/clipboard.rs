@@ -10,14 +10,18 @@
 //!
 //! 来源应用在 macOS 上拿不到（`pbpaste` 不报告来源，`NSPasteboard` 也没有公开接口），
 //! 因此如实留空，而不是猜一个。
+//!
+//! 富文本：`pbcopy` / `pbpaste` 只处理纯文本，`-Prefer rtf` 在没有 RTF 风味时会退回它挑
+//! 得到的内容、无法区分真伪，因此 macOS 上既不声称捕获、也不声称恢复 HTML/RTF。
 
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::clipboard::{
     check_files, check_text, file_entries, find_program, fingerprint, fingerprint_files,
-    read_with_tool, write_with_tool, ClipboardAccess, ClipboardCapture, ClipboardError,
-    ClipboardFormatKind, ClipboardPoll, ClipboardWatcher,
+    read_with_tool, write_with_tool, ClipboardAccess, ClipboardCapture,
+    ClipboardContent, ClipboardError, ClipboardFormatKind, ClipboardPoll,
+    ClipboardWatcher, ClipboardWriteReport,
 };
 
 /// macOS 的文本剪贴板后端。
@@ -222,6 +226,31 @@ fn wait_bounded(
     }
 }
 
+impl ClipboardAccess for MacosClipboard {
+    /// 恢复剪贴板历史：`pbcopy` 只接收纯文本，因此只提供文本并如实报告。
+    ///
+    /// `pbpaste -Prefer rtf` / `-Prefer ps` 存在，但对**写入**没有对应开关；读取侧也不
+    /// 可靠：`pbpaste` 在没有该风味时会退回它挑得到的内容，无法区分「真的是 RTF」与
+    /// 「拿到的其实是纯文本」。因此 macOS 上不声称保存或恢复了 HTML/RTF。
+    fn write_content(
+        &self,
+        content: &ClipboardContent,
+    ) -> Result<ClipboardWriteReport, ClipboardError> {
+        check_text(&content.text)?;
+        let program = find_program("pbcopy").ok_or_else(|| ClipboardError::ToolMissing {
+            reason: "未找到 /usr/bin/pbcopy".to_string(),
+        })?;
+        write_with_tool(&program, &[], &content.text)?;
+        Ok(ClipboardWriteReport::text_only(
+            "pbcopy 只支持纯文本，富文本格式无法写回系统剪贴板",
+            content
+                .requested_formats()
+                .into_iter()
+                .filter(|kind| *kind != ClipboardFormatKind::Text),
+        ))
+    }
+}
+
 /// macOS 的剪贴板变化监听（内容指纹 + 自身写入抑制）。
 pub struct MacosClipboardWatcher {
     last: Mutex<Option<u64>>,
@@ -298,6 +327,9 @@ impl ClipboardWatcher for MacosClipboardWatcher {
             formats: vec![ClipboardFormatKind::Text],
             text: Some(text),
             files: Vec::new(),
+            // pbpaste 不报告 HTML/RTF 风味究竟是不是真的，因此不声称保存了它们。
+            html: None,
+            rtf: None,
             // 来源应用在 macOS 上不可得：如实留空。
             source: None,
         }))

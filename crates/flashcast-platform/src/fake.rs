@@ -14,8 +14,11 @@ use crate::chrome::{
     ChromeLaunchRequest, ChromeProvider, UserDataCandidate,
 };
 use crate::clipboard::{
-    ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFileEntry, ClipboardFormatKind,
-    ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
+use crate::clipboard::{
+    ClipboardAccess, ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFileEntry,
+    ClipboardFormatKind, ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
+    ClipboardWriteReport,
+};
 };
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
@@ -300,13 +303,21 @@ impl Paster for FakePaster {
 /// `failures` 非空时按顺序返回失败（用尽后重复最后一个），用于验证「复制失败必须给出
 /// 准确反馈」；默认总是成功。`read_text` 返回最后一次写入的内容，因此它同时充当
 /// 「系统剪贴板里现在是什么」的可观察视图（ticket 09）。
+///
+/// 富文本（ticket 11）：每次写入的**完整内容**（文本 + HTML + RTF）都被记下来，
+/// 测试因此能断言「恢复时到底把哪些格式放进了剪贴板」，而不是只看「调用过恢复」。
+/// `rich_unsupported` 模拟只能提供纯文本的平台（Linux 的 `wl-copy`、macOS 的 `pbcopy`）：
+/// 此时 `write_content` 只写文本，并按给定的原因如实报告其它格式被跳过。
 #[derive(Default)]
 pub struct FakeClipboard {
     writes: Mutex<Vec<String>>,
     /// 按顺序记录的**文件列表**写入（ticket 12）。
     file_writes: Mutex<Vec<Vec<PathBuf>>>,
+    contents: Mutex<Vec<ClipboardContent>>,
+    reports: Mutex<Vec<ClipboardWriteReport>>,
     failures: Mutex<Vec<ClipboardError>>,
     read_failures: Mutex<Vec<ClipboardError>>,
+    rich_unsupported: Mutex<Option<String>>,
 }
 
 impl FakeClipboard {
@@ -331,6 +342,14 @@ impl FakeClipboard {
         }
     }
 
+    /// 只能提供纯文本的平台样子：富文本格式如实报告为未提供。
+    pub fn text_only(reason: &str) -> Self {
+        Self {
+            rich_unsupported: Mutex::new(Some(reason.to_string())),
+            ..Self::default()
+        }
+    }
+
     /// 直接设置当前剪贴板内容，模拟「外部应用写入了剪贴板」。
     pub fn set_text(&self, text: impl Into<String>) {
         lock(&self.writes).push(text.into());
@@ -344,6 +363,26 @@ impl FakeClipboard {
     /// 已写入的文本，按顺序。
     pub fn writes(&self) -> Vec<String> {
         lock(&self.writes).clone()
+    }
+
+    /// 已写入的完整内容（文本 + 富文本），按顺序。
+    pub fn contents(&self) -> Vec<ClipboardContent> {
+        lock(&self.contents).clone()
+    }
+
+    /// 最近一次写入的完整内容。
+    pub fn last_content(&self) -> Option<ClipboardContent> {
+        lock(&self.contents).last().cloned()
+    }
+
+    /// 每次写入返回的报告，按顺序。
+    pub fn reports(&self) -> Vec<ClipboardWriteReport> {
+        lock(&self.reports).clone()
+    }
+
+    /// 最近一次写入返回的报告。
+    pub fn last_report(&self) -> Option<ClipboardWriteReport> {
+        lock(&self.reports).last().cloned()
     }
 
     /// 最近一次写入的文本。
@@ -368,15 +407,8 @@ impl FakeClipboard {
 
 impl ClipboardAccess for FakeClipboard {
     fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
-        crate::clipboard::check_text(text)?;
-        let failures = lock(&self.failures);
-        if !failures.is_empty() {
-            let index = lock(&self.writes).len().min(failures.len() - 1);
-            return Err(failures[index].clone());
-        }
-        drop(failures);
-        lock(&self.writes).push(text.to_string());
-        Ok(())
+        self.write_content(&ClipboardContent::text(text))
+            .map(|_| ())
     }
 
     fn read_text(&self) -> Result<Option<String>, ClipboardError> {
@@ -415,6 +447,36 @@ impl ClipboardAccess for FakeClipboard {
         drop(failures);
         Ok(lock(&self.file_writes).last().cloned())
     }
+
+    fn write_content(
+        &self,
+        content: &ClipboardContent,
+    ) -> Result<ClipboardWriteReport, ClipboardError> {
+        crate::clipboard::check_text(&content.text)?;
+        let failures = lock(&self.failures);
+        if !failures.is_empty() {
+            let index = lock(&self.writes).len().min(failures.len() - 1);
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        let report = match lock(&self.rich_unsupported).clone() {
+            Some(reason) => ClipboardWriteReport::text_only(
+                &reason,
+                content
+                    .requested_formats()
+                    .into_iter()
+                    .filter(|kind| *kind != ClipboardFormatKind::Text),
+            ),
+            None => ClipboardWriteReport {
+                formats: content.requested_formats(),
+                skipped: Vec::new(),
+            },
+        };
+        lock(&self.writes).push(content.text.clone());
+        lock(&self.contents).push(content.clone());
+        lock(&self.reports).push(report.clone());
+        Ok(report)
+    }
 }
 
 /// 可控的剪贴板变化监听替身（ticket 09）。
@@ -436,6 +498,9 @@ struct FakeWatcherState {
     text: Option<String>,
     /// 当前剪贴板里的文件列表（ticket 12）；非空时优先按文件报告。
     files: Vec<ClipboardFileEntry>,
+    /// 同一次复制事件里的 HTML / RTF 载荷（ticket 11）。
+    html: Option<String>,
+    rtf: Option<String>,
     formats: Vec<ClipboardFormatKind>,
     source: Option<ClipboardSourceApp>,
     /// 外部写入序号：每次写入（含自身写入）自增。
@@ -458,6 +523,8 @@ impl Default for FakeClipboardWatcher {
             state: Mutex::new(FakeWatcherState {
                 text: None,
                 files: Vec::new(),
+                html: None,
+                rtf: None,
                 formats: Vec::new(),
                 source: None,
                 sequence: 0,
@@ -499,6 +566,9 @@ impl FakeClipboardWatcher {
         let mut state = lock(&self.state);
         state.text = Some(text.into());
         state.files = Vec::new();
+        // 纯文本复制没有富文本格式：残留的载荷必须被清掉，否则会把上一次的内容带进来。
+        state.html = None;
+        state.rtf = None;
         state.formats = vec![ClipboardFormatKind::Text];
         state.sequence += 1;
     }
@@ -511,6 +581,24 @@ impl FakeClipboardWatcher {
         state.text = None;
         state.files = crate::clipboard::file_entries(paths);
         state.formats = vec![ClipboardFormatKind::Files];
+        state.html = None;
+        state.rtf = None;
+        state.sequence += 1;
+    }
+
+    /// 模拟一次携带富文本的复制：文本、HTML、RTF 属于**同一次**事件，下一次 `poll`
+    /// 只报告一条捕获（因此只会产生一条历史）。
+    pub fn set_rich(&self, text: &str, html: Option<&str>, rtf: Option<&str>) {
+        let capture = ClipboardCapture::rich(
+            text.to_string(),
+            html.map(str::to_string),
+            rtf.map(str::to_string),
+        );
+        let mut state = lock(&self.state);
+        state.text = capture.text.clone();
+        state.html = capture.html.clone();
+        state.rtf = capture.rtf.clone();
+        state.formats = capture.formats.clone();
         state.sequence += 1;
     }
 
@@ -572,6 +660,8 @@ impl ClipboardWatcher for FakeClipboardWatcher {
                 formats: state.formats.clone(),
                 text: None,
                 files: state.files.clone(),
+                html: None,
+                rtf: None,
                 source: state.source.clone(),
             }));
         }
@@ -591,6 +681,8 @@ impl ClipboardWatcher for FakeClipboardWatcher {
             formats: state.formats.clone(),
             text: Some(text),
             files: Vec::new(),
+            html: state.html.clone(),
+            rtf: state.rtf.clone(),
             source: state.source.clone(),
         }))
     }
@@ -601,9 +693,13 @@ impl ClipboardWatcher for FakeClipboardWatcher {
         if !text.is_empty() {
             state.own.push(crate::clipboard::fingerprint(text));
         }
-        // 自身写入同样改变剪贴板（序号自增），只是不会被报告成复制事件。
+        // 自身写入同样改变剪贴板（序号自增），只是不会被报告成复制事件。恢复一条历史时
+        // 宿主写入的是「文本 + 富文本」，适配层的抑制以文本指纹为准（真实适配层同理：
+        // 序号或文本指纹），因此自身写入不会形成循环。
         state.text = Some(text.to_string());
         state.files = Vec::new();
+        state.html = None;
+        state.rtf = None;
         state.sequence += 1;
     }
 
@@ -618,6 +714,8 @@ impl ClipboardWatcher for FakeClipboardWatcher {
             .push(crate::clipboard::fingerprint_files(paths));
         state.text = None;
         state.files = crate::clipboard::file_entries(paths);
+        state.html = None;
+        state.rtf = None;
         state.formats = vec![ClipboardFormatKind::Files];
         state.sequence += 1;
     }

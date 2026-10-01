@@ -1199,6 +1199,14 @@ impl ClipboardHarness {
         self.watcher.set_text(text);
     }
 
+    /// 模拟一次携带 HTML/RTF 的外部复制（只改剪贴板，不捕获）。
+    ///
+    /// 文本与富文本格式属于**同一次**事件：下一次 `capture_clipboard_once` 只报告一次
+    /// 变化，因此只会产生一条历史（ticket 11 的关键要求）。
+    pub fn copy_rich_only(&self, text: &str, html: Option<&str>, rtf: Option<&str>) {
+        self.watcher.set_rich(text, html, rtf);
+    }
+
     /// 唤起：外壳在显示窗口之前捕获前台应用，并交给宿主作为粘贴目标。
     ///
     /// 与 ticket 08 的 `PasteHarness::summon` 同一语义：焦点替身与宿主的目标必须
@@ -1217,6 +1225,17 @@ impl ClipboardHarness {
     /// 模拟一次外部**文件列表**复制（ticket 12）并同步捕获一次。
     pub fn copy_files(&self, paths: &[std::path::PathBuf]) -> ClipboardCaptureOutcome {
         self.watcher.set_files(paths);
+        self.host.capture_clipboard_once()
+    }
+
+    /// 模拟一次携带富文本的外部复制并同步捕获一次。
+    pub fn copy_rich(
+        &self,
+        text: &str,
+        html: Option<&str>,
+        rtf: Option<&str>,
+    ) -> ClipboardCaptureOutcome {
+        self.copy_rich_only(text, html, rtf);
         self.host.capture_clipboard_once()
     }
 
@@ -1264,7 +1283,38 @@ pub fn clipboard_host_with_watcher(
     settings: Settings,
     watcher: Arc<FakeClipboardWatcher>,
 ) -> ClipboardHarness {
-    let clipboard = Arc::new(FakeClipboard::new());
+    clipboard_host_with_adapters(
+        device_dir,
+        settings,
+        Arc::new(FakeClipboard::new()),
+        watcher,
+    )
+}
+
+/// 同 [`clipboard_host_with_device`]，但注入调用方提供的**剪贴板写入替身**。
+///
+/// ticket 11 用它模拟「平台只能提供纯文本」（Linux 的 `wl-copy`、macOS 的 `pbcopy`）：
+/// 宿主仍然把全部格式交给平台，平台如实报告哪些没写进去。
+pub fn clipboard_host_with_clipboard(
+    device_dir: &Path,
+    settings: Settings,
+    clipboard: Arc<FakeClipboard>,
+) -> ClipboardHarness {
+    clipboard_host_with_adapters(
+        device_dir,
+        settings,
+        clipboard,
+        Arc::new(FakeClipboardWatcher::new()),
+    )
+}
+
+/// 剪贴板历史测试宿主的最底层构造：读写与监听替身都由调用方提供。
+pub fn clipboard_host_with_adapters(
+    device_dir: &Path,
+    settings: Settings,
+    clipboard: Arc<FakeClipboard>,
+    watcher: Arc<FakeClipboardWatcher>,
+) -> ClipboardHarness {
     let focus = Arc::new(FakeFocusTracker::default());
     // 粘贴替身观察剪贴板：验证「注入时剪贴板里就是这条历史的内容」。
     let paster = Arc::new(FakePaster::observing(Arc::clone(&clipboard)));

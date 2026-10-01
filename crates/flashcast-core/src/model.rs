@@ -259,6 +259,13 @@ pub struct PastePlan {
     /// 本次复制的是**文件列表**时的文件个数；文字为 0（ticket 12）。
     #[serde(default)]
     pub files: usize,
+    /// 平台未能同时提供的格式说明（ticket 11）。
+    ///
+    /// `None` 表示这次恢复把该条历史的全部公开格式都放进了剪贴板；`Some` 时里面写清了
+    /// 实际提供了哪些格式、哪些没有以及原因。外壳在粘贴完成后把它一并显示给用户，
+    /// 避免用户以为富文本样式也一起粘贴过去了。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formats_note: Option<String>,
 }
 
 /// 命令入口的返回。
