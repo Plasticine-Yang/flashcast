@@ -107,6 +107,114 @@ pub trait ClipboardAccess: Send + Sync {
         })
     }
 }
+
+/// 要写进剪贴板的一次内容：纯文本必选，HTML/RTF 可选。
+///
+/// 这是恢复剪贴板历史时交给系统的东西——**同一次复制**的全部公开格式放在一起，
+/// 让目标应用自己选，而不是由 Flashcast 猜。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ClipboardContent {
+    pub text: String,
+    pub html: Option<String>,
+    pub rtf: Option<String>,
+}
+
+impl ClipboardContent {
+    /// 只有文本的内容。
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            html: None,
+            rtf: None,
+        }
+    }
+
+    /// 附上 HTML 载荷（空串按「没有这个格式」处理）。
+    pub fn with_html(mut self, html: Option<String>) -> Self {
+        self.html = html.filter(|value| !value.is_empty());
+        self
+    }
+
+    /// 附上 RTF 载荷（空串按「没有这个格式」处理）。
+    pub fn with_rtf(mut self, rtf: Option<String>) -> Self {
+        self.rtf = rtf.filter(|value| !value.is_empty());
+        self
+    }
+
+    /// 请求写入的格式集合，顺序固定：文本、HTML、RTF。
+    pub fn requested_formats(&self) -> Vec<ClipboardFormatKind> {
+        let mut formats = vec![ClipboardFormatKind::Text];
+        if self.html.is_some() {
+            formats.push(ClipboardFormatKind::Html);
+        }
+        if self.rtf.is_some() {
+            formats.push(ClipboardFormatKind::Rtf);
+        }
+        formats
+    }
+
+    /// 有没有富文本载荷。
+    pub fn has_rich(&self) -> bool {
+        self.html.is_some() || self.rtf.is_some()
+    }
+}
+
+/// 一种没能写进系统剪贴板的格式与中文原因。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardSkippedFormat {
+    pub kind: ClipboardFormatKind,
+    pub reason: String,
+}
+
+/// 一次写入之后，系统剪贴板里**真的**有哪几种格式。
+///
+/// 这是「如实降级」的载体：平台的剪贴板后端可能无法一次提供多种格式——例如 Wayland
+/// 的 `wl-copy` 每次调用只能指定**一个** `--type`，再调用一次会接管选区并让上一次的
+/// 格式消失（`wl-clipboard 2.2.1` 的 man page：`-t` 决定「wl-copy 提供内容的类型」，
+/// 单数）。这种情况下报告必须写明实际提供的格式与未提供的格式及原因，宿主据此给用户
+/// 准确的中文反馈，而不是声称富文本样式已经保留。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ClipboardWriteReport {
+    /// 真的进了系统剪贴板的格式。
+    pub formats: Vec<ClipboardFormatKind>,
+    /// 没能写进去的格式与原因。
+    pub skipped: Vec<ClipboardSkippedFormat>,
+}
+
+impl ClipboardWriteReport {
+    /// 只写入了文本，并如实记下被跳过的富文本格式（都被同一个原因跳过）。
+    pub fn text_only(reason: &str, skipped: impl IntoIterator<Item = ClipboardFormatKind>) -> Self {
+        Self {
+            formats: vec![ClipboardFormatKind::Text],
+            skipped: skipped
+                .into_iter()
+                .map(|kind| ClipboardSkippedFormat {
+                    kind,
+                    reason: reason.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    /// 有没有格式被跳过（即这次恢复没能把全部格式交回系统）。
+    pub fn degraded(&self) -> bool {
+        !self.skipped.is_empty()
+    }
+
+    /// 面向用户的中文说明：实际提供了哪些格式，哪些没有以及为什么。
+    pub fn describe_zh(&self) -> String {
+        let provided: Vec<&str> = self.formats.iter().map(|kind| kind.label_zh()).collect();
+        let mut text = format!("剪贴板已提供：{}", provided.join("、"));
+        if self.skipped.is_empty() {
+            return text;
+        }
+        let skipped: Vec<String> = self
+            .skipped
+            .iter()
+            .map(|item| format!("{}（{}）", item.kind.label_zh(), item.reason))
+            .collect();
+        text.push_str(&format!("；未提供：{}", skipped.join("、")));
+        text
     }
 }
 
@@ -1244,6 +1352,8 @@ mod tests {
 #[cfg(test)]
 mod image_tests {
     use super::*;
+    // `DynamicImage` 的 `dimensions()` 来自这个 trait，不在 prelude 里。
+    use image::GenericImageView;
 
     fn png_of(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
         encode_png(width, height, rgba).expect("编码 PNG")
@@ -1395,8 +1505,8 @@ mod image_tests {
 
         // 原图比上限还小：保持原尺寸，不放大。
         let small = png_of(12, 8, &vec![9u8; 12 * 8 * 4]);
-        let decoded = image::load_from_memory(&png_thumbnail(&small, 96).expect("缩略图"))
-            .expect("可解码");
+        let decoded =
+            image::load_from_memory(&png_thumbnail(&small, 96).expect("缩略图")).expect("可解码");
         assert_eq!(decoded.dimensions(), (12, 8));
 
         // 不是 PNG 的字节如实失败，不产出半张图。

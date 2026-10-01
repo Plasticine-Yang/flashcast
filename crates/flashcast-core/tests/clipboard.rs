@@ -947,7 +947,12 @@ fn html_and_rtf_land_in_the_same_entry() {
         Some(String::new()),
         None,
     );
-    let event = flashcast_core::event_from_capture(&empty, 1).expect("有文本就有事件");
+    let event = flashcast_core::event_from_capture(
+        &empty,
+        1,
+        &unique_dir("clipboard-rich-empty-attachments"),
+    )
+    .expect("有文本就有事件");
     assert_eq!(
         event.formats,
         vec![flashcast_core::ClipboardFormat::Text { bytes: 12 }],
@@ -1644,6 +1649,8 @@ fn oversize_and_undecodable_images_report_honest_failures() {
             text: Some("图片之外还有文字".to_string()),
             image: None,
             image_problem: Some("图片超过上限".to_string()),
+            html: None,
+            rtf: None,
             source: None,
         },
         1_700_000_000_000,

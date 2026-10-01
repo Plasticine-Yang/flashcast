@@ -277,6 +277,16 @@ pub fn event_from_capture(
         Some(text) => summary_for_text(text),
         None => summary_for_image(image.expect("上面已经排除了两者都为空")),
     };
+
+    Some(ClipboardEvent {
+        id: new_event_id(),
+        captured_at_ms: now_ms,
+        content_hash,
+        summary,
+        text,
+        formats,
+        attachments: attachment.into_iter().collect(),
+        payloads,
         source: capture.source.clone(),
         pinned: false,
         copies: 1,
