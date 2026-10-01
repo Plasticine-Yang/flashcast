@@ -13,12 +13,13 @@ interface Props {
 /**
  * 内容预览：紧凑列表下方的按需展开区。
  *
- * 默认列表保持紧凑；选中备忘录时这里给出**完整正文**，粘贴前可以确认结果。
+ * 默认列表保持紧凑；选中备忘录时这里给出**完整正文**，粘贴前可以确认结果；
+ * 选中书签时给出完整链接与目录，打开前可以确认目标。
  * 展开 / 收起只改这一块的高度，不动窗口尺寸，也不做动画（高频键盘操作）。
  */
 export function MemoPreview({ item, preview, open, onToggle }: Props) {
   const text = preview && preview.kind === "text" ? preview : null;
-  if (!item || item.kind !== "memo" || !text) {
+  if (!item || (item.kind !== "memo" && item.kind !== "bookmark") || !text) {
     return null;
   }
   return (

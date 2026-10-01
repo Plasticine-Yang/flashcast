@@ -13,16 +13,26 @@
 //! 4. 需要原生能力的动作由宿主执行（例如复制走 `Host::execute` 里的权限校验与
 //!    `ClipboardAccess`），插件的默认操作只是声明「回车会做什么」。
 
+pub mod chrome;
 pub mod memo;
 
 use std::sync::Arc;
 
+use crate::chrome::BookmarkIndex;
 use crate::memo::MemoBook;
 use crate::registry::PluginRegistry;
 
+pub use chrome::{
+    ChromeBookmarksPlugin, CAP_CHROME_OPEN, CHROME_KEYWORD_EN, CHROME_KEYWORD_ZH, CHROME_PLUGIN_ID,
+};
 pub use memo::{MemoPlugin, MEMO_PLUGIN_ID};
 
 /// 注册全部官方功能插件。重复注册同一 id 时注册表保留先注册的那个。
-pub fn register_official(registry: &PluginRegistry, memos: &Arc<MemoBook>) {
+pub fn register_official(
+    registry: &PluginRegistry,
+    memos: &Arc<MemoBook>,
+    bookmarks: &Arc<BookmarkIndex>,
+) {
     registry.register(Arc::new(MemoPlugin::new(Arc::clone(memos))));
+    registry.register(Arc::new(ChromeBookmarksPlugin::new(Arc::clone(bookmarks))));
 }

@@ -8,6 +8,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::capability::{Capabilities, CapabilityProbe, OsKind, SessionType, Support};
 use crate::catalog::{AppCatalog, AppEntry, CatalogError};
+use crate::chrome::{
+    discover_from_paths, BinaryCandidate, ChromeEnvironment, ChromeError, ChromeLaunch,
+    ChromeLaunchRequest, ChromeProvider, UserDataCandidate,
+};
 use crate::clipboard::{ClipboardAccess, ClipboardError};
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
@@ -404,3 +408,110 @@ pub fn sample_app(id: &str, name: &str) -> AppEntry {
 
 /// 便捷类型别名：共享的替身目录。
 pub type SharedCatalog = Arc<FakeAppCatalog>;
+
+/// 记录启动请求的 Chrome 替身。
+///
+/// 关键点：**发现**走的是真实的 [`discover_from_paths`]（真实的存在性检查与真实的
+/// `Local State` 解析），只有**启动**被替换成记录 argv。因此宿主集成测试可以用临时夹具
+/// 目录走完真实发现代码，同时精确断言交给 Chrome 的参数向量，而不会真的启动浏览器。
+pub struct FakeChrome {
+    discovery: FakeChromeDiscovery,
+    launches: Mutex<Vec<ChromeLaunchRequest>>,
+    launch_error: Mutex<Option<ChromeError>>,
+    discovery_count: AtomicUsize,
+}
+
+/// 替身的发现来源。
+enum FakeChromeDiscovery {
+    /// 每次 `discover` 都按这些候选做**真实**发现：文件在夹具里变化后能被看见，
+    /// 与真实适配器的「每次调用都重新发现」一致。
+    Candidates {
+        binaries: Vec<BinaryCandidate>,
+        user_data: Vec<UserDataCandidate>,
+    },
+    /// 固定的发现结果（「Chrome 未安装」、profile 不可读等场景）。
+    Fixed(Box<Result<ChromeEnvironment, ChromeError>>),
+}
+
+impl FakeChrome {
+    /// 用给定的候选路径做真实发现。
+    pub fn from_candidates(
+        binaries: Vec<BinaryCandidate>,
+        user_data: Vec<UserDataCandidate>,
+    ) -> Self {
+        Self {
+            discovery: FakeChromeDiscovery::Candidates {
+                binaries,
+                user_data,
+            },
+            launches: Mutex::new(Vec::new()),
+            launch_error: Mutex::new(None),
+            discovery_count: AtomicUsize::new(0),
+        }
+    }
+
+    /// 直接给出发现结果（例如「Chrome 未安装」或 profile 不可读的场景）。
+    pub fn with_environment(environment: Result<ChromeEnvironment, ChromeError>) -> Self {
+        Self {
+            discovery: FakeChromeDiscovery::Fixed(Box::new(environment)),
+            launches: Mutex::new(Vec::new()),
+            launch_error: Mutex::new(None),
+            discovery_count: AtomicUsize::new(0),
+        }
+    }
+
+    /// 模拟「没有找到 Chrome 可执行文件」。
+    pub fn not_installed(reason: &str) -> Self {
+        Self::with_environment(Err(ChromeError::NotInstalled {
+            searched: reason.to_string(),
+        }))
+    }
+
+    /// 让之后的启动都返回同一个错误。
+    pub fn always_fails_launch(self, error: ChromeError) -> Self {
+        *lock(&self.launch_error) = Some(error);
+        self
+    }
+
+    /// 已收到的启动请求，按顺序。
+    pub fn launches(&self) -> Vec<ChromeLaunchRequest> {
+        lock(&self.launches).clone()
+    }
+
+    /// 最近一次启动请求。
+    pub fn last_launch(&self) -> Option<ChromeLaunchRequest> {
+        lock(&self.launches).last().cloned()
+    }
+
+    pub fn launch_count(&self) -> usize {
+        lock(&self.launches).len()
+    }
+
+    pub fn discovery_count(&self) -> usize {
+        self.discovery_count.load(Ordering::SeqCst)
+    }
+}
+
+impl ChromeProvider for FakeChrome {
+    fn discover(&self) -> Result<ChromeEnvironment, ChromeError> {
+        self.discovery_count.fetch_add(1, Ordering::SeqCst);
+        match &self.discovery {
+            FakeChromeDiscovery::Candidates {
+                binaries,
+                user_data,
+            } => discover_from_paths(binaries, user_data),
+            FakeChromeDiscovery::Fixed(result) => (**result).clone(),
+        }
+    }
+
+    fn launch(&self, request: &ChromeLaunchRequest) -> Result<ChromeLaunch, ChromeError> {
+        if let Some(error) = lock(&self.launch_error).clone() {
+            return Err(error);
+        }
+        lock(&self.launches).push(request.clone());
+        Ok(ChromeLaunch {
+            pid: Some(4321),
+            argv: request.argv(),
+        })
+    }
+}

@@ -89,6 +89,20 @@ const MEMO_SAVE = '[data-testid="memo-save"]';
 const MEMO_PREVIEW = '[data-testid="memo-preview"]';
 const MEMO_PREVIEW_BODY = '[data-testid="memo-preview-body"]';
 const MEMO_PREVIEW_TOGGLE = '[data-testid="memo-preview-toggle"]';
+// Chrome 书签（ticket 13）。
+const CHROME_SECTION = '[data-testid="chrome-section"]';
+const CHROME_AVAILABILITY = '[data-testid="chrome-availability"]';
+const CHROME_USER_DATA_DIR = '[data-testid="chrome-user-data-dir"]';
+const CHROME_ASSOCIATION = '[data-testid="chrome-association"]';
+const CHROME_BOOKMARKS_STATUS = '[data-testid="chrome-bookmarks-status"]';
+const CHROME_BOOKMARKS_PATH = '[data-testid="chrome-bookmarks-path"]';
+const CHROME_REFRESH = '[data-testid="chrome-refresh"]';
+const CHROME_ERROR = '[data-testid="chrome-error"]';
+const CHROME_PROFILE = '[data-testid="chrome-profile"]';
+const CHROME_ASSOCIATE = '[data-testid="chrome-associate"]';
+const CHROME_ASSOCIATED_BADGE = '[data-testid="chrome-associated-badge"]';
+const BOOKMARK_ICON = '[data-testid="bookmark-icon"]';
+const PLUGIN_FAILURE = '[data-testid="plugin-failure"]';
 
 const THEME_LIGHT = "flashcast.theme.light";
 const THEME_DARK = "flashcast.theme.dark";
@@ -114,6 +128,10 @@ const MOCK_CLONE_TARGET = "/home/user/flashcast-clone";
 const MOCK_CLONE_URL = "https://github.com/me/flashcast-config.git";
 const MOCK_CLONE_BAD_URL = "https://github.com/me/not-found-config.git";
 const MOCK_CLONE_SECRET_URL = "https://alice:sekret@github.com/me/flashcast-config.git";
+// Chrome 书签（见 src/api.ts 的 MOCK_BOOKMARKS）。
+const MOCK_CHROME_KEYWORD_EN = "chrome bookmarks";
+const MOCK_CHROME_KEYWORD_ZH = "chrome 书签";
+const MOCK_CHROME_DEFAULT_PROFILE = "Profile 1";
 
 const lines = [];
 function log(line) {
@@ -1933,6 +1951,289 @@ async function main() {
       );
       const recovered = (await rows(page)).filter((row) => row.kind === "memo").length;
       return `停用后标签与关键词都不再命中、管理入口拒绝写入；重新启用后命中 ${recovered} 条，截图 ${disabledShot} / ${searchShot}`;
+    });
+
+    // 30. Chrome 书签：两个关键词别名进入范围，结果带网址、目录与浏览器图标。
+    await check("Chrome 书签按中英文别名进入范围并给出网址与目录", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+
+      for (const alias of [MOCK_CHROME_KEYWORD_EN, MOCK_CHROME_KEYWORD_ZH]) {
+        await page.fill(INPUT, alias);
+        await page.waitForFunction(
+          ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+          { sel: SCOPE_LABEL, expected: `${alias} 范围` },
+        );
+        const inScope = await rows(page);
+        assert(inScope.length === 4, `${alias} 范围应列出 4 条书签，实际 ${inScope.length} 条`);
+        assert(
+          inScope.every((row) => row.kind === "bookmark"),
+          `范围内的结果必须都是书签条目：${inScope.map((row) => row.kind).join("/")}`,
+        );
+      }
+
+      const action = await text(DEFAULT_ACTION_LABEL);
+      assert(action === "在 Chrome 打开", `书签的默认操作必须是在 Chrome 打开，实际「${action}」`);
+
+      // 每条结果都要有网址与目录，并有浏览器图标（不是首字符占位）。
+      const subtitles = await page.$$eval(ROW, (nodes) =>
+        nodes.map((node) => node.querySelector(".result-subtitle")?.textContent ?? ""),
+      );
+      assert(
+        subtitles.some((line) => line.includes("https://www.rust-lang.org/")),
+        `结果里必须能看到网址：${subtitles.join(" | ")}`,
+      );
+      assert(
+        subtitles.some((line) => line.includes("目录：书签栏 / 开发")),
+        `结果里必须能看到目录路径：${subtitles.join(" | ")}`,
+      );
+      const icons = await page.$$(BOOKMARK_ICON);
+      assert(icons.length === 4, `每条书签结果都要有浏览器图标，实际 ${icons.length} 个`);
+
+      // 预览给出完整链接与目录（打开前可以确认目标）。
+      // 关键词必须**完整匹配**才进入范围，因此先用英文别名进入范围，再继续输入查询。
+      await page.fill(INPUT, MOCK_CHROME_KEYWORD_EN);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SCOPE_LABEL, expected: `${MOCK_CHROME_KEYWORD_EN} 范围` },
+      );
+      await page.fill(INPUT, `${MOCK_CHROME_KEYWORD_EN} intranet`);
+      await waitForRowCount(page, 1);
+      await page.waitForSelector(MEMO_PREVIEW);
+      const body = await text(MEMO_PREVIEW_BODY);
+      assert(
+        body.includes("token=abc") && body.includes("目录：其他书签"),
+        `预览必须是完整链接与目录，实际「${body}」`,
+      );
+      const scopeShot = await shot(page, "53-chrome-scope.png");
+      return `两个别名都进入范围，各 4 条书签，网址 / 目录 / 浏览器图标 / 预览齐全，截图 ${scopeShot}`;
+    });
+
+    // 31. Chrome 书签范围内的检索：标题、网址、目录，且标题匹配优先。
+    await check("Chrome 书签范围内按标题、网址与目录检索且标题优先", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.fill(INPUT, MOCK_CHROME_KEYWORD_EN);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SCOPE_LABEL, expected: `${MOCK_CHROME_KEYWORD_EN} 范围` },
+      );
+
+      await page.fill(INPUT, `${MOCK_CHROME_KEYWORD_EN} rust`);
+      await waitForRowCount(page, 3);
+      const ranked = await rows(page);
+      assert(
+        ranked[0].title === "Rust 官网" && ranked[1].title === "Rust 文档",
+        `标题匹配必须排在最前：${ranked.map((row) => row.title).join("/")}`,
+      );
+      assert(
+        ranked[2].title === "分析工具",
+        `只有网址匹配的条目必须排在最后：${ranked.map((row) => row.title).join("/")}`,
+      );
+
+      await page.fill(INPUT, `${MOCK_CHROME_KEYWORD_EN} doc.rust-lang.org`);
+      await waitForRowCount(page, 1);
+      assert((await rows(page))[0].title === "Rust 文档", "必须能按网址命中");
+
+      await page.fill(INPUT, `${MOCK_CHROME_KEYWORD_EN} 开发`);
+      await waitForRowCount(page, 1);
+      assert((await rows(page))[0].title === "Rust 文档", "必须能按目录命中");
+
+      await page.fill(INPUT, `${MOCK_CHROME_KEYWORD_EN} 不存在的词`);
+      await page.waitForSelector(EMPTY_STATE);
+      return "标题优先于网址；网址与目录都能命中；无匹配时是明确的空状态";
+    });
+
+    // 32. 回车在关联的 profile 打开：参数向量与诚实反馈。
+    await check("回车在关联 profile 打开的 argv 与反馈", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      // 先输入完整关键词进入范围，再继续输入查询（与真实输入顺序一致）。
+      await page.fill(INPUT, MOCK_CHROME_KEYWORD_EN);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SCOPE_LABEL, expected: `${MOCK_CHROME_KEYWORD_EN} 范围` },
+      );
+      await page.fill(INPUT, `${MOCK_CHROME_KEYWORD_EN} intranet`);
+      await waitForRowCount(page, 1);
+      await page.keyboard.press("Enter");
+      await page.waitForSelector(NOTICE);
+
+      const launch = await page.evaluate(() => window.__flashcastMock.lastChromeLaunch);
+      assert(launch, "必须记录一次交给 Chrome 的启动请求");
+      assert(
+        launch.program === "/usr/bin/google-chrome",
+        `可执行文件必须是 Chrome，实际「${launch.program}」`,
+      );
+      assert(
+        JSON.stringify(launch.args) ===
+          JSON.stringify([
+            `--profile-directory=${MOCK_CHROME_DEFAULT_PROFILE}`,
+            "--no-first-run",
+            "--no-default-browser-check",
+            "https://intranet.example.com/login?token=abc&next=首页",
+          ]),
+        `参数必须逐元素正确（目录名带空格、URL 带查询串与非 ASCII）：${JSON.stringify(launch.args)}`,
+      );
+      const notice = await text(NOTICE);
+      assert(notice.includes("已请求 Chrome"), `必须给出打开反馈：${notice}`);
+      assert(
+        notice.includes("无法据此确认页面是否已加载"),
+        `反馈不得声称页面已经打开：${notice}`,
+      );
+      const file = await shot(page, "54-chrome-open.png");
+      return `argv = ${JSON.stringify(launch.args)}；反馈如实说明无法确认页面是否加载，截图 ${file}`;
+    });
+
+    // 33. 设置页的 profile 关联：状态可见、可切换、可重新读取。
+    await check("设置页显示并可切换 Chrome profile 关联", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await page.locator(CHROME_SECTION).scrollIntoViewIfNeeded();
+
+      const availability = await text(CHROME_AVAILABILITY);
+      assert(availability.includes("Google Chrome"), `必须显示发现的 Chrome：${availability}`);
+      const userDataDir = await text(CHROME_USER_DATA_DIR);
+      assert(userDataDir.includes("google-chrome"), `必须显示用户数据目录：${userDataDir}`);
+      const association = await text(CHROME_ASSOCIATION);
+      assert(
+        association.includes("工作") && association.includes("Profile 1"),
+        `必须显示当前关联的 profile 目录名：${association}`,
+      );
+      const path = await text(CHROME_BOOKMARKS_PATH);
+      assert(path.endsWith("Bookmarks"), `必须显示书签文件路径：${path}`);
+
+      const profiles = await page.$$eval(CHROME_PROFILE, (nodes) =>
+        nodes.map((node) => ({
+          dir: node.dataset.profileDir,
+          associated: node.dataset.associated,
+          managed: node.dataset.managed,
+          text: node.textContent ?? "",
+        })),
+      );
+      assert(profiles.length === 2, `必须列出两个 profile，实际 ${profiles.length} 个`);
+      assert(
+        profiles.find((profile) => profile.dir === MOCK_CHROME_DEFAULT_PROFILE)?.associated ===
+          "true",
+        "当前关联的 profile 必须有标记",
+      );
+      assert(
+        profiles.some((profile) => profile.managed === "true"),
+        "企业管理的 profile 必须显示出来",
+      );
+      assert(
+        profiles.some((profile) => profile.text.includes("me@example.com")),
+        "显示名与账号必须可见",
+      );
+      const beforeShot = await shot(page, "55-settings-chrome-profiles.png");
+
+      await page.click(`${CHROME_PROFILE}[data-profile-dir="Default"] ${CHROME_ASSOCIATE}`);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: CHROME_ASSOCIATION, expected: "个人" },
+      );
+      const status = await text(CHROME_BOOKMARKS_STATUS);
+      assert(status.includes("已索引"), `索引状态必须可见：${status}`);
+      const badge = await page.locator(CHROME_ASSOCIATED_BADGE).count();
+      assert(badge === 1, `只有一个 profile 能被标记为已关联，实际 ${badge} 个`);
+
+      await page.click(CHROME_REFRESH);
+      const afterShot = await shot(page, "56-settings-chrome-associated.png");
+      return `关联 工作（Profile 1）→ 切换到 个人（Default）；截图 ${beforeShot} / ${afterShot}`;
+    });
+
+    // 34. 书签缺失 / 损坏 / Chrome 未安装都有可操作反馈。
+    await check("Chrome 缺失、书签缺失与损坏都有可操作反馈", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() => window.__flashcastMock.simulateChromeStatus("corrupt"));
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await page.locator(CHROME_SECTION).scrollIntoViewIfNeeded();
+      await page.click(CHROME_REFRESH);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: CHROME_BOOKMARKS_STATUS, expected: "无法解析" },
+      );
+      const corruptShot = await shot(page, "57-settings-chrome-corrupt.png");
+
+      await page.evaluate(() => window.__flashcastMock.simulateChromeStatus("missing"));
+      await page.click(CHROME_REFRESH);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: CHROME_BOOKMARKS_STATUS, expected: "正常空状态" },
+      );
+
+      await page.evaluate(() => window.__flashcastMock.simulateChromeStatus("unavailable"));
+      await page.click(CHROME_REFRESH);
+      await page.waitForSelector(CHROME_ERROR);
+      const error = await text(CHROME_ERROR);
+      assert(
+        error.includes("没有找到 Chrome") && error.includes("/usr/bin/google-chrome"),
+        `Chrome 未安装必须给出可操作线索：${error}`,
+      );
+      const unavailableShot = await shot(page, "58-settings-chrome-unavailable.png");
+
+      // 恢复后状态回到正常。
+      await page.evaluate(() => window.__flashcastMock.simulateChromeStatus("ok"));
+      await page.click(CHROME_REFRESH);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: CHROME_BOOKMARKS_STATUS, expected: "已索引 4 条书签" },
+      );
+      return `损坏 → 缺失 → 未安装 → 恢复，四种状态各有说明，截图 ${corruptShot} / ${unavailableShot}`;
+    });
+
+    // 35. 书签文件变化后重新检索能看到新书签。
+    await check("书签文件变化后重新检索能看到新书签", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.fill(INPUT, MOCK_CHROME_KEYWORD_EN);
+      await waitForRowCount(page, 4);
+
+      await page.evaluate(() => window.__flashcastMock.simulateChromeBookmarkAdded());
+      await page.fill(INPUT, `${MOCK_CHROME_KEYWORD_EN} 新增`);
+      await waitForRowCount(page, 1);
+      const found = await rows(page);
+      assert(
+        found[0].title === "新增书签",
+        `外部新增的书签必须能被检索到：${found.map((row) => row.title).join("/")}`,
+      );
+      const file = await shot(page, "59-chrome-refreshed.png");
+      return `追加一条书签后重新检索命中「${found[0].title}」，截图 ${file}`;
+    });
+
+    // 36. 停用 Chrome 书签插件后不再贡献结果。
+    await check("停用 Chrome 书签插件后不再贡献结果", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await page.locator(PLUGIN_SECTION).scrollIntoViewIfNeeded();
+      const chromeItem = page.locator(
+        `${PLUGIN_ITEM}[data-plugin-id="chrome-bookmarks"]`,
+      );
+      await chromeItem.locator(PLUGIN_TOGGLE).click();
+      await page.waitForFunction(
+        ({ sel, expected }) =>
+          [...document.querySelectorAll(sel)].some(
+            (node) =>
+              node.dataset.pluginId === "chrome-bookmarks" &&
+              node.textContent?.includes(expected),
+          ),
+        { sel: PLUGIN_ITEM, expected: "已停用" },
+      );
+      const disabledShot = await shot(page, "60-settings-chrome-disabled.png");
+
+      await page.click('[data-testid="settings-back"]');
+      await page.fill(INPUT, MOCK_CHROME_KEYWORD_ZH);
+      const scope = await text(SCOPE_LABEL);
+      assert(scope === "首屏", `停用后不得进入范围，实际「${scope}」`);
+      const kinds = await page.$$eval(ROW, (nodes) => nodes.map((node) => node.dataset.kind));
+      assert(!kinds.includes("bookmark"), `停用后不得出现书签结果：${kinds.join("/")}`);
+      return `停用后关键词不再进入范围、结果里没有书签，截图 ${disabledShot}`;
     });
 
     const failed = results.filter((result) => !result.ok).length;

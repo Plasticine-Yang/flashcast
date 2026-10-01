@@ -8,6 +8,9 @@
 
 use crate::capability::{Capabilities, CapabilityProbe, Support};
 use crate::catalog::{AppCatalog, AppEntry, CatalogError};
+use crate::chrome::{
+    ChromeEnvironment, ChromeError, ChromeLaunch, ChromeLaunchRequest, ChromeProvider,
+};
 use crate::clipboard::{ClipboardAccess, ClipboardError};
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
@@ -86,6 +89,19 @@ impl HotkeyManager for UnsupportedHotkeyManager {
         Err(HotkeyError::BackendUnavailable {
             reason: REASON.to_string(),
         })
+    }
+}
+
+/// 没有真实实现的目标上的 Chrome 适配器：如实报告「未提供」，不伪造发现结果。
+pub struct UnsupportedChrome;
+
+impl ChromeProvider for UnsupportedChrome {
+    fn discover(&self) -> Result<ChromeEnvironment, ChromeError> {
+        Err(ChromeError::Unsupported(REASON.to_string()))
+    }
+
+    fn launch(&self, _request: &ChromeLaunchRequest) -> Result<ChromeLaunch, ChromeError> {
+        Err(ChromeError::Unsupported(REASON.to_string()))
     }
 }
 

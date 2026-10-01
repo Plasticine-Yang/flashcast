@@ -453,3 +453,64 @@ export type Preview =
   | { kind: "none" }
   | { kind: "text"; title: string | null; body: string }
   | { kind: "image"; path: string };
+
+// ---------------------------------------------------------------------------
+// Chrome 书签（ticket 13）
+// ---------------------------------------------------------------------------
+
+/** 书签文件的状态（对应 flashcast_core::BookmarksStatus）。 */
+export type BookmarksStatus =
+  | { kind: "notAssociated" }
+  | { kind: "missing" }
+  | { kind: "ok"; count: number }
+  | { kind: "corrupt"; reason: string }
+  | { kind: "unreadable"; reason: string };
+
+/** 索引快照（对应 flashcast_core::BookmarkSnapshot）。 */
+export interface BookmarkSnapshot {
+  /** 书签文件的本机路径；未关联时为 null。 */
+  path: string | null;
+  status: BookmarksStatus;
+  entries: BookmarkEntry[];
+}
+
+/** 一条书签（对应 flashcast_core::BookmarkEntry）。 */
+export interface BookmarkEntry {
+  id: string;
+  title: string;
+  url: string;
+  /** 目录路径，例如「书签栏 / 开发」。 */
+  folder: string;
+}
+
+/** 一个 Chrome profile（对应 flashcast_core::ChromeProfileView）。 */
+export interface ChromeProfileView {
+  /** **目录名**（`Default`、`Profile 1`）：关联与 `--profile-directory` 用的就是它。 */
+  dir: string;
+  /** 显示名（来自 Local State 的 profile.info_cache）。 */
+  name: string;
+  userName: string | null;
+  managed: boolean;
+  hasBookmarks: boolean;
+  bookmarksReadable: boolean;
+  unreadableReason: string | null;
+  associated: boolean;
+}
+
+/** 当前 Chrome 状态（对应 flashcast_core::ChromeState）。 */
+export interface ChromeState {
+  /** 是否发现了 Chrome 可执行文件。 */
+  available: boolean;
+  brandLabel: string | null;
+  /** 用户数据目录是否在默认位置之外（决定是否传 --user-data-dir）。 */
+  customUserDataDir: boolean;
+  binary: string | null;
+  userDataDir: string | null;
+  profiles: ChromeProfileView[];
+  associated: string | null;
+  associatedName: string | null;
+  error: string | null;
+  warnings: string[];
+  bookmarks: BookmarkSnapshot;
+  bookmarksLabel: string;
+}

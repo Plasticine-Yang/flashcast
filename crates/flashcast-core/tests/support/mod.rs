@@ -17,7 +17,10 @@ use flashcast_core::{
     PluginRegistry, PluginScope, Preview, Score, SearchContext, SearchItem, Settings,
 };
 use flashcast_platform::catalog::{AppEntry, AppSource, IconRef};
-use flashcast_platform::fake::{FakeAppCatalog, FakeCapabilityProbe, FakeClipboard, FakeLauncher};
+use flashcast_platform::chrome::ChromeProvider;
+use flashcast_platform::fake::{
+    FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeLauncher,
+};
 
 /// 构造一个软件条目。
 pub fn app(id: &str, name: &str) -> AppEntry {
@@ -62,6 +65,12 @@ pub fn item(id: &str, title: &str, source: &str, relevance: u8) -> SearchItem {
         preview: Preview::None,
         score: Score::new(flashcast_core::MatchTier::KeywordOrTagExact, relevance),
     }
+}
+
+/// 默认的 Chrome 替身：测试环境里「没有安装 Chrome」。需要真实发现的用例
+/// 用 [`FakeChrome::from_candidates`] 指向自己写的临时夹具。
+pub fn no_chrome() -> Arc<FakeChrome> {
+    Arc::new(FakeChrome::not_installed("测试环境未配置 Chrome"))
 }
 
 /// 构造宿主与替身启动器。
@@ -109,12 +118,28 @@ pub fn host_with_plugins_device(
 
 /// 用同一个设备目录重建宿主：模拟「重启应用」。
 pub fn host_restarted(device_dir: &Path, settings: Settings) -> Host {
+    host_restarted_with(
+        device_dir,
+        settings,
+        no_chrome(),
+        Arc::new(PluginRegistry::new()),
+    )
+}
+
+/// 用同一个设备目录重建宿主，并注入给定的 Chrome 替身与插件注册表。
+pub fn host_restarted_with(
+    device_dir: &Path,
+    settings: Settings,
+    chrome: Arc<FakeChrome>,
+    plugins: Arc<PluginRegistry>,
+) -> Host {
     let deps = HostDeps {
         catalog: Arc::new(FakeAppCatalog::with_apps(Vec::new())),
         launcher: Arc::new(FakeLauncher::always_succeeds()),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
-        plugins: Arc::new(PluginRegistry::new()),
+        chrome,
+        plugins,
         device_dir: device_dir.to_path_buf(),
     };
     Host::new(deps, settings)
@@ -123,6 +148,22 @@ pub fn host_restarted(device_dir: &Path, settings: Settings) -> Host {
 /// 用同一个设备目录重建宿主，并安装随应用提供的官方功能插件：模拟「重启应用」。
 pub fn official_host_restarted(device_dir: &Path, settings: Settings) -> Host {
     let host = host_restarted(device_dir, settings);
+    host.install_official_plugins();
+    host
+}
+
+/// 同 [`official_host_restarted`]，但注入给定的 Chrome 替身：重启后重新关联的用例用它。
+pub fn official_host_restarted_with_chrome(
+    device_dir: &Path,
+    settings: Settings,
+    chrome: Arc<FakeChrome>,
+) -> Host {
+    let host = host_restarted_with(
+        device_dir,
+        settings,
+        chrome,
+        Arc::new(PluginRegistry::new()),
+    );
     host.install_official_plugins();
     host
 }
@@ -148,12 +189,36 @@ pub fn official_host_with_device(
         launcher: launcher.clone(),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: clipboard.clone(),
+        chrome: no_chrome(),
         plugins: Arc::new(PluginRegistry::new()),
         device_dir: device_dir.clone(),
     };
     let host = Host::new(deps, settings);
     host.install_official_plugins();
     (host, launcher, clipboard, device_dir)
+}
+
+/// 构造带官方功能插件与**真实发现**的 Chrome 替身的宿主。
+///
+/// 返回的 `Arc<FakeChrome>` 记录交给 Chrome 的 argv，供测试精确断言参数向量。
+pub fn official_host_with_chrome(
+    apps: Vec<AppEntry>,
+    settings: Settings,
+    chrome: Arc<FakeChrome>,
+) -> (Host, Arc<FakeChrome>, PathBuf) {
+    let device_dir = unique_dir("device");
+    let deps = HostDeps {
+        catalog: Arc::new(FakeAppCatalog::with_apps(apps)),
+        launcher: Arc::new(FakeLauncher::always_succeeds()),
+        capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
+        clipboard: Arc::new(FakeClipboard::new()),
+        chrome: Arc::clone(&chrome) as Arc<dyn ChromeProvider>,
+        plugins: Arc::new(PluginRegistry::new()),
+        device_dir: device_dir.clone(),
+    };
+    let host = Host::new(deps, settings);
+    host.install_official_plugins();
+    (host, chrome, device_dir)
 }
 
 /// 同 [`official_host_with_device`]，但使用调用方提供的插件注册表与能力探测。
@@ -171,6 +236,7 @@ pub fn official_host_with_plugins(
         launcher: launcher.clone(),
         capabilities,
         clipboard: clipboard.clone(),
+        chrome: no_chrome(),
         plugins,
         device_dir: device_dir.clone(),
     };
@@ -191,6 +257,7 @@ fn build_host(
         launcher: launcher.clone(),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
+        chrome: no_chrome(),
         plugins,
         device_dir,
     };

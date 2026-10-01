@@ -6,6 +6,7 @@
 //!
 //! 本 crate 不依赖 Tauri，因此可以在没有桌面会话的 CI runner 上完整测试。
 
+pub mod chrome;
 pub mod clone;
 pub mod device;
 pub mod git;
@@ -23,6 +24,12 @@ pub mod theme;
 pub mod watch;
 pub mod workspace;
 
+pub use chrome::{
+    parse_bookmarks, search_bookmarks, BookmarkEntry, BookmarkIndex, BookmarkRefresh,
+    BookmarkSnapshot, BookmarksFile, BookmarksStatus, ChromeAssociation, ChromeBookmarkError,
+    ChromeProfileView, ChromeState, Node as BookmarkNode, Roots as BookmarkRoots,
+    BOOKMARK_ITEM_PREFIX, KEY_CHROME_ASSOCIATION, PARSE_RETRY_DELAY,
+};
 pub use clone::{
     redact, strip_userinfo, CloneControl, CloneOutcome, ClonePhase, CloneProgress,
     CredentialProvider,

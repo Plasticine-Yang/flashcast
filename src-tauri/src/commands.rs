@@ -7,10 +7,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use flashcast_core::{
-    ActionOutcome, Appearance, BackOutcome, CloneOutcome, CloneProgress, CommitOutcome,
-    DefaultAction, ItemKind, Notice, PluginFailure, Preview, PullOutcome, PushOutcome,
-    QueryResponse, QueryScope, Score, SearchItem, Settings, SyncProgress, SyncStatus, ThemeState,
-    WorkspaceChanges, WorkspaceStatus,
+    ActionOutcome, Appearance, BackOutcome, ChromeState, CloneOutcome, CloneProgress,
+    CommitOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview, PullOutcome,
+    PushOutcome, QueryResponse, QueryScope, Score, SearchItem, Settings, SyncProgress, SyncStatus,
+    ThemeState, WorkspaceChanges, WorkspaceStatus,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -520,6 +520,40 @@ pub fn delete_memo(state: State<'_, AppState>, id: String) -> Result<(), String>
         .host
         .delete_memo(&id)
         .map_err(|error| error.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Chrome 书签（ticket 13）
+// ---------------------------------------------------------------------------
+
+/// 当前 Chrome 状态：发现结果、profile 列表、关联状态与书签索引状态。
+///
+/// 每次调用都会按 mtime + size 检查书签文件并在变化时重建索引，因此 UI 轮询它就等于
+/// 「书签变化后刷新」。本机路径只回给本机 webview；关联只能通过
+/// [`associate_chrome_profile`] 传**目录名**完成，宿主不接受调用方给出的任意路径。
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_chrome_state(state: State<'_, AppState>) -> ChromeState {
+    state.host.chrome_state()
+}
+
+/// 关联一个已发现的 Chrome profile（参数是 `Local State` 里的**目录名**）。
+///
+/// 失败时返回中文原因，且不改变原来的关联。
+#[tauri::command(rename_all = "snake_case")]
+pub fn associate_chrome_profile(
+    state: State<'_, AppState>,
+    profile_dir: String,
+) -> Result<ChromeState, String> {
+    state
+        .host
+        .associate_chrome_profile(&profile_dir)
+        .map_err(|error| error.to_string())
+}
+
+/// 显式重新读取书签文件（外部改动后的兜底入口）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn refresh_chrome_bookmarks(state: State<'_, AppState>) -> ChromeState {
+    state.host.refresh_chrome_bookmarks()
 }
 
 /// 预览某条结果。备忘录按**当前**内容返回完整正文；未知 id 返回 `null`。

@@ -9,8 +9,12 @@ import type {
   ActionOutcome,
   Appearance,
   BackView,
+  BookmarkEntry,
+  BookmarksStatus,
   Capabilities,
   ChangedFile,
+  ChromeProfileView,
+  ChromeState,
   CloneOutcome,
   CloneProgress,
   CommitOutcome,
@@ -114,6 +118,12 @@ export interface HostApi {
   delete_memo(id: string): Promise<void>;
   /** 预览某条结果；未知 id 返回 null。 */
   preview(itemId: string): Promise<Preview | null>;
+  /** 当前 Chrome 状态：发现结果、profile 列表、关联状态与书签索引状态。 */
+  get_chrome_state(): Promise<ChromeState>;
+  /** 关联一个已发现的 Chrome profile（参数是目录名）。失败时 reject，原因为中文。 */
+  associate_chrome_profile(profileDir: string): Promise<ChromeState>;
+  /** 显式重新读取书签文件（外部改动后的兜底入口）。 */
+  refresh_chrome_bookmarks(): Promise<ChromeState>;
   hide_window(): Promise<void>;
   on(event: string, handler: Handler): Promise<UnlistenFn>;
   readonly kind: "tauri" | "browser";
@@ -171,6 +181,10 @@ const tauriApi: HostApi = {
     tauriInvoke("update_memo", { id, title, tags, body }),
   delete_memo: (id) => tauriInvoke("delete_memo", { id }),
   preview: (itemId) => tauriInvoke("preview", { itemId }),
+  get_chrome_state: () => tauriInvoke("get_chrome_state"),
+  associate_chrome_profile: (profileDir) =>
+    tauriInvoke("associate_chrome_profile", { profileDir }),
+  refresh_chrome_bookmarks: () => tauriInvoke("refresh_chrome_bookmarks"),
   hide_window: () => tauriInvoke("hide_window"),
   on: async (event, handler) => {
     const { listen } = await import("@tauri-apps/api/event");
@@ -218,6 +232,22 @@ const MOCK_CAPABILITIES: Capabilities = {
 /** 备忘录插件在模拟宿主里的 id（与 flashcast-core 一致）。 */
 export const MOCK_MEMO_PLUGIN_ID = "memo";
 
+/** 书签索引状态的中文说明（与 flashcast_core::BookmarksStatus::label_zh 一致）。 */
+function describeBookmarksStatus(status: BookmarksStatus): string {
+  switch (status.kind) {
+    case "notAssociated":
+      return "尚未关联 Chrome profile";
+    case "missing":
+      return "该 profile 还没有书签文件（正常空状态）";
+    case "ok":
+      return `已索引 ${status.count} 条书签`;
+    case "corrupt":
+      return `书签文件无法解析：${status.reason}`;
+    case "unreadable":
+      return `书签文件无法读取：${status.reason}`;
+  }
+}
+
 /** 匹配层级的排序权重（与 ADR §4 的稳定排序一致）。 */
 const MATCH_TIER_ORDER: Record<string, number> = {
   keywordOrTagExact: 0,
@@ -247,6 +277,68 @@ export const MOCK_MEMOS: Memo[] = [
     title: "会议邀请",
     tags: ["会议", "工作"],
     body: "下午三点在三楼会议室，麻烦确认一下时间。",
+  },
+];
+
+/** Chrome 书签插件在模拟宿主里的 id（与 flashcast-core 一致）。 */
+export const MOCK_CHROME_PLUGIN_ID = "chrome-bookmarks";
+
+/** Chrome 书签插件的关键词别名（与 flashcast-core 的插件清单一致）。 */
+export const MOCK_CHROME_KEYWORDS = ["chrome bookmarks", "chrome 书签"];
+
+/**
+ * 浏览器模拟宿主里的 Chrome profile 与书签。语义与真实宿主一致：
+ * 关联记录在设备本地、书签按标题 / 网址 / 目录检索、默认操作是在 Chrome 打开。
+ * 真实行为（真实 Local State、Bookmarks 解析、变化后刷新、argv）由
+ * `crates/flashcast-core/tests/chrome.rs` 与 `chrome_fixture.rs` 验证。
+ */
+const MOCK_CHROME_PROFILES: ChromeProfileView[] = [
+  {
+    dir: "Default",
+    name: "个人",
+    userName: "me@example.com",
+    managed: false,
+    hasBookmarks: true,
+    bookmarksReadable: true,
+    unreadableReason: null,
+    associated: false,
+  },
+  {
+    dir: "Profile 1",
+    name: "工作",
+    userName: "work@corp.example",
+    managed: true,
+    hasBookmarks: true,
+    bookmarksReadable: true,
+    unreadableReason: null,
+    associated: true,
+  },
+];
+
+const MOCK_BOOKMARKS: BookmarkEntry[] = [
+  {
+    id: "7",
+    title: "Rust 官网",
+    url: "https://www.rust-lang.org/",
+    folder: "书签栏",
+  },
+  {
+    id: "9",
+    title: "Rust 文档",
+    url: "https://doc.rust-lang.org/std/?q=中文&x=1",
+    folder: "书签栏 / 开发",
+  },
+  {
+    id: "10",
+    title: "内网登录",
+    url: "https://intranet.example.com/login?token=abc&next=首页",
+    folder: "其他书签",
+  },
+  {
+    id: "11",
+    title: "分析工具",
+    url: "https://rust-analyzer.github.io/",
+    folder: "其他书签",
   },
 ];
 
@@ -501,6 +593,24 @@ class MockHost implements HostApi {
   /** 远端待拉取的内容（设置快捷键、主题 id、新增备忘录）。 */
   private incoming: { hotkey: string; theme: string; memo: string } | null = null;
 
+  // ---- Chrome 书签（浏览器模拟） ----
+  /** Chrome 书签插件的启用状态。 */
+  private chromePluginEnabled = true;
+  /** 模拟的 profile 列表（关联状态是设备本地数据）。 */
+  private chromeProfiles: ChromeProfileView[] = MOCK_CHROME_PROFILES.map((profile) => ({
+    ...profile,
+  }));
+  /** 模拟的书签索引状态：正常、缺失、损坏三种，覆盖 UI 需要区分的分支。 */
+  private chromeStatus: BookmarksStatus = { kind: "ok", count: MOCK_BOOKMARKS.length };
+  /** 最近一次交给「Chrome」的启动请求（浏览器交互检查据此断言参数向量）。 */
+  lastChromeLaunch: { program: string; args: string[] } | null = null;
+  /** 模拟 Chrome 是否可用，以及发现 / 关联的问题说明。 */
+  private chromeAvailable = true;
+  private chromeError: string | null = null;
+  private chromeWarnings: string[] = [];
+  /** 模拟用户数据目录是否在默认位置之外。 */
+  private customChromeUserDataDir = false;
+
   private emit(event: string, payload?: unknown) {
     for (const handler of this.handlers.get(event) ?? []) {
       handler(payload);
@@ -521,8 +631,15 @@ class MockHost implements HostApi {
     // 之后标题、标签与正文都可检索（与真实宿主一致）。
     if (this.scope.kind === "plugin") {
       const keyword = this.scope.keyword;
-      const rest = query === keyword ? "" : query.startsWith(keyword) ? query.slice(keyword.length).trim() : query;
-      return this.memoItems(rest);
+      const rest =
+        query === keyword
+          ? ""
+          : query.startsWith(keyword)
+            ? query.slice(keyword.length).trim()
+            : query;
+      return this.scope.id === MOCK_CHROME_PLUGIN_ID
+        ? this.chromeItems(rest)
+        : this.memoItems(rest);
     }
 
     const commandItems: QueryView["items"] = [
@@ -596,6 +713,134 @@ class MockHost implements HostApi {
         a.title.localeCompare(b.title),
     );
     return ranked.map((entry) => entry.item);
+  }
+
+  /** 书签范围内的一条结果：默认操作是在 Chrome 打开。 */
+  private chromeItem(
+    entry: BookmarkEntry,
+    score: QueryView["items"][number]["score"],
+  ): QueryView["items"][number] {
+    const subtitle = entry.folder.trim()
+      ? `${entry.url} · 目录：${entry.folder}`
+      : entry.url;
+    return {
+      id: `chrome-bookmark:${entry.id}`,
+      title: entry.title,
+      subtitle,
+      iconDataUrl: null,
+      source: MOCK_CHROME_PLUGIN_ID,
+      kind: "bookmark",
+      defaultAction: "openInChrome",
+      defaultActionLabel: "在 Chrome 打开",
+      score,
+    };
+  }
+
+  /** 范围内的书签检索：标题、网址、目录（`rest` 已剥掉关键词前缀）。 */
+  private chromeItems(rest: string): QueryView["items"] {
+    if (!this.chromePluginEnabled) {
+      return [];
+    }
+    // 文件缺失 / 损坏 / Chrome 不可用时列表为空：原因由设置页与执行反馈给出，
+    // 这里不伪造结果（与真实宿主一致）。
+    if (this.chromeStatus.kind !== "ok") {
+      return [];
+    }
+    const query = rest.trim().toLowerCase();
+    if (query.length === 0) {
+      return MOCK_BOOKMARKS.map((entry) =>
+        this.chromeItem(entry, { tier: "titlePrefix", relevance: 0 }),
+      );
+    }
+    return MOCK_BOOKMARKS.map((entry) => {
+      const title = entry.title.toLowerCase();
+      if (title === query) return { entry, tier: "titlePrefix" as const, relevance: 100 };
+      if (title.startsWith(query)) return { entry, tier: "titlePrefix" as const, relevance: 80 };
+      if (title.includes(query)) return { entry, tier: "titleSubstring" as const, relevance: 55 };
+      if (entry.url.toLowerCase().includes(query)) {
+        return { entry, tier: "metadataSubstring" as const, relevance: 35 };
+      }
+      if (entry.folder.toLowerCase().includes(query)) {
+        return { entry, tier: "metadataSubstring" as const, relevance: 30 };
+      }
+      return null;
+    })
+      .filter((value): value is NonNullable<typeof value> => value !== null)
+      .sort(
+        (a, b) =>
+          MATCH_TIER_ORDER[a.tier] - MATCH_TIER_ORDER[b.tier] ||
+          b.relevance - a.relevance ||
+          a.entry.id.localeCompare(b.entry.id),
+      )
+      .map(({ entry, tier, relevance }) => this.chromeItem(entry, { tier, relevance }));
+  }
+
+  /** 当前关联的 profile 目录名。 */
+  private associatedChromeDir: string | null = "Profile 1";
+
+  /** 当前 Chrome 状态（与真实宿主的字段一一对应）。 */
+  private chromeState(): ChromeState {
+    return {
+      available: this.chromeAvailable,
+      brandLabel: "Google Chrome",
+      customUserDataDir: false,
+      binary: "/usr/bin/google-chrome",
+      userDataDir: "/home/user/.config/google-chrome",
+      profiles: this.chromeProfiles.map((profile) => ({
+        ...profile,
+        associated: profile.dir === this.associatedChromeDir,
+      })),
+      associated: this.associatedChromeDir,
+      associatedName:
+        this.chromeProfiles.find((profile) => profile.dir === this.associatedChromeDir)?.name ??
+        null,
+      error: this.chromeError,
+      warnings: this.chromeWarnings,
+      bookmarks: {
+        path:
+          this.associatedChromeDir === null
+            ? null
+            : `/home/user/.config/google-chrome/${this.associatedChromeDir}/Bookmarks`,
+        status: this.chromeStatus,
+        entries: this.chromeStatus.kind === "ok" ? MOCK_BOOKMARKS.map((e) => ({ ...e })) : [],
+      },
+      bookmarksLabel: describeBookmarksStatus(this.chromeStatus),
+    };
+  }
+
+  /** 浏览器交互检查用的钩子：模拟书签文件缺失 / 损坏 / Chrome 未安装。 */
+  simulateChromeStatus(kind: "ok" | "missing" | "corrupt" | "unavailable"): void {
+    if (kind === "ok") {
+      this.chromeStatus = { kind: "ok", count: MOCK_BOOKMARKS.length };
+      this.chromeError = null;
+      this.chromeAvailable = true;
+      return;
+    }
+    if (kind === "missing") {
+      this.chromeStatus = { kind: "missing" };
+      this.chromeError = null;
+      return;
+    }
+    if (kind === "corrupt") {
+      this.chromeStatus = {
+        kind: "corrupt",
+        reason: "JSON 解析失败：expected value at line 1 column 9",
+      };
+      return;
+    }
+    this.chromeAvailable = false;
+    this.chromeError = "没有找到 Chrome 可执行文件；已尝试：/usr/bin/google-chrome";
+  }
+
+  /** 浏览器交互检查用的钩子：模拟书签文件被外部追加了一条书签。 */
+  simulateChromeBookmarkAdded(): void {
+    MOCK_BOOKMARKS.push({
+      id: `sim-${MOCK_BOOKMARKS.length + 1}`,
+      title: "新增书签",
+      url: "https://new.example.com/",
+      folder: "书签栏",
+    });
+    this.chromeStatus = { kind: "ok", count: MOCK_BOOKMARKS.length };
   }
 
   /** 备忘录范围内的一条结果：默认操作是粘贴（ticket 07 先复制并提示手动粘贴）。 */
@@ -684,8 +929,10 @@ class MockHost implements HostApi {
     const normalized = input.trim().toLowerCase();
     const isMemoKeyword =
       this.memoPluginEnabled && MOCK_MEMO_KEYWORDS.includes(normalized);
+    const isChromeKeyword =
+      this.chromePluginEnabled && MOCK_CHROME_KEYWORDS.includes(normalized);
     // 关键词完整匹配即进入插件范围；已在范围内改用另一个别名时更新记下的关键词。
-    if (isMemoKeyword) {
+    if (isMemoKeyword || isChromeKeyword) {
       if (this.scope.kind === "home") {
         this.history.push({
           input: this.input,
@@ -693,7 +940,9 @@ class MockHost implements HostApi {
           scope: this.scope,
         });
       }
-      this.scope = { kind: "plugin", id: MOCK_MEMO_PLUGIN_ID, keyword: normalized };
+      this.scope = isChromeKeyword
+        ? { kind: "plugin", id: MOCK_CHROME_PLUGIN_ID, keyword: normalized }
+        : { kind: "plugin", id: MOCK_MEMO_PLUGIN_ID, keyword: normalized };
     } else if (this.scope.kind === "plugin" && normalized.length === 0) {
       // 清空输入即离开插件范围。
       this.scope = { kind: "home" };
@@ -710,6 +959,41 @@ class MockHost implements HostApi {
   async execute(itemId: string): Promise<ActionOutcome> {
     // 记录本次请求，浏览器交互检查脚本据此判断回车是否真的触发了执行。
     this.lastLaunched = itemId;
+    // 书签的默认操作是在 Chrome 打开。
+    if (itemId.startsWith("chrome-bookmark:")) {
+      if (!this.chromePluginEnabled) {
+        return { status: "failed", message: "插件「Chrome 书签」已停用，已拒绝执行" };
+      }
+      const entry = MOCK_BOOKMARKS.find(
+        (candidate) => itemId === `chrome-bookmark:${candidate.id}`,
+      );
+      if (!entry) {
+        return { status: "failed", message: `找不到这条书签：${itemId}，请重新查询` };
+      }
+      if (!/^https?:\/\//i.test(entry.url)) {
+        return { status: "failed", message: "链接不受支持：只支持 http / https 链接" };
+      }
+      if (this.associatedChromeDir === null) {
+        return { status: "failed", message: "尚未关联 Chrome profile：请在设置里选择一个 profile" };
+      }
+      const profile =
+        this.chromeProfiles.find((candidate) => candidate.dir === this.associatedChromeDir) ??
+        null;
+      const args = [
+        `--profile-directory=${this.associatedChromeDir}`,
+        "--no-first-run",
+        "--no-default-browser-check",
+      ];
+      if (this.customChromeUserDataDir) {
+        args.push(`--user-data-dir=/home/user/chrome-custom`);
+      }
+      args.push(entry.url);
+      this.lastChromeLaunch = { program: "/usr/bin/google-chrome", args };
+      return {
+        status: "done",
+        message: `已请求 Chrome 用 profile「${profile?.name ?? this.associatedChromeDir}」打开：${entry.url}；Chrome 已运行时由现有进程接管，Flashcast 不等待进程退出，也无法据此确认页面是否已加载`,
+      };
+    }
     // 备忘录的默认操作是复制：ticket 07 先复制并如实提示手动粘贴。
     const memo = this.memoFromItemId(itemId);
     if (memo) {
@@ -742,11 +1026,51 @@ class MockHost implements HostApi {
   }
 
   async preview(itemId: string): Promise<Preview | null> {
+    if (itemId.startsWith("chrome-bookmark:")) {
+      const entry = MOCK_BOOKMARKS.find(
+        (candidate) => itemId === `chrome-bookmark:${candidate.id}`,
+      );
+      return entry
+        ? { kind: "text", title: entry.title, body: `${entry.url}\n目录：${entry.folder}` }
+        : null;
+    }
     const memo = this.memoFromItemId(itemId);
     if (memo) {
       return { kind: "text", title: memo.title, body: memo.body };
     }
     return null;
+  }
+
+  async get_chrome_state(): Promise<ChromeState> {
+    return this.chromeState();
+  }
+
+  async associate_chrome_profile(profileDir: string): Promise<ChromeState> {
+    const profile = this.chromeProfiles.find((candidate) => candidate.dir === profileDir);
+    if (!profile) {
+      throw `profile 目录不存在：${profileDir}（已发现的 profile：${this.chromeProfiles
+        .map((candidate) => candidate.dir)
+        .join("、")}）`;
+    }
+    if (!this.chromeAvailable) {
+      throw this.chromeError ?? "没有找到 Chrome 可执行文件";
+    }
+    this.associatedChromeDir = profile.dir;
+    this.chromeStatus = { kind: "ok", count: MOCK_BOOKMARKS.length };
+    // 与真实宿主一致：换关联后需要重新检索（列表在下一次查询时重算）。
+    this.items = this.buildItems();
+    return this.chromeState();
+  }
+
+  async refresh_chrome_bookmarks(): Promise<ChromeState> {
+    if (this.chromeStatus.kind === "corrupt") {
+      // 模拟文件仍然是坏的：如实报告，并保留上一次可用的条目。
+      this.chromeStatus = {
+        kind: "corrupt",
+        reason: "JSON 解析失败：expected value at line 1 column 9",
+      };
+    }
+    return this.chromeState();
   }
 
   async memos(): Promise<Memo[]> {
@@ -805,8 +1129,17 @@ class MockHost implements HostApi {
   }
 
   async set_feature_plugin_enabled(id: string, enabled: boolean): Promise<PluginView[]> {
-    if (id !== MOCK_MEMO_PLUGIN_ID) {
+    if (id !== MOCK_MEMO_PLUGIN_ID && id !== MOCK_CHROME_PLUGIN_ID) {
       throw `插件清单里没有这个标识：${id}`;
+    }
+    if (id === MOCK_CHROME_PLUGIN_ID) {
+      this.chromePluginEnabled = enabled;
+      if (!enabled && this.scope.kind === "plugin" && this.scope.id === id) {
+        this.scope = { kind: "home" };
+      }
+      this.items = this.buildItems();
+      const status = await this.get_status();
+      return status.plugins;
     }
     this.memoPluginEnabled = enabled;
     // 与宿主一致：停用当前所在范围的插件后回到首屏并按当前输入重算。
@@ -879,6 +1212,13 @@ class MockHost implements HostApi {
           keywords: [...MOCK_MEMO_KEYWORDS],
           enabled: this.memoPluginEnabled,
         },
+        {
+          id: MOCK_CHROME_PLUGIN_ID,
+          name: "Chrome 书签",
+          version: "0.1.0",
+          keywords: [...MOCK_CHROME_KEYWORDS],
+          enabled: this.chromePluginEnabled,
+        },
       ],
     };
   }
@@ -907,8 +1247,8 @@ class MockHost implements HostApi {
   async set_plugin_enabled(id: string, enabled: boolean): Promise<ThemeState> {
     const theme = this.mockThemes.find((candidate) => candidate.id === id);
     if (!theme) {
-      // 功能插件（备忘录）：走与真实宿主相同的入口，外观保持不变。
-      if (id === MOCK_MEMO_PLUGIN_ID) {
+      // 功能插件（备忘录 / Chrome 书签）：走与真实宿主相同的入口，外观保持不变。
+      if (id === MOCK_MEMO_PLUGIN_ID || id === MOCK_CHROME_PLUGIN_ID) {
         await this.set_feature_plugin_enabled(id, enabled);
         return this.themeState();
       }

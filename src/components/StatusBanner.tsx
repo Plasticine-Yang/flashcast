@@ -30,6 +30,13 @@ export function StatusBanner({ status, response, feedback, workspaceAlert }: Pro
           {feedback.message ?? "操作失败"}
         </div>
       ) : null}
+      {feedback?.status === "done" && feedback.message ? (
+        /* 有反馈语的成功操作（例如「已请求 Chrome 打开」）也要让用户看见：
+           浏览器交接、页面是否加载都无法由我们确认，反馈是唯一的可见结果。 */
+        <div className="banner banner-info" data-testid="notice" role="status">
+          {feedback.message}
+        </div>
+      ) : null}
       {feedback?.status === "copiedNeedsManualPaste" ? (
         <div className="banner banner-warning" data-testid="notice" role="status">
           {feedback.message ?? "已复制，请手动粘贴"}
