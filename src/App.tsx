@@ -390,6 +390,27 @@ export default function App() {
     );
   };
 
+  /**
+   * 显式为一个文件引用保存本机副本（ticket 12）。
+   *
+   * 只有用户点击才会复制原文件内容；失败原因（原文件失效、访问失败、超限、复制中断、
+   * 不支持的类型）由宿主给出并原样展示。原文件只被读取，不会被移动或删除。
+   */
+  const handleSaveClipboardFileCopy = (id: string, attachmentId: string) => {
+    void runSettingsAction(
+      () => api.save_clipboard_file_copy(id, attachmentId),
+      (next) => {
+        setClipboard(next);
+        setSettingsMessage({
+          level: "info",
+          text: "已保存本机副本：原文件删除后仍可恢复",
+        });
+        // 引用与副本的数量会影响副标题，当前查询要重算。
+        void api.query(input).then(apply);
+      },
+    );
+  };
+
   const handleCreateMemo = (title: string, tags: string[], body: string) =>
     runSettingsAction(
       () => api.create_memo(title, tags, body),
@@ -1007,6 +1028,7 @@ export default function App() {
           onPinClipboardEntry={handlePinClipboardEntry}
           onDeleteClipboardEntry={handleDeleteClipboardEntry}
           onClearClipboardHistory={handleClearClipboardHistory}
+          onSaveClipboardFileCopy={handleSaveClipboardFileCopy}
         />
       ) : (
         <>

@@ -192,8 +192,8 @@ export function ClipboardPanel({
 
       {clipboard.items.length === 0 ? (
         <p className="settings-hint" data-testid="clipboard-empty">
-          还没有记录到内容。启用插件并在任意应用里复制文字，历史会出现在「剪贴板」或
-          「剪切板」关键词下。
+          还没有记录到内容。启用插件并在任意应用里复制文字或文件，历史会出现在「剪贴板」或
+          「剪切板」关键词下。文件条目默认只是对原文件的引用，需要时可显式保存本机副本。
         </p>
       ) : (
         <ul className="theme-list" data-testid="clipboard-list">

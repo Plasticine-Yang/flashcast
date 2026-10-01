@@ -796,7 +796,9 @@ class MockHost implements HostApi {
     ...entry,
     formats: [...entry.formats],
     // 文件条目要深拷贝：保存副本会就地改写它，不能污染模块级样例。
-    files: entry.files.map((file) => ({ ...file, kind: { ...file.kind } })),
+    files: entry.files.map(
+      (file): ClipboardFileView => ({ ...file, kind: { ...file.kind } }),
+    ),
   }));
   /** 模拟的存储失败原因；非空时如实展示，而不是假装历史为空。 */
   private clipboardStorageError: string | null = null;
