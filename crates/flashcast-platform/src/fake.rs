@@ -415,20 +415,35 @@ pub type SharedCatalog = Arc<FakeAppCatalog>;
 /// `Local State` 解析），只有**启动**被替换成记录 argv。因此宿主集成测试可以用临时夹具
 /// 目录走完真实发现代码，同时精确断言交给 Chrome 的参数向量，而不会真的启动浏览器。
 pub struct FakeChrome {
-    environment: Mutex<Result<ChromeEnvironment, ChromeError>>,
+    discovery: FakeChromeDiscovery,
     launches: Mutex<Vec<ChromeLaunchRequest>>,
     launch_error: Mutex<Option<ChromeError>>,
     discovery_count: AtomicUsize,
 }
 
+/// 替身的发现来源。
+enum FakeChromeDiscovery {
+    /// 每次 `discover` 都按这些候选做**真实**发现：文件在夹具里变化后能被看见，
+    /// 与真实适配器的「每次调用都重新发现」一致。
+    Candidates {
+        binaries: Vec<BinaryCandidate>,
+        user_data: Vec<UserDataCandidate>,
+    },
+    /// 固定的发现结果（「Chrome 未安装」、profile 不可读等场景）。
+    Fixed(Box<Result<ChromeEnvironment, ChromeError>>),
+}
+
 impl FakeChrome {
-    /// 用给定的候选路径做一次真实发现，并记录结果（发现失败时 `discover` 也返回该错误）。
+    /// 用给定的候选路径做真实发现。
     pub fn from_candidates(
         binaries: Vec<BinaryCandidate>,
         user_data: Vec<UserDataCandidate>,
     ) -> Self {
         Self {
-            environment: Mutex::new(discover_from_paths(&binaries, &user_data)),
+            discovery: FakeChromeDiscovery::Candidates {
+                binaries,
+                user_data,
+            },
             launches: Mutex::new(Vec::new()),
             launch_error: Mutex::new(None),
             discovery_count: AtomicUsize::new(0),
@@ -438,7 +453,7 @@ impl FakeChrome {
     /// 直接给出发现结果（例如「Chrome 未安装」或 profile 不可读的场景）。
     pub fn with_environment(environment: Result<ChromeEnvironment, ChromeError>) -> Self {
         Self {
-            environment: Mutex::new(environment),
+            discovery: FakeChromeDiscovery::Fixed(Box::new(environment)),
             launches: Mutex::new(Vec::new()),
             launch_error: Mutex::new(None),
             discovery_count: AtomicUsize::new(0),
@@ -480,7 +495,13 @@ impl FakeChrome {
 impl ChromeProvider for FakeChrome {
     fn discover(&self) -> Result<ChromeEnvironment, ChromeError> {
         self.discovery_count.fetch_add(1, Ordering::SeqCst);
-        lock(&self.environment).clone()
+        match &self.discovery {
+            FakeChromeDiscovery::Candidates {
+                binaries,
+                user_data,
+            } => discover_from_paths(binaries, user_data),
+            FakeChromeDiscovery::Fixed(result) => (**result).clone(),
+        }
     }
 
     fn launch(&self, request: &ChromeLaunchRequest) -> Result<ChromeLaunch, ChromeError> {

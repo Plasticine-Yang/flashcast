@@ -13,10 +13,17 @@ use std::time::Duration;
 
 use flashcast_platform::capability::{Capabilities, CapabilityProbe, Support};
 use flashcast_platform::catalog::{AppCatalog, AppEntry};
+use flashcast_platform::chrome::{
+    build_open_args, validate_open_url, ChromeLaunchRequest, ChromeProvider,
+};
 use flashcast_platform::clipboard::ClipboardAccess;
 use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
 
+use crate::chrome::{
+    BookmarkEntry, BookmarkIndex, ChromeAssociation, ChromeBookmarkError, ChromeProfileView,
+    ChromeState, KEY_CHROME_ASSOCIATION,
+};
 use crate::clone::{self, CloneControl, CloneOutcome, CloneProgress, CredentialProvider};
 use crate::device::{CredentialStore, DeviceStore, StoredToken};
 use crate::git::{CommitOutcome, GitError, WorkspaceChanges};
@@ -52,6 +59,9 @@ pub struct HostDeps {
     /// 剪贴板（ADR §5）。只有宿主在命令入口里经权限校验后调用它；
     /// 功能插件拿不到这个句柄。
     pub clipboard: Arc<dyn ClipboardAccess>,
+    /// Chrome 发现与启动（ADR §5 的 `ChromeProvider`）。只有宿主在命令入口里经权限
+    /// 校验后调用它；功能插件拿不到这个句柄。
+    pub chrome: Arc<dyn ChromeProvider>,
     pub plugins: Arc<PluginRegistry>,
     /// 设备本地数据根目录（应用数据目录）。工作区之外的本机数据都放这里：
     /// 当前工作区的路径、缓存、设备路径、权限状态、日志与凭证。
@@ -96,6 +106,10 @@ struct HostInner {
     theme_error: Option<String>,
     /// 工作区主题配置 / 插件清单的问题（持续到配置修好或被重新选择）。
     theme_notice: Option<String>,
+    /// 已关联的 Chrome profile。来自设备本地存储，**不属于**配置工作区。
+    chrome_association: Option<ChromeAssociation>,
+    /// Chrome 关联 / 发现的问题（未安装、profile 消失、记录损坏……）。
+    chrome_error: Option<String>,
     /// 当前配置工作区；`None` 表示尚未关联。
     workspace: Option<Workspace>,
     /// 当前**已应用**设置内容的哈希。
@@ -134,6 +148,8 @@ pub struct Host {
     /// 备忘录的**生效内容**。宿主在成功写入工作区之后更新它，功能插件只读快照：
     /// 插件因此不持有工作区路径，也无法绕过宿主直接改文件（ADR §6）。
     memos: Arc<MemoBook>,
+    /// Chrome 书签索引：可随时从 `Bookmarks` 文件重建（文件是唯一事实来源）。
+    bookmarks: Arc<BookmarkIndex>,
     /// 设备本地存储：位于应用数据目录，与配置工作区分离。
     device: DeviceStore,
     /// 设备本地的 Git 凭证（https 令牌）；与工作区严格分离。
@@ -192,6 +208,8 @@ impl Host {
                 theme_appearance: Appearance::Light,
                 theme_error: None,
                 theme_notice: None,
+                chrome_association: None,
+                chrome_error: None,
                 workspace: None,
                 applied_settings_hash: None,
                 workspace_error: None,
@@ -200,6 +218,7 @@ impl Host {
             seq: AtomicU64::new(0),
             deps,
             memos: Arc::new(MemoBook::new()),
+            bookmarks: Arc::new(BookmarkIndex::new()),
             device,
             credentials,
             watch: Mutex::new(None),
@@ -209,6 +228,8 @@ impl Host {
         };
         host.rescan_catalog();
         host.restore_workspace();
+        // Chrome 关联是设备本地数据：启动时恢复，重启后仍然能直接检索与打开。
+        host.restore_chrome_association();
         host
     }
 
@@ -1152,7 +1173,7 @@ impl Host {
     /// 再把清单里的启停应用到注册表。`Host::new` **不**自动调用它，因为清单的补全
     /// 会改变「只有默认主题」时的清单内容；外壳与需要真实插件的调用方显式调用。
     pub fn install_official_plugins(&self) {
-        crate::plugins::register_official(&self.deps.plugins, &self.memos);
+        crate::plugins::register_official(&self.deps.plugins, &self.memos, &self.bookmarks);
         let merged = {
             let inner = lock(&self.inner);
             let (merged, _) = inner
@@ -1415,6 +1436,14 @@ impl Host {
     ///
     /// 这是 ADR §3 的补充入口 `preview(item)`：搜索结果是快照，预览要按需展开。
     pub fn preview(&self, item_id: &str) -> Option<Preview> {
+        if let Some(bookmark_id) = BookmarkEntry::id_from_item_id(item_id) {
+            if let Some(bookmark) = self.bookmarks.find(bookmark_id) {
+                return Some(Preview::Text {
+                    title: Some(bookmark.title),
+                    body: format!("{}\n目录：{}", bookmark.url, bookmark.folder),
+                });
+            }
+        }
         if let Some(memo_id) = crate::plugins::memo::memo_id_from_item_id(item_id) {
             if let Some(memo) = self.memos.find(memo_id) {
                 return Some(Preview::Text {
@@ -1470,6 +1499,275 @@ impl Host {
         }
         self.memos.replace(snapshot);
         true
+    }
+
+    // -----------------------------------------------------------------------
+    // Chrome 书签（ticket 13）
+    // -----------------------------------------------------------------------
+
+    /// 当前 Chrome 状态：发现结果、profile 列表、关联状态与书签索引状态。
+    ///
+    /// 这是 UI 轮询「书签文件有没有变化」的入口：每次调用都会按 mtime + size 检查
+    /// 书签文件，变化时重建索引（ADR §3 的补充入口）。慢操作（读文件、发现 Chrome）
+    /// 全部在锁外完成，只有汇总状态时才短暂持有内部锁。
+    pub fn chrome_state(&self) -> ChromeState {
+        self.bookmarks.refresh();
+        let association = self.association();
+        let discovered = self.deps.chrome.discover();
+
+        let snapshot = self.bookmarks.snapshot();
+        let mut state = ChromeState {
+            bookmarks_label: snapshot.status.label_zh(),
+            bookmarks: snapshot,
+            associated: association.as_ref().map(|item| item.profile_dir.clone()),
+            associated_name: association.as_ref().map(|item| item.display_name.clone()),
+            ..ChromeState::not_associated()
+        };
+
+        let mut live_error: Option<String> = None;
+        match discovered {
+            Ok(environment) => {
+                state.available = true;
+                state.brand_label = Some(environment.brand.label_zh().to_string());
+                state.custom_user_data_dir = environment.pass_user_data_dir;
+                state.binary = Some(environment.binary.clone());
+                state.user_data_dir = Some(environment.user_data_dir.clone());
+                state.warnings = environment.warnings.clone();
+                state.profiles = environment
+                    .profiles
+                    .iter()
+                    .map(|profile| ChromeProfileView {
+                        dir: profile.dir.clone(),
+                        name: profile.name.clone(),
+                        user_name: profile.user_name.clone(),
+                        managed: profile.managed,
+                        has_bookmarks: profile.has_bookmarks,
+                        bookmarks_readable: profile.bookmarks_readable,
+                        unreadable_reason: profile.unreadable_reason.clone(),
+                        associated: association
+                            .as_ref()
+                            .map(|item| item.profile_dir == profile.dir)
+                            .unwrap_or(false),
+                    })
+                    .collect();
+                if let Some(item) = &association {
+                    if !item.profile_dir_exists() {
+                        live_error = Some(format!(
+                            "关联的 Chrome profile「{}」目录已不存在，请在设置里重新选择",
+                            item.display_name
+                        ));
+                    }
+                }
+            }
+            Err(failure) => {
+                live_error = Some(failure.to_string());
+            }
+        }
+
+        // 设备本地记录本身有问题时优先展示（它只能靠重新关联修复）。
+        let record_error = lock(&self.inner).chrome_error.clone();
+        state.error = record_error.or(live_error);
+        state
+    }
+
+    /// 关联一个已发现的 Chrome profile。
+    ///
+    /// 只接受**发现结果里存在**的目录名：Chrome 在 `--profile-directory` 指向不存在的
+    /// 目录时会静默新建一个空 profile，因此这里先校验（研究笔记 §4）。关联记录写进
+    /// 设备本地存储，不进入配置工作区。
+    pub fn associate_chrome_profile(
+        &self,
+        profile_dir: &str,
+    ) -> Result<ChromeState, ChromeBookmarkError> {
+        let environment = self
+            .deps
+            .chrome
+            .discover()
+            .map_err(ChromeBookmarkError::from)?;
+        let profile = environment
+            .profile(profile_dir)
+            .ok_or_else(|| {
+                ChromeBookmarkError::ProfileMissing(format!(
+                    "{profile_dir}（已发现的 profile：{}）",
+                    environment
+                        .profiles
+                        .iter()
+                        .map(|profile| profile.dir.as_str())
+                        .collect::<Vec<_>>()
+                        .join("、")
+                ))
+            })?
+            .clone();
+
+        let association = ChromeAssociation {
+            profile_dir: profile.dir.clone(),
+            display_name: profile.name.clone(),
+            user_data_dir: environment.user_data_dir.clone(),
+            binary: environment.binary.clone(),
+            pass_user_data_dir: environment.pass_user_data_dir,
+        };
+        self.persist_chrome_association(&association)?;
+        self.apply_chrome_association(Some(&association));
+        {
+            // 记录已经有效，清掉「设备本地记录损坏」之类的旧问题。
+            lock(&self.inner).chrome_error = None;
+        }
+        Ok(self.chrome_state())
+    }
+
+    /// 显式重新读取书签文件（丢弃指纹，一定重读）。
+    pub fn refresh_chrome_bookmarks(&self) -> ChromeState {
+        self.bookmarks.invalidate();
+        self.chrome_state()
+    }
+
+    /// 书签索引快照（插件与设置界面都只读它）。
+    pub fn chrome_bookmarks(&self) -> crate::chrome::BookmarkSnapshot {
+        self.bookmarks.snapshot()
+    }
+
+    /// Chrome 书签插件是否存在于清单中且处于启用状态。
+    pub fn chrome_plugin_enabled(&self) -> bool {
+        lock(&self.inner)
+            .manifest
+            .get(crate::plugins::CHROME_PLUGIN_ID)
+            .map(|entry| entry.kind == PluginKind::Feature && entry.enabled)
+            .unwrap_or(false)
+            && self
+                .deps
+                .plugins
+                .is_enabled(crate::plugins::CHROME_PLUGIN_ID)
+    }
+
+    /// 当前关联的 profile（设备本地数据）。
+    fn association(&self) -> Option<ChromeAssociation> {
+        lock(&self.inner).chrome_association.clone()
+    }
+
+    /// 启动时从设备本地存储恢复关联，让重启后可以直接检索与打开。
+    fn restore_chrome_association(&self) {
+        let raw = match self.device.get(KEY_CHROME_ASSOCIATION) {
+            Ok(raw) => raw,
+            Err(error) => {
+                lock(&self.inner).chrome_error =
+                    Some(format!("无法读取设备本地的 Chrome 关联：{error}"));
+                return;
+            }
+        };
+        let Some(raw) = raw else { return };
+        match serde_json::from_str::<ChromeAssociation>(&raw) {
+            Ok(association) => self.apply_chrome_association(Some(&association)),
+            Err(error) => {
+                lock(&self.inner).chrome_error = Some(format!(
+                    "设备本地的 Chrome 关联记录无法解析（{error}）；请在设置里重新选择 profile"
+                ));
+            }
+        }
+    }
+
+    /// 写入设备本地的关联记录。
+    fn persist_chrome_association(
+        &self,
+        association: &ChromeAssociation,
+    ) -> Result<(), ChromeBookmarkError> {
+        let text = serde_json::to_string_pretty(association)
+            .map_err(|error| ChromeBookmarkError::Device(error.to_string()))?;
+        self.device
+            .put(KEY_CHROME_ASSOCIATION, &text)
+            .map_err(|error| ChromeBookmarkError::Device(error.to_string()))
+    }
+
+    /// 让生效状态跟着关联走：索引指向新的书签文件并立刻重建。
+    fn apply_chrome_association(&self, association: Option<&ChromeAssociation>) {
+        {
+            let mut inner = lock(&self.inner);
+            inner.chrome_association = association.cloned();
+        }
+        self.bookmarks
+            .set_path(association.map(ChromeAssociation::bookmarks_path));
+        self.bookmarks.refresh();
+    }
+
+    /// 书签的默认操作：在关联的 Chrome profile 里打开。
+    ///
+    /// 权限校验在原生边界：来源插件必须在清单里、已启用，并声明 `chrome.open`。
+    /// 打开前**立刻重读书签文件**（列表可能是上一次查询的快照），再校验 profile 目录
+    /// 确实存在、URL 可以安全地作为 argv 交给 Chrome。启动只 `spawn`，不等待也不以
+    /// 退出码判断页面是否打开。
+    fn execute_bookmark(&self, item: &SearchItem) -> ActionOutcome {
+        if let Err(outcome) =
+            self.feature_source(item, crate::plugins::CAP_CHROME_OPEN, "在 Chrome 打开")
+        {
+            return outcome;
+        }
+        let Some(association) = self.association() else {
+            return ActionOutcome::failed(ChromeBookmarkError::NoAssociation.to_string());
+        };
+        let Some(bookmark_id) = BookmarkEntry::id_from_item_id(&item.id) else {
+            return ActionOutcome::failed(format!("无法识别的书签条目：{}", item.id));
+        };
+        // 先校验 profile 目录确实存在：`--profile-directory` 指向不存在的目录时
+        // Chrome 会静默新建一个空 profile（研究笔记 §4），这一步必须在启动之前。
+        if !association.profile_dir_exists() {
+            return ActionOutcome::failed(
+                ChromeBookmarkError::ProfileMissing(association.profile_dir.clone()).to_string(),
+            );
+        }
+        // 打开前立即重读：书签可能刚在 Chrome 里被删掉或改过。
+        self.bookmarks.refresh();
+        let Some(bookmark) = self.bookmarks.find(bookmark_id) else {
+            return ActionOutcome::failed(
+                ChromeBookmarkError::BookmarkMissing(item.title.clone()).to_string(),
+            );
+        };
+        let url = match validate_open_url(&bookmark.url) {
+            Ok(url) => url.to_string(),
+            Err(error) => return ActionOutcome::failed(error.to_string()),
+        };
+        let user_data_dir = association
+            .pass_user_data_dir
+            .then_some(association.user_data_dir.as_path());
+        let request = ChromeLaunchRequest::new(
+            association.binary.clone(),
+            build_open_args(&association.profile_dir, user_data_dir, &url),
+        );
+        match self.deps.chrome.launch(&request) {
+            Ok(_receipt) => ActionOutcome::done(Some(format!(
+                "已请求 Chrome 用 profile「{}」打开：{}；Chrome 已运行时由现有进程接管，\
+                 Flashcast 不等待进程退出，也无法据此确认页面是否已加载",
+                association.display_name, url
+            ))),
+            Err(error) => ActionOutcome::failed(ChromeBookmarkError::from(error).to_string()),
+        }
+    }
+
+    /// 命令入口的通用前置校验：来源插件必须在清单里、已启用，并声明所需能力。
+    fn feature_source(
+        &self,
+        item: &SearchItem,
+        capability: &str,
+        native_action: &str,
+    ) -> Result<(), ActionOutcome> {
+        let entry = lock(&self.inner).manifest.get(&item.source).cloned();
+        let Some(entry) = entry.filter(|entry| entry.kind == PluginKind::Feature) else {
+            return Err(ActionOutcome::failed(format!(
+                "结果来源「{}」不在插件清单里，已拒绝执行",
+                item.source
+            )));
+        };
+        if !entry.enabled || !self.deps.plugins.is_enabled(&item.source) {
+            return Err(ActionOutcome::failed(format!(
+                "插件「{}」已停用，已拒绝执行",
+                entry.name
+            )));
+        }
+        if !entry.to_feature_manifest().requires(capability) {
+            return Err(ActionOutcome::failed(format!(
+                "插件「{}」没有声明 {} 能力，宿主不会替它{}",
+                entry.name, capability, native_action
+            )));
+        }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -1914,6 +2212,7 @@ impl Host {
             ItemKind::Application => self.execute_application(item),
             ItemKind::Command => self.execute_command(item),
             ItemKind::Memo => self.execute_memo(item),
+            ItemKind::Bookmark => self.execute_bookmark(item),
             other => ActionOutcome::failed(format!(
                 "当前版本尚不支持执行这类条目（{other:?}），相关功能将在后续版本提供"
             )),

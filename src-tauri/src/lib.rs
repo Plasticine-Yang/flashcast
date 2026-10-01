@@ -89,6 +89,7 @@ pub fn run() {
                 launcher: Arc::clone(&platform.launcher),
                 capabilities: Arc::clone(&platform.capabilities),
                 clipboard: Arc::clone(&platform.clipboard),
+                chrome: Arc::clone(&platform.chrome),
                 plugins,
                 device_dir,
             };

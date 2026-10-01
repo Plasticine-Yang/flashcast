@@ -9,7 +9,9 @@ use flashcast_core::{
     SearchItem, COMMAND_CAPABILITIES, COMMAND_RESCAN,
 };
 use flashcast_platform::catalog::{AppEntry, AppSource};
-use flashcast_platform::fake::{FakeAppCatalog, FakeCapabilityProbe, FakeClipboard, FakeLauncher};
+use flashcast_platform::fake::{
+    FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeLauncher,
+};
 use flashcast_platform::launch::LaunchError;
 use support::{app, fast_settings, host_with};
 
@@ -105,6 +107,7 @@ fn launch_failure_produces_chinese_feedback() {
         })),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
+        chrome: Arc::new(FakeChrome::not_installed("测试环境未配置 Chrome")),
         plugins: Arc::new(PluginRegistry::new()),
         device_dir: support::unique_dir("device"),
     };
