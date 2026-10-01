@@ -13,8 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flashcast_core::{
-    DefaultAction, FeaturePlugin, Host, HostDeps, ItemKind, Keyword, PluginError, PluginManifest,
-    PluginRegistry, PluginScope, Preview, Score, SearchContext, SearchItem, Settings,
+    ClipboardCaptureOutcome, ClipboardEvent, DefaultAction, FeaturePlugin, Host, HostDeps,
+    ItemKind, Keyword, PluginError, PluginManifest, PluginRegistry, PluginScope, Preview, Score,
+    SearchContext, SearchItem, Settings, CLIPBOARD_PLUGIN_ID,
 };
 use flashcast_platform::catalog::{AppEntry, AppSource, IconRef};
 use flashcast_platform::chrome::ChromeProvider;
@@ -1164,5 +1165,146 @@ impl FeaturePlugin for FaultyScopePlugin {
             keyword: keyword.as_str().to_string(),
             fault: self.fault,
         }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 剪贴板历史（ticket 09）
+// ---------------------------------------------------------------------------
+
+/// 剪贴板历史的测试载体：宿主 + 可观察的剪贴板 / 监听 / 粘贴替身。
+///
+/// 默认**停掉后台线程**：捕获由测试通过 [`ClipboardHarness::copy`] 显式驱动，结果完全
+/// 确定。需要验证后台活动本身的用例显式调用 `sync_clipboard_runtime()`。
+pub struct ClipboardHarness {
+    pub host: Host,
+    pub clipboard: Arc<FakeClipboard>,
+    pub watcher: Arc<FakeClipboardWatcher>,
+    pub focus: Arc<FakeFocusTracker>,
+    pub paster: Arc<FakePaster>,
+    pub device_dir: PathBuf,
+}
+
+impl ClipboardHarness {
+    /// 启用剪贴板插件。插件默认关闭，必须显式启用后才会捕获。
+    pub fn enable(&self) {
+        self.host
+            .set_plugin_enabled(CLIPBOARD_PLUGIN_ID, true)
+            .expect("启用剪贴板插件");
+        self.host.stop_clipboard_capture();
+    }
+
+    /// 模拟一次外部复制（只改剪贴板，不捕获）。
+    pub fn copy_only(&self, text: &str) {
+        self.watcher.set_text(text);
+    }
+
+    /// 唤起：外壳在显示窗口之前捕获前台应用，并交给宿主作为粘贴目标。
+    ///
+    /// 与 ticket 08 的 `PasteHarness::summon` 同一语义：焦点替身与宿主的目标必须
+    /// 一致，否则 `complete_paste` 会（正确地）降级为手动粘贴。
+    pub fn summon(&self, app: flashcast_platform::FocusedApp) {
+        self.focus.set_active(Some(app.clone()));
+        self.host.set_paste_target(Some(app));
+    }
+
+    /// 模拟一次外部复制并同步捕获一次。
+    pub fn copy(&self, text: &str) -> ClipboardCaptureOutcome {
+        self.copy_only(text);
+        self.host.capture_clipboard_once()
+    }
+
+    /// 当前历史（置顶在前，然后按时间倒序）。
+    pub fn entries(&self) -> Vec<ClipboardEvent> {
+        self.host.clipboard_entries(None)
+    }
+
+    /// 当前历史条目的摘要，按显示顺序。
+    pub fn summaries(&self) -> Vec<String> {
+        self.entries()
+            .into_iter()
+            .map(|event| event.summary)
+            .collect()
+    }
+
+    /// 进入剪贴板范围并取回其中的条目（经查询入口）。
+    pub fn scope_items(&self, input: &str) -> Vec<SearchItem> {
+        self.host.query(input).items
+    }
+
+    /// 进入范围并取回第一条剪贴板条目。
+    pub fn first_item(&self, input: &str) -> SearchItem {
+        self.scope_items(input)
+            .into_iter()
+            .find(|item| item.kind == ItemKind::ClipboardEntry)
+            .unwrap_or_else(|| panic!("「{input}」范围内应有剪贴板条目"))
+    }
+}
+
+/// 构造剪贴板历史的测试宿主（新设备目录）。
+pub fn clipboard_host(settings: Settings) -> ClipboardHarness {
+    clipboard_host_with_device(&unique_dir("clipboard-device"), settings)
+}
+
+/// 用给定的**设备目录**构造剪贴板历史的测试宿主：同一个目录即模拟「重启应用」。
+pub fn clipboard_host_with_device(device_dir: &Path, settings: Settings) -> ClipboardHarness {
+    clipboard_host_with_watcher(device_dir, settings, Arc::new(FakeClipboardWatcher::new()))
+}
+
+/// 同 [`clipboard_host_with_device`]，但注入调用方提供的监听替身
+/// （用于模拟「拿不到剪贴板选区」这类环境问题）。
+pub fn clipboard_host_with_watcher(
+    device_dir: &Path,
+    settings: Settings,
+    watcher: Arc<FakeClipboardWatcher>,
+) -> ClipboardHarness {
+    let clipboard = Arc::new(FakeClipboard::new());
+    let focus = Arc::new(FakeFocusTracker::default());
+    // 粘贴替身观察剪贴板：验证「注入时剪贴板里就是这条历史的内容」。
+    let paster = Arc::new(FakePaster::observing(Arc::clone(&clipboard)));
+    let deps = HostDeps {
+        catalog: Arc::new(FakeAppCatalog::with_apps(Vec::new())),
+        launcher: Arc::new(FakeLauncher::always_succeeds()),
+        capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
+        clipboard: clipboard.clone(),
+        clipboard_watcher: watcher.clone(),
+        chrome: no_chrome(),
+        focus: focus.clone(),
+        paster: paster.clone(),
+        plugins: Arc::new(PluginRegistry::new()),
+        device_dir: device_dir.to_path_buf(),
+    };
+    let host = Host::new(deps, settings);
+    host.install_official_plugins();
+    // 测试要确定性：安装官方插件可能启动后台线程，这里立刻停掉。
+    host.stop_clipboard_capture();
+    ClipboardHarness {
+        host,
+        clipboard,
+        watcher,
+        focus,
+        paster,
+        device_dir: device_dir.to_path_buf(),
+    }
+}
+
+/// 构造一个「本机存储不可用」的剪贴板宿主：设备目录里 `clipboard` 是一个普通文件，
+/// 因此数据库目录无法创建。宿主仍必须可用，并如实报告存储失败。
+pub fn clipboard_host_with_broken_storage(settings: Settings) -> ClipboardHarness {
+    let device_dir = unique_dir("clipboard-broken");
+    std::fs::write(device_dir.join("clipboard"), b"not a directory").expect("写入占位文件");
+    let harness = clipboard_host_with_device(&device_dir, settings);
+    harness.enable();
+    harness
+}
+
+/// 一个用于粘贴目标的应用身份。
+pub fn focused_app(id: &str) -> flashcast_platform::FocusedApp {
+    flashcast_platform::FocusedApp {
+        id: id.to_string(),
+        name: id.to_string(),
+        wm_class: Some(id.to_string()),
+        pid: Some(4242),
+        window: Some(11),
     }
 }

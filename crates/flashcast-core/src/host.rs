@@ -1673,6 +1673,15 @@ impl Host {
         }
     }
 
+    /// 本机剪贴板历史存储（诊断与测试用）。
+    ///
+    /// 暴露它是为了让「保留期限」这类**与时钟有关**的行为可以被验证：宿主不提供
+    /// 加速时间的能力，测试只能用同一个回收入口把「现在」推到期限之外，再从查询入口
+    /// 断言结果。
+    pub fn clipboard_store(&self) -> &Arc<ClipboardStore> {
+        self.clipboard.store()
+    }
+
     /// 后台捕获线程是否正在运行。
     pub fn clipboard_capture_active(&self) -> bool {
         self.clipboard.is_running()

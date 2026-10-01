@@ -61,6 +61,12 @@ pub fn run() {
             commands::cancel_sync,
             commands::memos,
             commands::memo_problems,
+            commands::get_clipboard_state,
+            commands::set_clipboard_paused,
+            commands::set_clipboard_limits,
+            commands::pin_clipboard_entry,
+            commands::delete_clipboard_entry,
+            commands::clear_clipboard_history,
             commands::create_memo,
             commands::update_memo,
             commands::delete_memo,
@@ -92,6 +98,7 @@ pub fn run() {
                 launcher: Arc::clone(&platform.launcher),
                 capabilities: Arc::clone(&platform.capabilities),
                 clipboard: Arc::clone(&platform.clipboard),
+                clipboard_watcher: Arc::clone(&platform.clipboard_watcher),
                 chrome: Arc::clone(&platform.chrome),
                 focus: Arc::clone(&platform.focus),
                 paster: Arc::clone(&platform.paster),
@@ -102,6 +109,9 @@ pub fn run() {
             // 随应用提供的官方功能插件（ticket 07 起：备忘录）。实现随应用编译进来，
             // 「有哪些插件、是否启用」以工作区的 manifest.json 为唯一权威。
             host.install_official_plugins();
+            // 剪贴板历史默认关闭；用户启用后 `set_plugin_enabled` 会自动启动后台捕获，
+            // 这里显式调用一次是为了让「清单里本来就启用」的配置在启动时也生效。
+            host.start_clipboard_capture();
             app.manage(AppState::new(host, platform));
 
             // 托盘是 Linux 上的必需备用入口（Wayland 下快捷键注册会失败）。

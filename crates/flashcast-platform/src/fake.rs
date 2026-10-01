@@ -377,6 +377,9 @@ struct FakeWatcherState {
     delivered: u64,
     /// 自身写入的内容指纹，`poll` 见到就抑制。
     own: Vec<u64>,
+    /// 是否在适配层抑制自身写入。置为 `false` 用于验证**宿主自己的兜底抑制**
+    /// 独立成立（真实适配层失效时也不能形成自身写入循环）。
+    suppress_own: bool,
     error: Option<ClipboardError>,
 }
 
@@ -390,6 +393,7 @@ impl Default for FakeClipboardWatcher {
                 sequence: 0,
                 delivered: 0,
                 own: Vec::new(),
+                suppress_own: true,
                 error: None,
             }),
             polls: AtomicUsize::new(0),
@@ -449,6 +453,14 @@ impl FakeClipboardWatcher {
     pub fn own_write_count(&self) -> usize {
         self.own_writes.load(Ordering::SeqCst)
     }
+
+    /// 让适配层**不再**抑制自身写入。
+    ///
+    /// 用于验证宿主侧的兜底抑制独立成立：即使适配层把自身写入报告成一次变化，
+    /// 宿主也必须按内容指纹丢弃它，不能形成「粘贴 → 捕获 → 再粘贴」的循环。
+    pub fn ignore_own_writes(&self) {
+        lock(&self.state).suppress_own = false;
+    }
 }
 
 impl ClipboardWatcher for FakeClipboardWatcher {
@@ -467,9 +479,11 @@ impl ClipboardWatcher for FakeClipboardWatcher {
             return Ok(ClipboardPoll::Unchanged);
         };
         let print = crate::clipboard::fingerprint(&text);
-        if let Some(index) = state.own.iter().position(|item| *item == print) {
-            state.own.remove(index);
-            return Ok(ClipboardPoll::Unchanged);
+        if state.suppress_own {
+            if let Some(index) = state.own.iter().position(|item| *item == print) {
+                state.own.remove(index);
+                return Ok(ClipboardPoll::Unchanged);
+            }
         }
         self.captures.fetch_add(1, Ordering::SeqCst);
         Ok(ClipboardPoll::Changed(ClipboardCapture {

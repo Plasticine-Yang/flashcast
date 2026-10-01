@@ -32,10 +32,11 @@ pub use chrome::{
     BOOKMARK_ITEM_PREFIX, KEY_CHROME_ASSOCIATION, PARSE_RETRY_DELAY,
 };
 pub use clipboard::{
-    content_hash_text, event_from_capture, event_id_from_item_id, new_event_id, now_ms,
-    summary_for_text, AttachmentKind, ClipboardAttachment, ClipboardEvent, ClipboardFormat,
-    ClipboardPayload, ClipboardStats, ClipboardStore, ClipboardStoreError, InsertOutcome,
-    PayloadRole, ReclaimReport, ATTACHMENTS_DIR, CLIPBOARD_DB_FILE, CLIPBOARD_DIR,
+    content_hash_text, describe_age, event_from_capture, event_id_from_item_id, new_event_id,
+    now_ms, summary_for_text, AttachmentKind, ClipboardActionError, ClipboardAttachment,
+    ClipboardCaptureOutcome, ClipboardEvent, ClipboardFormat, ClipboardPayload, ClipboardRuntime,
+    ClipboardRuntimeSnapshot, ClipboardState, ClipboardStats, ClipboardStore, ClipboardStoreError,
+    InsertOutcome, PayloadRole, ReclaimReport, ATTACHMENTS_DIR, CLIPBOARD_DB_FILE, CLIPBOARD_DIR,
     CLIPBOARD_ITEM_PREFIX, CLIPBOARD_PLUGIN_ID, SCHEMA_VERSION, SUMMARY_MAX_CHARS,
 };
 pub use clone::{

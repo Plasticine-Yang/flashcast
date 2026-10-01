@@ -602,7 +602,7 @@ impl ClipboardStore {
                 let evicted = tx.execute(
                     "DELETE FROM clipboard_events WHERE id IN (
                          SELECT id FROM clipboard_events WHERE pinned = 0
-                         ORDER BY captured_at ASC, id ASC LIMIT ?1)",
+                         ORDER BY captured_at ASC, rowid ASC LIMIT ?1)",
                     params![needed as i64],
                 )?;
                 if evicted < needed {
@@ -669,7 +669,7 @@ impl ClipboardStore {
                             OR summary LIKE ?1 ESCAPE '\\'
                             OR source_app_id LIKE ?1 ESCAPE '\\'
                             OR source_title LIKE ?1 ESCAPE '\\'
-                         ORDER BY pinned DESC, captured_at DESC, id ASC LIMIT ?2"
+                         ORDER BY pinned DESC, captured_at DESC, rowid DESC LIMIT ?2"
                     );
                     let mut stmt = conn.prepare(&sql)?;
                     let rows = stmt.query_map(params![pattern, limit as i64], event_from_row)?;
@@ -680,7 +680,7 @@ impl ClipboardStore {
                 None => {
                     let sql = format!(
                         "SELECT {EVENT_COLUMNS} FROM clipboard_events
-                         ORDER BY pinned DESC, captured_at DESC, id ASC LIMIT ?1"
+                         ORDER BY pinned DESC, captured_at DESC, rowid DESC LIMIT ?1"
                     );
                     let mut stmt = conn.prepare(&sql)?;
                     let rows = stmt.query_map(params![limit as i64], event_from_row)?;
@@ -756,7 +756,7 @@ impl ClipboardStore {
                     over_capacity = tx.execute(
                         "DELETE FROM clipboard_events WHERE id IN (
                              SELECT id FROM clipboard_events WHERE pinned = 0
-                             ORDER BY captured_at ASC, id ASC LIMIT ?1)",
+                             ORDER BY captured_at ASC, rowid ASC LIMIT ?1)",
                         params![(total - capacity) as i64],
                     )?;
                 }

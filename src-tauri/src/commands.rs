@@ -543,6 +543,141 @@ pub fn delete_memo(state: State<'_, AppState>, id: String) -> Result<(), String>
 }
 
 // ---------------------------------------------------------------------------
+// 剪贴板历史（ticket 09）
+// ---------------------------------------------------------------------------
+
+/// 展示用的剪贴板历史条目。
+///
+/// `text` 只回给本机 webview 用于预览；历史与附件都只在本机（ADR §8、spec 用户故事 30）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardEntryView {
+    pub id: String,
+    pub summary: String,
+    pub text: Option<String>,
+    /// 格式标签的中文名，例如 `["文字"]`。
+    pub formats: Vec<String>,
+    pub source: Option<String>,
+    pub captured_at_ms: i64,
+    pub pinned: bool,
+    pub copies: u32,
+    /// 附件数量（tickets 10–12 的图片与文件副本）。
+    pub attachments: usize,
+}
+
+/// 剪贴板历史面板需要的全部状态：宿主状态 + 当前条目列表。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardStateView {
+    #[serde(flatten)]
+    pub state: flashcast_core::ClipboardState,
+    pub items: Vec<ClipboardEntryView>,
+}
+
+fn clipboard_state_view(state: &AppState) -> ClipboardStateView {
+    let items = state
+        .host
+        .clipboard_entries(None)
+        .into_iter()
+        .map(|event| ClipboardEntryView {
+            id: event.id.clone(),
+            summary: event.summary.clone(),
+            text: event.text.clone(),
+            formats: event
+                .format_labels()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            source: event.source.as_ref().map(|source| {
+                source
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| source.app_id.clone())
+            }),
+            captured_at_ms: event.captured_at_ms,
+            pinned: event.pinned,
+            copies: event.copies,
+            attachments: event.attachments.len(),
+        })
+        .collect();
+    ClipboardStateView {
+        state: state.host.clipboard_state(),
+        items,
+    }
+}
+
+/// 剪贴板历史状态：是否启用、是否暂停、后台是否在捕获、存储是否可用、
+/// 容量与保留期限，以及容量触顶 / 最近失败的准确原因。
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_clipboard_state(state: State<'_, AppState>) -> ClipboardStateView {
+    clipboard_state_view(&state)
+}
+
+/// 暂停或恢复记录。设置随其它偏好写进配置工作区。
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_clipboard_paused(
+    state: State<'_, AppState>,
+    paused: bool,
+) -> Result<ClipboardStateView, String> {
+    state
+        .host
+        .set_clipboard_paused(paused)
+        .map_err(|error| error.to_string())?;
+    Ok(clipboard_state_view(&state))
+}
+
+/// 设置保留期限（天）与容量（条目数），并立即回收超出的条目。
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_clipboard_limits(
+    state: State<'_, AppState>,
+    retention_days: u32,
+    capacity: usize,
+) -> Result<ClipboardStateView, String> {
+    state
+        .host
+        .set_clipboard_limits(retention_days, capacity)
+        .map_err(|error| error.to_string())?;
+    Ok(clipboard_state_view(&state))
+}
+
+/// 置顶 / 取消置顶一条历史。
+#[tauri::command(rename_all = "snake_case")]
+pub fn pin_clipboard_entry(
+    state: State<'_, AppState>,
+    id: String,
+    pinned: bool,
+) -> Result<ClipboardStateView, String> {
+    state
+        .host
+        .pin_clipboard_entry(&id, pinned)
+        .map_err(|error| error.to_string())?;
+    Ok(clipboard_state_view(&state))
+}
+
+/// 删除一条历史（同时回收不再被引用的附件）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn delete_clipboard_entry(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<ClipboardStateView, String> {
+    state
+        .host
+        .delete_clipboard_entry(&id)
+        .map_err(|error| error.to_string())?;
+    Ok(clipboard_state_view(&state))
+}
+
+/// 清空历史（置顶条目也会被清掉，附件同步回收）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn clear_clipboard_history(state: State<'_, AppState>) -> Result<ClipboardStateView, String> {
+    state
+        .host
+        .clear_clipboard_history()
+        .map_err(|error| error.to_string())?;
+    Ok(clipboard_state_view(&state))
+}
+
+// ---------------------------------------------------------------------------
 // Chrome 书签（ticket 13）
 // ---------------------------------------------------------------------------
 
