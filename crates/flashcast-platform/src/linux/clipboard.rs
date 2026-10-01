@@ -17,8 +17,10 @@ use std::sync::Mutex;
 
 use crate::capability::SessionType;
 use crate::clipboard::{
-    check_text, find_program, fingerprint, read_with_tool, write_with_tool, ClipboardAccess,
-    ClipboardCapture, ClipboardError, ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
+    check_image_write, check_text, find_program, fingerprint, fingerprint_bytes, image_from_bytes,
+    read_bytes_bounded, read_with_tool, write_bytes_with_tool, write_with_tool, ClipboardAccess,
+    ClipboardCapture, ClipboardError, ClipboardImage, ClipboardPoll, ClipboardSourceApp,
+    ClipboardWatcher, IMAGE_MIME_PNG, MAX_IMAGE_BYTES,
 };
 
 use super::{force_x11_backend, x11};
@@ -106,6 +108,70 @@ impl LinuxClipboard {
     pub fn read_backend_name(&self) -> Result<&'static str, ClipboardError> {
         self.read_backend().map(|(name, _, _)| name)
     }
+
+    /// 写入图片时使用的后端。
+    ///
+    /// 图片必须按 MIME 目标写入（`wl-copy -t image/png` / `xclip -t image/png`），
+    /// `xsel` 没有按目标选择格式的能力，因此图片路径上**不**回退到 `xsel`：
+    /// 拿不到就如实报「工具缺失」，而不是写出一段被当成文本的二进制。
+    fn image_write_backend(&self) -> Result<Backend, ClipboardError> {
+        let x11 = || {
+            find_program("xclip").map(|path| {
+                (
+                    "xclip",
+                    path,
+                    vec!["-selection", "clipboard", "-t", IMAGE_MIME_PNG, "-in"],
+                )
+            })
+        };
+        let wayland =
+            || find_program("wl-copy").map(|path| ("wl-copy", path, vec!["-t", IMAGE_MIME_PNG]));
+        pick_backend(self.session, self.force_x11, [&wayland, &x11]).map_err(|error| match error {
+            ClipboardError::ToolMissing { .. } => ClipboardError::ToolMissing {
+                reason: format!(
+                    "{} 会话需要 wl-copy（Wayland）或 xclip（X11）才能写入图片；xsel 不支持按图片格式写入",
+                    self.session.label_zh()
+                ),
+            },
+            other => other,
+        })
+    }
+
+    /// 读取图片时使用的后端（同样只走支持 MIME 目标的工具）。
+    fn image_read_backend(&self) -> Result<Backend, ClipboardError> {
+        let x11 = || {
+            find_program("xclip").map(|path| {
+                (
+                    "xclip",
+                    path,
+                    vec!["-selection", "clipboard", "-t", IMAGE_MIME_PNG, "-o"],
+                )
+            })
+        };
+        let wayland = || {
+            find_program("wl-paste")
+                .map(|path| ("wl-paste", path, vec!["--no-newline", "-t", IMAGE_MIME_PNG]))
+        };
+        pick_backend(self.session, self.force_x11, [&wayland, &x11])
+    }
+
+    /// 读取当前剪贴板里的图片，并把「有图片但无法保存」的原因一并带回。
+    ///
+    /// `None` 表示剪贴板里没有 PNG 图片（很常见：复制的是文字）；原因是给监听层用的，
+    /// 它会如实上报「这次复制没有被保存」，而不是静默跳过。
+    pub fn read_image_detailed(
+        &self,
+    ) -> Result<(Option<ClipboardImage>, Option<String>), ClipboardError> {
+        let backend = match self.image_read_backend() {
+            Ok(backend) => backend,
+            // 没有支持图片目标的工具：如实表示「读不到图片」，不是错误。
+            Err(ClipboardError::ToolMissing { .. }) => return Ok((None, None)),
+            Err(error) => return Err(error),
+        };
+        let (_, program, args) = backend;
+        let bytes = read_bytes_bounded(&program, &args, MAX_IMAGE_BYTES)?;
+        Ok(image_from_bytes(IMAGE_MIME_PNG, bytes))
+    }
 }
 
 impl ClipboardAccess for LinuxClipboard {
@@ -118,6 +184,20 @@ impl ClipboardAccess for LinuxClipboard {
     fn read_text(&self) -> Result<Option<String>, ClipboardError> {
         let (_, program, args) = self.read_backend()?;
         read_with_tool(&program, &args)
+    }
+
+    /// 写入图片（ticket 10）。
+    ///
+    /// Wayland 的选区由持有者提供：`wl-copy` 会 fork 出守护进程持有选区，因此与文本
+    /// 一样走有界等待；拿不到选区时如实报错，宿主据此降级为手动粘贴。
+    fn write_image(&self, image: &ClipboardImage) -> Result<(), ClipboardError> {
+        check_image_write(image)?;
+        let (_, program, args) = self.image_write_backend()?;
+        write_bytes_with_tool(&program, &args, &image.bytes)
+    }
+
+    fn read_image(&self) -> Result<Option<ClipboardImage>, ClipboardError> {
+        Ok(self.read_image_detailed()?.0)
     }
 }
 
@@ -164,6 +244,11 @@ impl LinuxClipboardWatcher {
         LinuxClipboard::with_session(self.session, self.force_x11).read_text()
     }
 
+    /// 读取当前剪贴板图片（ticket 10）。
+    fn read_image(&self) -> Result<(Option<ClipboardImage>, Option<String>), ClipboardError> {
+        LinuxClipboard::with_session(self.session, self.force_x11).read_image_detailed()
+    }
+
     /// 这次读取是否走 X11 一族（来源应用只能在 X11 上查到）。
     fn uses_x11(&self) -> bool {
         self.session != SessionType::Wayland || self.force_x11
@@ -185,11 +270,21 @@ impl LinuxClipboardWatcher {
 
 impl ClipboardWatcher for LinuxClipboardWatcher {
     fn poll(&self) -> Result<ClipboardPoll, ClipboardError> {
-        let Some(text) = self.read()? else {
-            // 剪贴板为空或只含非文本格式：v0.1.0 没有可捕获的内容。
+        // 文字与图片都读一次：一次复制事件可能同时带来两者（例如浏览器同时给出
+        // 图片与图片地址），只读其中一种会漏掉另一半。
+        let text = self.read()?.filter(|text| !text.is_empty());
+        let (image, problem) = self.read_image()?;
+        if text.is_none() && image.is_none() && problem.is_none() {
+            // 剪贴板为空或只含本版本不捕获的格式。
             return Ok(ClipboardPoll::Unchanged);
+        }
+        let print = match (&text, &image) {
+            (Some(text), _) => fingerprint(text),
+            (None, Some(image)) => fingerprint_bytes(&image.bytes),
+            // 只有「有图片但保存不了」的原因时，按原因本身判定变化，
+            // 同一个失败不会被反复上报成新的复制事件。
+            (None, None) => fingerprint(problem.as_deref().unwrap_or_default()),
         };
-        let print = fingerprint(&text);
         {
             let mut own = self.own.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(index) = own.iter().position(|item| *item == print) {
@@ -206,9 +301,18 @@ impl ClipboardWatcher for LinuxClipboardWatcher {
             }
             *last = Some(print);
         }
+        let mut formats = Vec::new();
+        if text.is_some() {
+            formats.push(crate::clipboard::ClipboardFormatKind::Text);
+        }
+        if image.is_some() {
+            formats.push(crate::clipboard::ClipboardFormatKind::Image);
+        }
         Ok(ClipboardPoll::Changed(ClipboardCapture {
-            formats: vec![crate::clipboard::ClipboardFormatKind::Text],
-            text: Some(text),
+            formats,
+            text,
+            image,
+            image_problem: problem,
             source: self.source(),
         }))
     }

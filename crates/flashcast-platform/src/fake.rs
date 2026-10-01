@@ -13,8 +13,8 @@ use crate::chrome::{
     ChromeLaunchRequest, ChromeProvider, UserDataCandidate,
 };
 use crate::clipboard::{
-    ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFormatKind, ClipboardPoll,
-    ClipboardSourceApp, ClipboardWatcher,
+    ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFormatKind, ClipboardImage,
+    ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
 };
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
@@ -282,6 +282,8 @@ impl Paster for FakePaster {
 #[derive(Default)]
 pub struct FakeClipboard {
     writes: Mutex<Vec<String>>,
+    /// 写入过的图片，按顺序（ticket 10）。
+    images: Mutex<Vec<ClipboardImage>>,
     failures: Mutex<Vec<ClipboardError>>,
     read_failures: Mutex<Vec<ClipboardError>>,
 }
@@ -313,6 +315,11 @@ impl FakeClipboard {
         lock(&self.writes).push(text.into());
     }
 
+    /// 直接设置当前剪贴板里的图片，模拟「外部应用写入了图片」。
+    pub fn set_image(&self, image: ClipboardImage) {
+        lock(&self.images).push(image);
+    }
+
     /// 已写入的文本，按顺序。
     pub fn writes(&self) -> Vec<String> {
         lock(&self.writes).clone()
@@ -321,6 +328,16 @@ impl FakeClipboard {
     /// 最近一次写入的文本。
     pub fn last_write(&self) -> Option<String> {
         lock(&self.writes).last().cloned()
+    }
+
+    /// 已写入的图片，按顺序。
+    pub fn image_writes(&self) -> Vec<ClipboardImage> {
+        lock(&self.images).clone()
+    }
+
+    /// 最近一次写入的图片。
+    pub fn last_image(&self) -> Option<ClipboardImage> {
+        lock(&self.images).last().cloned()
     }
 
     pub fn write_count(&self) -> usize {
@@ -350,6 +367,27 @@ impl ClipboardAccess for FakeClipboard {
         drop(failures);
         Ok(lock(&self.writes).last().cloned())
     }
+
+    fn write_image(&self, image: &ClipboardImage) -> Result<(), ClipboardError> {
+        let failures = lock(&self.failures);
+        if !failures.is_empty() {
+            let index = lock(&self.images).len().min(failures.len() - 1);
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        lock(&self.images).push(image.clone());
+        Ok(())
+    }
+
+    fn read_image(&self) -> Result<Option<ClipboardImage>, ClipboardError> {
+        let failures = lock(&self.read_failures);
+        if !failures.is_empty() {
+            let index = lock(&self.images).len().min(failures.len() - 1);
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        Ok(lock(&self.images).last().cloned())
+    }
 }
 
 /// 可控的剪贴板变化监听替身（ticket 09）。
@@ -369,6 +407,10 @@ pub struct FakeClipboardWatcher {
 
 struct FakeWatcherState {
     text: Option<String>,
+    /// 当前剪贴板里的图片（ticket 10）。
+    image: Option<ClipboardImage>,
+    /// 有图片但无法保存的原因（超大、无法识别）。
+    image_problem: Option<String>,
     formats: Vec<ClipboardFormatKind>,
     source: Option<ClipboardSourceApp>,
     /// 外部写入序号：每次写入（含自身写入）自增。
@@ -388,6 +430,8 @@ impl Default for FakeClipboardWatcher {
         Self {
             state: Mutex::new(FakeWatcherState {
                 text: None,
+                image: None,
+                image_problem: None,
                 formats: Vec::new(),
                 source: None,
                 sequence: 0,
@@ -427,7 +471,31 @@ impl FakeClipboardWatcher {
     pub fn set_text(&self, text: impl Into<String>) {
         let mut state = lock(&self.state);
         state.text = Some(text.into());
+        state.image = None;
+        state.image_problem = None;
         state.formats = vec![ClipboardFormatKind::Text];
+        state.sequence += 1;
+    }
+
+    /// 模拟一次外部的图片复制（ticket 10）：序号自增，文字被清空。
+    pub fn set_image(&self, image: ClipboardImage) {
+        let mut state = lock(&self.state);
+        state.text = None;
+        state.image = Some(image);
+        state.image_problem = None;
+        state.formats = vec![ClipboardFormatKind::Image];
+        state.sequence += 1;
+    }
+
+    /// 模拟「剪贴板里有图片但无法保存」（超大 / 格式无法识别）。
+    ///
+    /// 宿主必须据此给出准确的失败状态，而不是静默跳过或生成空条目。
+    pub fn set_image_problem(&self, reason: impl Into<String>) {
+        let mut state = lock(&self.state);
+        state.text = None;
+        state.image = None;
+        state.image_problem = Some(reason.into());
+        state.formats = Vec::new();
         state.sequence += 1;
     }
 
@@ -475,10 +543,18 @@ impl ClipboardWatcher for FakeClipboardWatcher {
         }
         state.delivered = state.sequence;
         let text = state.text.clone();
-        let Some(text) = text else {
+        let image = state.image.clone();
+        let problem = state.image_problem.clone();
+        if text.is_none() && image.is_none() && problem.is_none() {
             return Ok(ClipboardPoll::Unchanged);
+        }
+        // 变化指纹按内容取：文字用文本指纹，图片用字节指纹，只有「坏图片」时用原因本身，
+        // 这样同一个失败不会被反复上报成新的复制事件。
+        let print = match (&text, &image) {
+            (Some(text), _) => crate::clipboard::fingerprint(text),
+            (None, Some(image)) => crate::clipboard::fingerprint_bytes(&image.bytes),
+            (None, None) => crate::clipboard::fingerprint(problem.as_deref().unwrap_or_default()),
         };
-        let print = crate::clipboard::fingerprint(&text);
         if state.suppress_own {
             if let Some(index) = state.own.iter().position(|item| *item == print) {
                 state.own.remove(index);
@@ -488,7 +564,9 @@ impl ClipboardWatcher for FakeClipboardWatcher {
         self.captures.fetch_add(1, Ordering::SeqCst);
         Ok(ClipboardPoll::Changed(ClipboardCapture {
             formats: state.formats.clone(),
-            text: Some(text),
+            text,
+            image,
+            image_problem: problem,
             source: state.source.clone(),
         }))
     }

@@ -50,6 +50,25 @@ pub trait ClipboardAccess: Send + Sync {
     /// 读取失败与「没有文本」是两回事：前者返回 `Err`，宿主据此给出准确的失败状态，
     /// 而不是把它当成「这次没有内容」而静默跳过。
     fn read_text(&self) -> Result<Option<String>, ClipboardError>;
+
+    /// 写入一张图片（ticket 10）。失败原因为面向用户的中文描述。
+    ///
+    /// 默认实现如实报告「不支持」：新增这一项能力时，其它目标的实现不会因此静默
+    /// 变成「写入成功」。
+    fn write_image(&self, _image: &ClipboardImage) -> Result<(), ClipboardError> {
+        Err(ClipboardError::Unsupported {
+            reason: "当前平台适配层还没有实现图片写入".to_string(),
+        })
+    }
+
+    /// 读取当前剪贴板里的图片。剪贴板里没有图片格式时返回 `Ok(None)`。
+    ///
+    /// 与 [`Self::read_text`] 同理：读取失败返回 `Err`，不折叠成「没有图片」。
+    fn read_image(&self) -> Result<Option<ClipboardImage>, ClipboardError> {
+        Err(ClipboardError::Unsupported {
+            reason: "当前平台适配层还没有实现图片读取".to_string(),
+        })
+    }
 }
 
 /// 一次复制事件里存在的格式。v0.1.0 只捕获文本，其余取值是 ticket 10–12 的扩展点：
@@ -87,14 +106,333 @@ pub struct ClipboardSourceApp {
     pub title: Option<String>,
 }
 
+/// 本版本保存图片时统一使用的 MIME。
+///
+/// 三个平台读到的图片都会被规范化为 PNG（Linux 直接读 `image/png` 目标，Windows 把
+/// `CF_DIB` 或注册格式 `PNG` 编码成 PNG，macOS 从 `NSPasteboard` 取 `PNGf`），
+/// 因此存储、缩略图与恢复只需要一条编码路径。
+pub const IMAGE_MIME_PNG: &str = "image/png";
+
+/// 单张图片的字节上限。
+///
+/// 超过上限的图片**不保存**，并由捕获结果里的 [`ClipboardCapture::image_problem`]
+/// 如实说明原因：生成一条「看起来保存成功、实际恢复不了」的历史是明确禁止的
+/// （spec 用户故事 53「超出容量、格式不支持或文件失效时看到明确状态」）。
+pub const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+
+/// 从剪贴板读到（或准备写回剪贴板）的一张图片。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardImage {
+    /// 规范化之后的 MIME（本版本总是 [`IMAGE_MIME_PNG`]）。
+    pub mime: String,
+    /// 图片字节。
+    pub bytes: Vec<u8>,
+    /// 像素宽度；无法从文件头判定时为 0。
+    pub width: u32,
+    /// 像素高度；无法从文件头判定时为 0。
+    pub height: u32,
+}
+
+impl ClipboardImage {
+    /// 用字节构造一张图片，并从文件头解析尺寸（解析不出时尺寸为 0，不猜）。
+    pub fn new(mime: impl Into<String>, bytes: Vec<u8>) -> Self {
+        let (width, height) = image_dimensions(&bytes).unwrap_or((0, 0));
+        Self {
+            mime: mime.into(),
+            bytes,
+            width,
+            height,
+        }
+    }
+
+    /// 人类可读的尺寸描述，用于结果副标题。
+    pub fn size_label(&self) -> String {
+        if self.width == 0 || self.height == 0 {
+            "尺寸未知".to_string()
+        } else {
+            format!("{}×{}", self.width, self.height)
+        }
+    }
+}
+
+/// 从图片文件头解析像素尺寸。
+///
+/// 识别 PNG / JPEG / GIF / BMP；识别不出时返回 `None`，调用方据此显示「尺寸未知」，
+/// 而不是猜一个数字。所有分支都只做**有界**的头部读取，坏数据不会让它越界。
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    png_dimensions(bytes)
+        .or_else(|| jpeg_dimensions(bytes))
+        .or_else(|| gif_dimensions(bytes))
+        .or_else(|| bmp_dimensions(bytes))
+}
+
+fn be_u32(bytes: &[u8], at: usize) -> Option<u32> {
+    let slice = bytes.get(at..at + 4)?;
+    Some(u32::from_be_bytes(slice.try_into().ok()?))
+}
+
+fn le_u16(bytes: &[u8], at: usize) -> Option<u16> {
+    let slice = bytes.get(at..at + 2)?;
+    Some(u16::from_le_bytes(slice.try_into().ok()?))
+}
+
+fn le_u32(bytes: &[u8], at: usize) -> Option<u32> {
+    let slice = bytes.get(at..at + 4)?;
+    Some(u32::from_le_bytes(slice.try_into().ok()?))
+}
+
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    const MAGIC: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if !bytes.starts_with(MAGIC) || bytes.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    Some((be_u32(bytes, 16)?, be_u32(bytes, 20)?))
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+    let mut at = 2usize;
+    // 段长度是 16 位，因此循环最多走完文件；同时设一个硬上限避免坏数据空转。
+    let mut guard = 0usize;
+    while at + 4 <= bytes.len() && guard < 4096 {
+        guard += 1;
+        if bytes[at] != 0xff {
+            at += 1;
+            continue;
+        }
+        let marker = bytes[at + 1];
+        if marker == 0xff {
+            at += 1;
+            continue;
+        }
+        // 无长度的标记：RSTn、SOI、EOI。
+        if (0xd0..=0xd9).contains(&marker) {
+            at += 2;
+            continue;
+        }
+        let length = u16::from_be_bytes(bytes.get(at + 2..at + 4)?.try_into().ok()?) as usize;
+        if length < 2 {
+            return None;
+        }
+        // SOF0–SOF15（不含 DHT=C4、JPG=C8、DAC=CC）后面就是尺寸。
+        let is_sof =
+            (0xc0..=0xcf).contains(&marker) && marker != 0xc4 && marker != 0xc8 && marker != 0xcc;
+        if is_sof {
+            let height = u16::from_be_bytes(bytes.get(at + 5..at + 7)?.try_into().ok()?) as u32;
+            let width = u16::from_be_bytes(bytes.get(at + 7..at + 9)?.try_into().ok()?) as u32;
+            return Some((width, height));
+        }
+        at += 2 + length;
+    }
+    None
+}
+
+fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(b"GIF87a") && !bytes.starts_with(b"GIF89a") {
+        return None;
+    }
+    Some((u32::from(le_u16(bytes, 6)?), u32::from(le_u16(bytes, 8)?)))
+}
+
+fn bmp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(b"BM") {
+        return None;
+    }
+    let header = le_u32(bytes, 14)?;
+    if header == 12 {
+        // BITMAPCOREHEADER：16 位宽高。
+        return Some((u32::from(le_u16(bytes, 18)?), u32::from(le_u16(bytes, 20)?)));
+    }
+    let width = le_u32(bytes, 18)? as i32;
+    let height = le_u32(bytes, 22)? as i32;
+    if width <= 0 || height == 0 {
+        return None;
+    }
+    Some((width as u32, height.unsigned_abs()))
+}
+
+/// 字节是否看起来是一种已知的图片（用于区分「容器格式无法解析尺寸」与「根本不是图片」）。
+pub fn looks_like_image(bytes: &[u8]) -> bool {
+    const MAGICS: [&[u8]; 6] = [
+        &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a],
+        &[0xff, 0xd8, 0xff],
+        b"GIF87a",
+        b"GIF89a",
+        b"BM",
+        b"RIFF",
+    ];
+    MAGICS.iter().any(|magic| bytes.starts_with(magic))
+}
+
+/// 校验并规范化从剪贴板读到的图片。
+///
+/// 超过 [`MAX_IMAGE_BYTES`]、内容为空、根本无法识别或**头部已损坏**的字节都返回中文
+/// 原因；调用方把原因放进 [`ClipboardCapture::image_problem`]，宿主据此给出「这次复制
+/// 没有被保存」的准确状态，而不会生成一条恢复不了的条目。无法解析出尺寸的图片一律
+/// 拒绝：尺寸是列表与预览都要用的信息，宁可如实报错也不保存一份读不出来的数据。
+pub fn check_image(mime: &str, bytes: Vec<u8>) -> Result<ClipboardImage, String> {
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "图片 {:.1} MB 超过上限 {} MB，这次复制没有被保存",
+            bytes.len() as f64 / (1024.0 * 1024.0),
+            MAX_IMAGE_BYTES / (1024 * 1024)
+        ));
+    }
+    if bytes.is_empty() {
+        return Err("剪贴板报告的图片内容为空，这次复制没有被保存".to_string());
+    }
+    if image_dimensions(&bytes).is_none() {
+        return Err(if looks_like_image(&bytes) {
+            "剪贴板里的图片头部不完整或已损坏，这次复制没有被保存".to_string()
+        } else {
+            "剪贴板里的图片格式无法识别（本版本支持 PNG / JPEG / GIF / BMP），这次复制没有被保存"
+                .to_string()
+        });
+    }
+    Ok(ClipboardImage::new(mime, bytes))
+}
+
+/// 把 RGBA8 像素编码为 PNG 字节。
+///
+/// 复用 Windows 图标编码同一条路径（`windows::icons::encode_png`）：它是纯逻辑，
+/// 在所有目标上编译并已被真实像素的往返测试覆盖。
+pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    crate::windows::icons::encode_png(width, height, rgba)
+}
+
+/// 把 `CF_DIB` 字节（Windows 剪贴板的位图格式，没有 `BITMAPFILEHEADER`）转换为 PNG。
+///
+/// 支持 `BITMAPINFOHEADER` / `BITMAPV4HEADER` / `BITMAPV5HEADER` 的 24 位与 32 位
+/// BI_RGB / BI_BITFIELDS；其余（调色板位图、RLE 压缩等）返回中文原因，由调用方如实
+/// 上报「无法恢复的格式」，而不是保存一个空的图片条目。
+///
+/// 这是**纯逻辑**：`tests/windows_fixture.rs` 在 Linux 上用真实合成的 DIB 验证它，
+/// 因此这条 Windows 路径不是「只在 Windows 上才第一次运行」的代码。
+pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, String> {
+    let header_size = le_u32(dib, 0).ok_or_else(|| "位图头不完整".to_string())? as usize;
+    if header_size < 40 {
+        return Err(format!(
+            "不支持的位图头（{header_size} 字节，缺少 BITMAPINFOHEADER）"
+        ));
+    }
+    let width = le_u32(dib, 4).ok_or_else(|| "位图头不完整".to_string())? as i32;
+    let height = le_u32(dib, 8).ok_or_else(|| "位图头不完整".to_string())? as i32;
+    let bit_count = le_u16(dib, 14).ok_or_else(|| "位图头不完整".to_string())?;
+    let compression = le_u32(dib, 16).ok_or_else(|| "位图头不完整".to_string())?;
+    if width <= 0 || height == 0 {
+        return Err(format!("位图尺寸无效：{width}×{height}"));
+    }
+    if bit_count != 24 && bit_count != 32 {
+        return Err(format!("不支持的位深：{bit_count} 位（只支持 24 / 32 位）"));
+    }
+    if compression != 0 && compression != 3 {
+        return Err(format!("不支持的位图压缩方式：{compression}"));
+    }
+    let width = width as usize;
+    let height = height.unsigned_abs() as usize;
+    let top_down = (le_u32(dib, 8).unwrap_or(0) as i32) < 0;
+    let stride = ((width * usize::from(bit_count) + 31) / 32) * 4;
+    // 像素起点：位图头之后是颜色表或（BI_BITFIELDS 的）掩码。
+    // `BITMAPINFOHEADER` + BI_BITFIELDS 时掩码在头**之后**（本仓库写 4 个，共 16 字节）；
+    // V4/V5 头的掩码包含在头内。若 `biSizeImage` 与实际数据长度自洽，则直接从尾部反推，
+    // 这样对只写 3 个掩码的其它实现也成立。
+    let mut pixels_at = header_size;
+    if compression == 3 && header_size == 40 {
+        pixels_at += 16;
+    }
+    let size_image = le_u32(dib, 20).unwrap_or(0) as usize;
+    let expected_pixels = stride.saturating_mul(height);
+    if size_image == expected_pixels && dib.len() >= header_size + size_image {
+        pixels_at = dib.len() - size_image;
+    }
+    let needed = pixels_at
+        .checked_add(expected_pixels)
+        .ok_or_else(|| "位图尺寸溢出".to_string())?;
+    if dib.len() < needed {
+        return Err(format!(
+            "位图数据不完整：需要 {needed} 字节，实际 {} 字节",
+            dib.len()
+        ));
+    }
+    let mut rgba = vec![0u8; width * height * 4];
+    for row in 0..height {
+        // 正的高度表示自下而上存储。
+        let source_row = if top_down { row } else { height - 1 - row };
+        let start = pixels_at + source_row * stride;
+        for column in 0..width {
+            let at = start + column * usize::from(bit_count) / 8;
+            let (blue, green, red) = (dib[at], dib[at + 1], dib[at + 2]);
+            let alpha = if bit_count == 32 { dib[at + 3] } else { 255 };
+            let target = (row * width + column) * 4;
+            rgba[target] = red;
+            rgba[target + 1] = green;
+            rgba[target + 2] = blue;
+            // BI_RGB 的 32 位位图第 4 字节常常是 0（未定义），此时按不透明处理，
+            // 否则整张图会变成全透明。
+            rgba[target + 3] = if bit_count == 32 && compression == 0 {
+                255
+            } else {
+                alpha
+            };
+        }
+    }
+    encode_png(width as u32, height as u32, &rgba)
+}
+
+/// 把 PNG 字节转换为 `CF_DIB`（供 Windows 写入剪贴板，让只认位图的旧应用也能粘贴）。
+///
+/// 写的是 32 位 BI_BITFIELDS + 四个颜色掩码：这样透明度也能原样带回（BI_RGB 的 32 位
+/// 位图第 4 字节按规范是未定义的，写进去会被多数应用忽略）。
+pub fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, String> {
+    let decoded = image::load_from_memory(png)
+        .map_err(|error| format!("无法解码 PNG：{error}"))?
+        .to_rgba8();
+    let (width, height) = (decoded.width(), decoded.height());
+    if width == 0 || height == 0 {
+        return Err("图片尺寸为 0".to_string());
+    }
+    let stride = width as usize * 4;
+    let mut out = Vec::with_capacity(56 + stride * height as usize);
+    out.extend_from_slice(&40u32.to_le_bytes());
+    out.extend_from_slice(&(width as i32).to_le_bytes());
+    out.extend_from_slice(&(height as i32).to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&32u16.to_le_bytes());
+    // BI_BITFIELDS：随后的 16 字节是 ARGB 掩码。
+    out.extend_from_slice(&3u32.to_le_bytes());
+    out.extend_from_slice(&(stride as u32 * height).to_le_bytes());
+    out.extend_from_slice(&[0u8; 16]);
+    out.extend_from_slice(&0x00ff_0000u32.to_le_bytes());
+    out.extend_from_slice(&0x0000_ff00u32.to_le_bytes());
+    out.extend_from_slice(&0x0000_00ffu32.to_le_bytes());
+    out.extend_from_slice(&0xff00_0000u32.to_le_bytes());
+    // 自下而上、BGRA（负高度表示自上而下，这里用正高度 + 反序行）。
+    for row in (0..height).rev() {
+        for column in 0..width {
+            let pixel = decoded.get_pixel(column, row).0;
+            out.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+        }
+    }
+    Ok(out)
+}
+
 /// 轮询到的一次新复制事件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardCapture {
     /// 本次事件里存在的格式集合。
     pub formats: Vec<ClipboardFormatKind>,
-    /// 文本内容（ticket 09 的唯一载荷）。ticket 10–12 会在同一结构体上增加
+    /// 文本内容（ticket 09）。ticket 10–12 会在同一结构体上增加
     /// HTML/RTF/图片/文件字段。
     pub text: Option<String>,
+    /// 图片内容（ticket 10）。可能与文字同时存在（例如浏览器同时给出图片与网址）。
+    pub image: Option<ClipboardImage>,
+    /// 剪贴板里**有**图片，但无法保存的中文原因（超大、格式无法识别、解码失败）。
+    ///
+    /// 与 `image: None` + 没有原因（剪贴板里本来就没有图片）是两回事：前者必须让用户
+    /// 看到「这次复制没有被保存」，不能静默跳过。
+    pub image_problem: Option<String>,
     /// 来源应用（平台可提供时）。
     pub source: Option<ClipboardSourceApp>,
 }
@@ -105,6 +443,30 @@ impl ClipboardCapture {
         Self {
             formats: vec![ClipboardFormatKind::Text],
             text: Some(text.into()),
+            image: None,
+            image_problem: None,
+            source: None,
+        }
+    }
+
+    /// 只有图片的一次复制事件。
+    pub fn image(image: ClipboardImage) -> Self {
+        Self {
+            formats: vec![ClipboardFormatKind::Image],
+            text: None,
+            image: Some(image),
+            image_problem: None,
+            source: None,
+        }
+    }
+
+    /// 剪贴板里有图片但无法保存：只有原因，没有内容。
+    pub fn image_failed(reason: impl Into<String>) -> Self {
+        Self {
+            formats: Vec::new(),
+            text: None,
+            image: None,
+            image_problem: Some(reason.into()),
             source: None,
         }
     }
@@ -142,6 +504,17 @@ pub fn fingerprint(text: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 图片字节的变化指纹（ticket 10）。
+///
+/// 与 [`fingerprint`] 同源（`DefaultHasher`，只用来判断「和上次读到的是不是同一份
+/// 内容」）：图片没有可读的文本，因此按字节指纹判断变化。
+pub fn fingerprint_bytes(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -291,8 +664,96 @@ pub(crate) fn write_with_tool(
     Ok(())
 }
 
-/// 用一个外部剪贴板工具读取文本：内容走标准输出。
+/// 校验待写入剪贴板的图片。
 ///
+/// 与 [`check_text`] 对齐：空内容与超限都在**写入之前**拒绝，并把中文原因带回宿主，
+/// 而不是让工具去失败。
+pub fn check_image_write(image: &ClipboardImage) -> Result<(), ClipboardError> {
+    if image.bytes.is_empty() {
+        return Err(ClipboardError::Failed(
+            "图片内容为空，没有可复制的东西".to_string(),
+        ));
+    }
+    if image.bytes.len() > MAX_IMAGE_BYTES {
+        return Err(ClipboardError::Failed(format!(
+            "图片超过 {} MB，已拒绝写入剪贴板",
+            MAX_IMAGE_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(())
+}
+
+/// 用一个外部剪贴板工具写入**二进制**内容：内容走标准输入。
+///
+/// 与 [`write_with_tool`] 同一套有界等待与标准错误处理（工具 fork 出守护进程后会一直
+/// 持有管道，因此不能同步读到 EOF）。
+pub(crate) fn write_bytes_with_tool(
+    program: &Path,
+    args: &[&str],
+    bytes: &[u8],
+) -> Result<(), ClipboardError> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            ClipboardError::Failed(format!("无法启动 {}：{error}", program.display()))
+        })?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| ClipboardError::Failed("无法写入剪贴板工具的标准输入".to_string()))?;
+        stdin
+            .write_all(bytes)
+            .map_err(|error| ClipboardError::Failed(format!("写入剪贴板失败：{error}")))?;
+    }
+    drop(child.stdin.take());
+    let stderr = child.stderr.take();
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buffer = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut buffer);
+        }
+        buffer
+    });
+    let deadline = Instant::now() + WRITE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ClipboardError::Failed(format!(
+                    "剪贴板工具 {} 超过 {} 秒没有返回，已中止（当前会话可能无法取得剪贴板选区）",
+                    program.display(),
+                    WRITE_TIMEOUT.as_secs()
+                )));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                return Err(ClipboardError::Failed(format!(
+                    "等待剪贴板工具失败：{error}"
+                )));
+            }
+        }
+    };
+    let stderr = stderr_reader.join().unwrap_or_default();
+    if !status.success() {
+        let stderr = stderr.trim();
+        return Err(ClipboardError::Failed(if stderr.is_empty() {
+            format!("剪贴板工具 {} 以状态 {status} 退出", program.display())
+        } else {
+            format!("剪贴板工具 {} 失败：{stderr}", program.display())
+        }));
+    }
+    Ok(())
+}
+
+/// 用一个外部剪贴板工具读取文本：内容走标准输出。
 /// 与 [`write_with_tool`] 一样是**有界**的，并且用独立线程读取标准输出：读取端在主线程
 /// 里等到 EOF 会再次挂住（选区持有者可能一直不关管道）。工具超时会被杀掉并如实报错。
 pub(crate) fn read_with_tool(
@@ -352,6 +813,178 @@ pub(crate) fn read_with_tool(
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
+/// 从一个外部剪贴板工具读取**二进制**内容（ticket 10 的图片）。
+///
+/// 与 [`read_with_tool`] 同样有界，并且额外限制**读入内存的字节数**：图片可能是
+/// 几十 MB，`read_to_end` 会先把它们全部读进来才轮到容量判断。这里最多读
+/// `max_bytes + 1` 字节——多读的那 1 字节用来区分「刚好等于上限」与「超过上限」，
+/// 后者由 [`check_image`] 给出面向用户的原因。
+pub(crate) fn read_bytes_bounded(
+    program: &Path,
+    args: &[&str],
+    max_bytes: usize,
+) -> Result<Option<Vec<u8>>, ClipboardError> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            ClipboardError::ReadFailed(format!("无法启动 {}：{error}", program.display()))
+        })?;
+    let stdout = child.stdout.take();
+    let limit = max_bytes as u64 + 1;
+    let reader = std::thread::spawn(move || {
+        use std::io::Read as _;
+        let mut buffer = Vec::new();
+        if let Some(stdout) = stdout {
+            let _ = stdout.take(limit).read_to_end(&mut buffer);
+        }
+        buffer
+    });
+
+    let deadline = Instant::now() + READ_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ClipboardError::ReadFailed(format!(
+                    "剪贴板工具 {} 超过 {} 秒没有返回，已中止（当前会话可能无法取得剪贴板选区）",
+                    program.display(),
+                    READ_TIMEOUT.as_secs()
+                )));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                return Err(ClipboardError::ReadFailed(format!(
+                    "等待剪贴板工具失败：{error}"
+                )));
+            }
+        }
+    };
+    let bytes = reader.join().unwrap_or_default();
+    if !status.success() || bytes.is_empty() {
+        // 非 0 退出通常表示「当前剪贴板里没有这种格式」：这是正常状态，不是错误。
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
+/// 有界地读取一个文件（macOS 用 `osascript` 把图片写到临时文件后再读它）。
+pub(crate) fn read_file_bounded(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<Option<Vec<u8>>, ClipboardError> {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {
+            if metadata.len() > max_bytes {
+                return Err(ClipboardError::ReadFailed(format!(
+                    "剪贴板导出的图片 {:.1} MB 超过上限 {} MB",
+                    metadata.len() as f64 / (1024.0 * 1024.0),
+                    max_bytes / (1024 * 1024)
+                )));
+            }
+        }
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(ClipboardError::ReadFailed(format!(
+                "无法读取 {}：{error}",
+                path.display()
+            )))
+        }
+    }
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.is_empty() => Ok(None),
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) => Err(ClipboardError::ReadFailed(format!(
+            "无法读取 {}：{error}",
+            path.display()
+        ))),
+    }
+}
+
+/// 运行一个外部工具并取回它的标准输出与退出状态（有界）。
+///
+/// macOS 的图片剪贴板只能经 `osascript` 完成，而它的脚本参数不是「往标准输入写」的
+/// 形态，因此需要这一条与 [`read_with_tool`] 分开的路径。等待同样是有界的：拿不到
+/// 剪贴板环境时不能让后台轮询线程卡死。
+pub(crate) fn run_tool(program: &Path, args: &[&str]) -> Result<(bool, String), ClipboardError> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            ClipboardError::ReadFailed(format!("无法启动 {}：{error}", program.display()))
+        })?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let mut out = String::new();
+        if let Some(mut stdout) = stdout {
+            let _ = std::io::Read::read_to_string(&mut stdout, &mut out);
+        }
+        let mut err = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut err);
+        }
+        (out, err)
+    });
+    let deadline = Instant::now() + READ_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ClipboardError::ReadFailed(format!(
+                    "{} 超过 {} 秒没有返回，已中止",
+                    program.display(),
+                    READ_TIMEOUT.as_secs()
+                )));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                return Err(ClipboardError::ReadFailed(format!(
+                    "等待 {} 失败：{error}",
+                    program.display()
+                )));
+            }
+        }
+    };
+    let (out, err) = reader.join().unwrap_or_default();
+    if status.success() {
+        Ok((true, out))
+    } else {
+        let message = if err.trim().is_empty() { out } else { err };
+        Ok((false, message))
+    }
+}
+
+/// 原始字节 → 「图片」或「无法保存的中文原因」。
+///
+/// 三个平台的读取实现共用这一对语义：`None` 表示剪贴板里没有图片，
+/// `Some(Err(reason))` 表示有图片但不能保存（超大、格式无法识别）。
+pub fn image_from_bytes(
+    mime: &str,
+    bytes: Option<Vec<u8>>,
+) -> (Option<ClipboardImage>, Option<String>) {
+    match bytes {
+        None => (None, None),
+        Some(bytes) => match check_image(mime, bytes) {
+            Ok(image) => (Some(image), None),
+            Err(reason) => (None, Some(reason)),
+        },
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -404,5 +1037,154 @@ mod tests {
         let missing =
             read_with_tool(Path::new("/bin/sh"), &["-c", "exit 1"]).expect("非 0 退出不应失败");
         assert_eq!(missing, None);
+    }
+}
+
+/// 图片相关的**纯逻辑**测试（ticket 10）。
+///
+/// 不加 `unix` 限制：尺寸解析、上限判断与 DIB 转换都不依赖操作系统，因此 Windows
+/// runner 上的 `cargo test` 也会跑它们；`dib_to_png` 是 Windows CI 之外**唯一**在
+/// 提交前验证 Windows 位图路径的机会。
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    fn png_of(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+        encode_png(width, height, rgba).expect("编码 PNG")
+    }
+
+    /// 尺寸从文件头解析：PNG 走真实编码，JPEG / GIF / BMP 用手写的头部。
+    #[test]
+    fn dimensions_come_from_the_file_header() {
+        let png = png_of(3, 2, &vec![0u8; 3 * 2 * 4]);
+        assert_eq!(image_dimensions(&png), Some((3, 2)));
+
+        // SOI + APP0(len 4) + SOF0(len 17, 精度 8, 高 7, 宽 5) + EOI
+        let jpeg = [
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00,
+            0x07, 0x00, 0x05, 0x03, 0x01, 0x11, 0x00, 0xff, 0xd9,
+        ];
+        assert_eq!(image_dimensions(&jpeg), Some((5, 7)));
+
+        let mut gif = b"GIF89a".to_vec();
+        gif.extend_from_slice(&9u16.to_le_bytes());
+        gif.extend_from_slice(&4u16.to_le_bytes());
+        assert_eq!(image_dimensions(&gif), Some((9, 4)));
+
+        // BITMAPINFOHEADER：宽 6、高 -3（自上而下）。
+        let mut bmp = b"BM".to_vec();
+        bmp.extend_from_slice(&[0u8; 12]);
+        bmp.extend_from_slice(&40u32.to_le_bytes());
+        bmp.extend_from_slice(&6i32.to_le_bytes());
+        bmp.extend_from_slice(&(-3i32).to_le_bytes());
+        assert_eq!(image_dimensions(&bmp), Some((6, 3)));
+
+        // 认不出来的字节不猜尺寸。
+        assert_eq!(image_dimensions(b"not an image"), None);
+    }
+
+    /// 超过上限的图片**不保存**，并给出面向用户的中文原因。
+    #[test]
+    fn oversize_images_are_rejected_with_a_reason() {
+        let too_big = vec![0u8; MAX_IMAGE_BYTES + 1];
+        let error = check_image(IMAGE_MIME_PNG, too_big).expect_err("超过上限必须被拒绝");
+        assert!(error.contains("超过上限"), "原因要说明超限：{error}");
+
+        let (image, problem) = image_from_bytes(
+            IMAGE_MIME_PNG,
+            Some(vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        );
+        assert!(image.is_none());
+        // 完整 PNG 魔数但没有 IHDR：容器认得出、内容读不出，必须如实报「已损坏」，
+        // 而不是保存一条永远显示不出来的图片。
+        assert!(
+            problem.unwrap_or_default().contains("损坏"),
+            "头部不完整的图片要如实说明"
+        );
+
+        let (image, problem) = image_from_bytes(IMAGE_MIME_PNG, Some(b"garbage".to_vec()));
+        assert!(image.is_none());
+        assert!(
+            problem.unwrap_or_default().contains("无法识别"),
+            "无法识别的字节要如实说明"
+        );
+
+        // 没有图片与「有图片但坏了」必须能区分。
+        let (image, problem) = image_from_bytes(IMAGE_MIME_PNG, None);
+        assert!(image.is_none() && problem.is_none());
+    }
+
+    /// Windows 的 `CF_DIB` 往返：`png → dib → png` 后像素不变。
+    #[test]
+    fn dib_round_trip_preserves_pixels() {
+        let (width, height) = (4u32, 3u32);
+        let mut rgba = Vec::new();
+        for row in 0..height {
+            for column in 0..width {
+                rgba.extend_from_slice(&[
+                    (column * 60) as u8,
+                    (row * 70) as u8,
+                    128,
+                    if (column + row) % 2 == 0 { 255 } else { 200 },
+                ]);
+            }
+        }
+        let png = png_of(width, height, &rgba);
+        let dib = png_to_dib(&png).expect("PNG → DIB");
+        let back = dib_to_png(&dib).expect("DIB → PNG");
+        let decoded = image::load_from_memory(&back).expect("回读").to_rgba8();
+        assert_eq!(decoded.dimensions(), (width, height));
+        assert_eq!(decoded.into_raw(), rgba, "往返后像素必须逐字节一致");
+    }
+
+    /// 自上而下的 DIB（负高度）也要还原成正确的行序。
+    #[test]
+    fn top_down_dib_rows_are_reversed() {
+        let mut dib = Vec::new();
+        dib.extend_from_slice(&40u32.to_le_bytes());
+        dib.extend_from_slice(&2i32.to_le_bytes());
+        // 负高度：自上而下。
+        dib.extend_from_slice(&(-2i32).to_le_bytes());
+        dib.extend_from_slice(&1u16.to_le_bytes());
+        dib.extend_from_slice(&24u16.to_le_bytes());
+        dib.extend_from_slice(&0u32.to_le_bytes());
+        dib.extend_from_slice(&0u32.to_le_bytes());
+        dib.extend_from_slice(&[0u8; 16]);
+        // 第一行全红、第二行全蓝（BGR 顺序、每行补到 4 字节）。
+        dib.extend_from_slice(&[0, 0, 255, 0, 0, 255, 0, 0]);
+        dib.extend_from_slice(&[255, 0, 0, 255, 0, 0, 255, 0]);
+        let png = dib_to_png(&dib).expect("24 位 DIB");
+        let decoded = image::load_from_memory(&png).expect("回读").to_rgba8();
+        assert_eq!(decoded.get_pixel(0, 0).0, [255, 0, 0, 255]);
+        assert_eq!(decoded.get_pixel(0, 1).0, [0, 0, 255, 255]);
+    }
+
+    /// 无法恢复的位图格式必须给出准确原因，不能悄悄产出空图片。
+    #[test]
+    fn unsupported_dib_formats_report_a_reason() {
+        let mut palette = Vec::new();
+        palette.extend_from_slice(&40u32.to_le_bytes());
+        palette.extend_from_slice(&2i32.to_le_bytes());
+        palette.extend_from_slice(&2i32.to_le_bytes());
+        palette.extend_from_slice(&1u16.to_le_bytes());
+        palette.extend_from_slice(&8u16.to_le_bytes());
+        palette.extend_from_slice(&0u32.to_le_bytes());
+        palette.extend_from_slice(&0u32.to_le_bytes());
+        palette.extend_from_slice(&[0u8; 16]);
+        let error = dib_to_png(&palette).expect_err("8 位调色板位图不支持");
+        assert!(error.contains("位深"), "原因要说清位深：{error}");
+
+        let truncated = dib_to_png(&[0u8; 20]).expect_err("头部不完整必须失败");
+        assert!(
+            truncated.contains("位图头"),
+            "原因要指出头部问题：{truncated}"
+        );
+    }
+
+    /// 图片字节的变化指纹只反映内容：同样的字节得到同样的指纹，不同字节不同。
+    #[test]
+    fn byte_fingerprint_tracks_content() {
+        assert_eq!(fingerprint_bytes(b"abc"), fingerprint_bytes(b"abc"));
+        assert_ne!(fingerprint_bytes(b"abc"), fingerprint_bytes(b"abd"));
     }
 }
