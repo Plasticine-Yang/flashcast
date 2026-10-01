@@ -355,6 +355,37 @@ impl Workspace {
         workspace_remote_of(&repo)
     }
 
+    /// 工作区 `memos/` 下的 Markdown 备忘录（仓库相对路径，`/` 分隔，已排序）。
+    ///
+    /// 同步（ticket 16）在快进拉取后用它确认备忘录已经随新提交落到工作区。
+    /// 备忘录的解析与索引语义由 ticket 07 落地，这里只如实列出文件。
+    pub fn memo_files(&self) -> Vec<String> {
+        let root = self.root.join(MEMOS_DIR);
+        let mut found: Vec<String> = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+                    continue;
+                }
+                let Ok(relative) = path.strip_prefix(&self.root) else {
+                    continue;
+                };
+                found.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+        found.sort();
+        found
+    }
+
     /// 读取工作区记录的主题名（`theme.json` 里的 `theme` 字段）。语义由 ticket 06 落地，
     /// 这里只做宽容读取，用于克隆完成后如实告诉用户「工作区记录了什么」。
     pub fn recorded_theme(&self) -> Option<String> {

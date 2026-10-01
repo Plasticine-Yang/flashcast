@@ -10,7 +10,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use flashcast_core::{Host, Settings, SETTINGS_FILE};
+use flashcast_core::{
+    Appearance, Host, PluginManifestFile, Settings, ThemeSelection, MANIFEST_FILE, SETTINGS_FILE,
+    THEME_DARK, THEME_FILE, THEME_LIGHT,
+};
 use support::{cleanup, fast_settings, host_with_device, real_git_repo};
 
 /// 等待可处理的外部变更的上限。去抖窗口 500ms，给足余量。
@@ -606,6 +609,104 @@ fn every_path_that_changes_settings_refreshes_the_applied_content() {
 
     cleanup(&repo);
     cleanup(&second);
+    cleanup(&device);
+}
+
+/// 回归：只改主题文件（`settings.toml` 一字节未动）也必须真正生效。
+///
+/// 旧实现把「磁盘原始字节 == 已应用内容」当成**无条件**的主判据：事件来自 `theme.json`
+/// 时宿主读到的 `settings.toml` 与已应用内容逐字节相同，于是提前 `return None`，在调用
+/// `apply_workspace_config` **之前**就把这次外部修改吞掉。监听层本身是活的（事件被接受、
+/// 路径也正确），但主题状态永远停在旧值——用户的外部编辑静默失效，既不报错也不重载。
+///
+/// 判据因此按文件名收窄：内容相等只在改的确实是设置文件时才短路；「什么都没变」由
+/// `apply_workspace_config` 之后的 `applied` 标志与累计消息共同判定。本用例从宿主入口
+/// 观察这次外部修改，要求它恰好产生一次重载、外观真的换掉，且随后不再有重载。
+#[test]
+fn an_external_edit_of_the_theme_file_is_reloaded() {
+    let repo = real_git_repo("watch-theme-reload");
+
+    // 工作区里本来就有一份完整配置：设置 + 主题选择（浅色）+ 默认插件清单。
+    let settings = Settings {
+        hotkey: "Super+Space".to_string(),
+        ..fast_settings()
+    };
+    write_settings_file(&repo, &settings);
+    fs::write(
+        repo.join(THEME_FILE),
+        ThemeSelection::new(THEME_LIGHT).to_json().unwrap(),
+    )
+    .expect("写出主题配置");
+    fs::write(
+        repo.join(MANIFEST_FILE),
+        PluginManifestFile::defaults().to_json().unwrap(),
+    )
+    .expect("写出插件清单");
+
+    let (host, _launcher, device) = host_with_device(vec![], fast_settings());
+    host.select_workspace(&repo).expect("关联工作区");
+
+    // 关联时按工作区恢复：浅色的选择与外观已生效，且关联本身不算一次重载。
+    let initial = host.theme_state();
+    assert_eq!(initial.selected, THEME_LIGHT, "关联时必须载入工作区主题");
+    assert_eq!(initial.appearance, Appearance::Light);
+    assert_eq!(initial.error, None, "{:?}", initial.error);
+    assert_eq!(host.settings(), settings, "关联时必须载入工作区设置");
+    assert_eq!(host.workspace_reloads(), 0, "关联本身不计重载");
+    assert!(
+        host.wait_for_workspace_change(QUIET).is_none(),
+        "关联工作区不得触发重载（{}）",
+        watch_trace(&host)
+    );
+
+    // 外部只改主题配置：换成深色，`settings.toml` 保持逐字节不变。
+    let settings_path = repo
+        .canonicalize()
+        .expect("解析工作区路径")
+        .join(SETTINGS_FILE);
+    let settings_before = fs::read(&settings_path).expect("读取设置文件");
+    fs::write(
+        repo.join(THEME_FILE),
+        ThemeSelection::new(THEME_DARK).to_json().unwrap(),
+    )
+    .expect("外部改写主题配置");
+    assert_eq!(
+        fs::read(&settings_path).expect("再次读取设置文件"),
+        settings_before,
+        "本用例只改主题文件，设置文件必须逐字节不变"
+    );
+
+    let reload = host
+        .wait_for_workspace_change(WAIT)
+        .expect("外部改写主题配置必须触发重载");
+    assert!(reload.applied, "外部主题修改必须真正生效：{reload:?}");
+    assert!(reload.error.is_none(), "有效主题配置不应报错：{reload:?}");
+    assert_eq!(
+        reload.path.file_name().and_then(|name| name.to_str()),
+        Some(THEME_FILE),
+        "这次重载必须归因于主题文件：{reload:?}"
+    );
+    let state = host.theme_state();
+    assert_eq!(state.selected, THEME_DARK, "主题选择必须按文件更新");
+    assert_eq!(state.appearance, Appearance::Dark, "外观必须真的换掉");
+    assert_eq!(state.error, None, "{:?}", state.error);
+    assert_eq!(host.workspace_reloads(), 1, "一次外部修改只应重载一次");
+    assert_eq!(host.settings(), settings, "设置文件没变，设置也不该变");
+
+    // 一次外部修改只应产生一次重载：重复事件记录必须被内容判据吞掉。
+    assert!(
+        host.wait_for_workspace_change(QUIET).is_none(),
+        "一次外部主题修改不得产生后续重载（{}）",
+        watch_trace(&host)
+    );
+    assert_eq!(
+        host.workspace_reloads(),
+        1,
+        "不得出现重复重载（{}）",
+        watch_trace(&host)
+    );
+
+    cleanup(&repo);
     cleanup(&device);
 }
 

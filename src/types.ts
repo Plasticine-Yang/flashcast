@@ -300,4 +300,124 @@ export interface WorkspaceEvent {
   reload: WorkspaceReload | null;
 }
 
+/** 同步阻塞 / 失败分类（对应 flashcast_core::SyncBlockKind）。 */
+export type SyncBlockKind =
+  | "noWorkspace"
+  | "notARepository"
+  | "dirtyWorktree"
+  | "diverged"
+  | "conflicts"
+  | "operationInProgress"
+  | "detachedHead"
+  | "noRemote"
+  | "noUpstream"
+  | "remoteBranchMissing"
+  | "authFailed"
+  | "offline"
+  | "certificate"
+  | "remoteError"
+  | "remoteRejected"
+  | "nothingToPush"
+  | "unrelatedHistories"
+  | "git";
+
+/**
+ * 一个同步阻塞状态：分类 + 具体情况 + 可操作的中文指引。
+ * 指引一律指向「在应用外部处理，然后点重新检测」。
+ */
+export interface SyncBlock {
+  code: SyncBlockKind;
+  /** 中文短标签，例如「历史已分叉」。 */
+  label: string;
+  /** 具体情况（已脱敏）。 */
+  detail: string;
+  /** 可操作的中文指引。 */
+  hint: string;
+}
+
+/** 当前工作区的同步状态（对应 flashcast_core::SyncStatus）。 */
+export interface SyncStatus {
+  repository: boolean;
+  branch: string | null;
+  detached: boolean;
+  remote: WorkspaceRemote | null;
+  remoteName: string | null;
+  remoteUrl: string | null;
+  upstream: string | null;
+  /** 本地领先远端的提交数。 */
+  ahead: number;
+  /** 本地落后远端的提交数。 */
+  behind: number;
+  /** 是否已有本地远端跟踪引用（决定 ahead / behind 是否可信）。 */
+  tracking: boolean;
+  dirty: boolean;
+  staged: boolean;
+  unstaged: boolean;
+  untracked: boolean;
+  conflicted: boolean;
+  /** 进行中的 Git 操作的中文说明。 */
+  state: string | null;
+  canPull: boolean;
+  canPush: boolean;
+  nothingToPush: boolean;
+  /** 拉取的阻塞原因（含指引）；null 表示可以拉取。 */
+  blocking: SyncBlock | null;
+  /** 推送的阻塞原因；null 表示可以推送。 */
+  pushBlocking: SyncBlock | null;
+  /** 是否有同步操作正在进行。 */
+  busy: boolean;
+  error: string | null;
+}
+
+/** 拉取结果（对应 flashcast_core::PullResult）。 */
+export interface PullResult {
+  kind: "upToDate" | "fastForwarded";
+  from?: string | null;
+  to?: string;
+  shortTo?: string;
+  commits?: number;
+}
+
+/** 一次成功拉取的结果：核心报告 + 重新加载后的视图。 */
+export interface PullOutcome {
+  result: PullResult;
+  status: SyncStatus;
+  reload: WorkspaceReload;
+  /** 拉取后工作区记录的主题名。 */
+  theme: string | null;
+  /** 拉取后 memos/ 下的备忘录（仓库相对路径）。 */
+  memos: string[];
+  message: string;
+}
+
+/** 一个被推送的引用。 */
+export interface PushUpdateView {
+  local: string;
+  remote: string;
+  localOid: string;
+  remoteOid: string;
+}
+
+/** 一次成功推送的结果。 */
+export interface PushOutcome {
+  branch: string;
+  remote: string;
+  updated: PushUpdateView[];
+  status: SyncStatus;
+  message: string;
+}
+
+/** 同步阶段（对应 flashcast_core::SyncPhase）。 */
+export type SyncPhase = "idle" | "fetching" | "pushing" | "done" | "failed" | "cancelled";
+
+/** 一次同步的进度快照。 */
+export interface SyncProgress {
+  phase: SyncPhase;
+  receivedObjects: number;
+  totalObjects: number;
+  receivedBytes: number;
+  updates: number;
+  message: string | null;
+}
+
 export type UnlistenFn = () => void;

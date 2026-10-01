@@ -57,8 +57,11 @@ CI runner 与开发机的差异已经造成过多次「本机绿、CI 红」。�
 
 ```bash
 # 1) 不要依赖开发机的 Git 全局配置（CI 上没有 user.name / init.defaultBranch=main）。
-#    只对测试进程隐藏宿主配置，不改动你的真实 ~/.gitconfig。
-GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null cargo test --workspace
+#    必须换掉 HOME：`GIT_CONFIG_GLOBAL=/dev/null` 对 libgit2 **无效**，
+#    `git2::Repository::signature()` 仍会读到开发机的 ~/.gitconfig。
+#    用临时 HOME 运行，就能在不改动真实 ~/.gitconfig 的前提下复现 runner 环境。
+mkdir -p "$HOME/.cache/flashcast/fakehome"
+HOME="$HOME/.cache/flashcast/fakehome" GIT_CONFIG_NOSYSTEM=1 cargo test --workspace
 
 # 2) 非 Linux 目标只做类型检查，不需要目标平台工具链。
 CARGO_TARGET_DIR=$HOME/.cache/flashcast/xcheck/windows \
@@ -71,6 +74,8 @@ CARGO_TARGET_DIR=$HOME/.cache/flashcast/xcheck/macos \
 
 - 测试夹具必须自己固定仓库初始分支（`real_git_repo` 会写 `HEAD -> refs/heads/main`）。`git2::Repository::init`
   遵循宿主机的 `init.defaultBranch`，开发机是 `main`、runner 上是 `master`，直接断言分支名会在 CI 上失败。
+- 提交同理：夹具要保证仓库自带 `user.name` / `user.email`（`git_commit_all` 会在缺失时补上）。
+  这一条曾让 `workspace_sync` 的用例在本地全绿、在四条 CI 腿上全部失败。
 - 提交身份同理：测试仓库要在仓库本地写入 `user.name` / `user.email`。
 - `/tmp` 是 16 GB 的 tmpfs，交叉检查的 target 目录请放在 `$HOME/.cache/flashcast/xcheck/` 下，否则会以
   `Disk quota exceeded (os error 122)` 的形式在无关 crate 上失败。

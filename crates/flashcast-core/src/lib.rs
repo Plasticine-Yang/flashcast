@@ -18,6 +18,7 @@ pub mod plugins;
 pub mod ranking;
 pub mod registry;
 pub mod settings;
+pub mod sync;
 pub mod theme;
 pub mod watch;
 pub mod workspace;
@@ -52,6 +53,10 @@ pub use plugins::{MemoPlugin, MEMO_PLUGIN_ID};
 pub use ranking::{score_match, sort_ranked, RankedItem};
 pub use registry::{PluginRegistry, PluginSearchOutcome};
 pub use settings::{Settings, SettingsError};
+pub use sync::{
+    DirtyDetail, PullOutcome, PullReport, PullResult, PushOutcome, PushReport, PushUpdateView,
+    SyncBlock, SyncBlockKind, SyncControl, SyncError, SyncPhase, SyncProgress, SyncStatus,
+};
 pub use theme::{
     builtin_themes, dark_tokens, light_tokens, Appearance, ColorTokens, CssVar, DisabledState,
     ErrorState, FocusState, FontTokens, RadiusTokens, Rgba, SelectedState, ShadowTokens,
