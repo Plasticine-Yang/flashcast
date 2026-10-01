@@ -17,8 +17,9 @@ use flashcast_platform::clipboard::{ClipboardError, ClipboardFormatKind};
 use flashcast_platform::fake::FakeClipboardWatcher;
 
 use support::{
-    clipboard_host, clipboard_host_with_broken_storage, clipboard_host_with_device,
-    clipboard_host_with_watcher, fast_settings, files_under, focused_app, unique_dir,
+    clipboard_host, clipboard_host_with_broken_storage, clipboard_host_with_clipboard,
+    clipboard_host_with_device, clipboard_host_with_watcher, fast_settings, files_under,
+    focused_app, unique_dir,
 };
 
 /// 默认的剪贴板设置（保留 30 天、容量 500）。
@@ -817,6 +818,8 @@ fn capture_formats_are_recorded_from_the_platform_layer() {
     let capture = flashcast_platform::clipboard::ClipboardCapture {
         formats: vec![ClipboardFormatKind::Text],
         text: Some("带格式的文本".to_string()),
+        html: None,
+        rtf: None,
         source: None,
     };
     let event = flashcast_core::event_from_capture(&capture, 1_700_000_000_000)
@@ -826,6 +829,397 @@ fn capture_formats_are_recorded_from_the_platform_layer() {
         vec![flashcast_core::ClipboardFormat::Text {
             bytes: "带格式的文本".len()
         }]
+    );
+    assert!(event.payloads.is_empty(), "纯文本事件没有载荷");
+}
+
+// ---------------------------------------------------------------------------
+// 富文本格式集合（ticket 11）
+// ---------------------------------------------------------------------------
+
+/// 一次携带 HTML 的复制事件必须只产生**一条**历史，并且格式集合、载荷、可索引文字
+/// 都在这一条上——绝不能按格式拆成多条互相重复的记录。
+#[test]
+fn one_rich_copy_event_produces_exactly_one_entry_with_the_whole_format_set() {
+    let device_dir = unique_dir("clipboard-rich-single");
+    let workspace = unique_dir("clipboard-rich-single-ws");
+    let harness = clipboard_host_with_device(&device_dir, fast_settings());
+    harness
+        .host
+        .select_workspace(&workspace)
+        .expect("关联工作区");
+    harness.enable();
+
+    let html = "<p><b>会议纪要</b> 上午十点</p>";
+    assert!(matches!(
+        harness.copy_rich("会议纪要 上午十点", Some(html), None),
+        ClipboardCaptureOutcome::Captured { .. }
+    ));
+
+    let entries = harness.entries();
+    assert_eq!(entries.len(), 1, "同一次复制的文本与 HTML 只能有一条历史");
+    let event = &entries[0];
+    assert_eq!(event.text.as_deref(), Some("会议纪要 上午十点"));
+    // 格式集合：文本 + HTML，字节数取自真实载荷。
+    assert_eq!(
+        event.formats,
+        vec![
+            flashcast_core::ClipboardFormat::Text {
+                bytes: "会议纪要 上午十点".len()
+            },
+            flashcast_core::ClipboardFormat::Html { bytes: html.len() },
+        ]
+    );
+    assert_eq!(event.payloads.len(), 1);
+    assert_eq!(event.payloads[0].role.tag(), "html");
+    assert_eq!(event.payloads[0].inline.as_deref(), Some(html));
+    assert_eq!(event.payloads[0].mime.as_deref(), Some("text/html"));
+
+    // 二次捕获不会把同一次事件再算一遍（替身按序号推进）。
+    assert_eq!(
+        harness.host.capture_clipboard_once(),
+        ClipboardCaptureOutcome::Unchanged
+    );
+    assert_eq!(harness.entries().len(), 1);
+
+    // 持久化：重启（同一个设备目录 + 同一个工作区）后格式集合与载荷仍然完整。
+    let restarted = clipboard_host_with_device(&device_dir, fast_settings());
+    assert!(
+        restarted.host.clipboard_plugin_enabled(),
+        "启用状态记在工作区清单里，重启后仍然有效"
+    );
+    let persisted = restarted.host.clipboard_entries(None);
+    assert_eq!(persisted.len(), 1, "重启后仍是一条历史，不能变成两条");
+    assert_eq!(persisted[0].formats, event.formats);
+    assert_eq!(persisted[0].payloads, event.payloads);
+
+    // 结果条目：副标题如实列出格式集合，默认操作仍是粘贴。
+    let item = restarted.first_item("剪贴板");
+    let subtitle = item.subtitle.clone().unwrap_or_default();
+    assert!(
+        subtitle.contains("文字"),
+        "副标题应显示文字格式：{subtitle}"
+    );
+    assert!(
+        subtitle.contains("HTML"),
+        "副标题应显示 HTML 格式：{subtitle}"
+    );
+    assert_eq!(item.default_action.label_zh(), "粘贴");
+}
+
+/// HTML + RTF 一起到达时同样只有一条历史，两种载荷都保存下来。
+#[test]
+fn html_and_rtf_land_in_the_same_entry() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+    let html = "<b>粗体</b>";
+    let rtf = r"{\rtf1\ansi\b 粗体\b0}";
+    assert!(matches!(
+        harness.copy_rich("粗体", Some(html), Some(rtf)),
+        ClipboardCaptureOutcome::Captured { .. }
+    ));
+
+    let entries = harness.entries();
+    assert_eq!(entries.len(), 1);
+    let event = &entries[0];
+    assert_eq!(
+        event.formats,
+        vec![
+            flashcast_core::ClipboardFormat::Text { bytes: 6 },
+            flashcast_core::ClipboardFormat::Html { bytes: html.len() },
+            flashcast_core::ClipboardFormat::Rtf { bytes: rtf.len() },
+        ]
+    );
+    let roles: Vec<&str> = event
+        .payloads
+        .iter()
+        .map(|payload| payload.role.tag())
+        .collect();
+    assert_eq!(roles, vec!["html", "rtf"]);
+    assert_eq!(event.payloads[1].inline.as_deref(), Some(rtf));
+
+    // 声称的格式必须与真的载荷一致：空载荷不会被记成一种格式。
+    let empty = flashcast_platform::clipboard::ClipboardCapture::rich(
+        "只有文本".to_string(),
+        Some(String::new()),
+        None,
+    );
+    let event = flashcast_core::event_from_capture(&empty, 1).expect("有文本就有事件");
+    assert_eq!(
+        event.formats,
+        vec![flashcast_core::ClipboardFormat::Text { bytes: 12 }],
+        "空载荷不得凭空产生一种格式"
+    );
+    assert!(event.payloads.is_empty());
+}
+
+/// 检索只用可索引文字：HTML 载荷里的内容绝不会命中，也不会变成搜索键。
+#[test]
+fn search_uses_indexable_text_and_never_the_rich_payload() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+    harness.copy_rich(
+        "可见的正文",
+        Some("<b>HTML_ONLY_MARKER</b><script>alert(1)</script>"),
+        None,
+    );
+
+    let hit = {
+        // 范围必须先由精确关键词进入，之后同一个输入框里继续输入检索词。
+        assert!(matches!(
+            harness.host.query("剪贴板").scope,
+            QueryScope::Plugin { .. }
+        ));
+        harness.host.query("剪贴板 可见的正文")
+    };
+    assert_eq!(hit.items.len(), 1, "按纯文本应当命中这一条");
+    assert!(hit.items[0]
+        .subtitle
+        .clone()
+        .unwrap_or_default()
+        .contains("HTML"));
+
+    for marker in ["HTML_ONLY_MARKER", "alert(1)", "b>"] {
+        let miss = harness.host.query(&format!("剪贴板 {marker}"));
+        assert!(
+            miss.items.is_empty(),
+            "载荷内容「{marker}」不得成为搜索键，实际命中 {} 条",
+            miss.items.len()
+        );
+    }
+    // 存储层的 list 同样只查文字列。
+    assert_eq!(
+        harness
+            .host
+            .clipboard_entries(Some("HTML_ONLY_MARKER"))
+            .len(),
+        0
+    );
+    assert_eq!(harness.host.clipboard_entries(Some("可见的正文")).len(), 1);
+}
+
+/// 恢复：文本 + HTML/RTF **一起**写回剪贴板（断言真的写进去的载荷集合，而不是
+/// 只看「调用过恢复」），随后复用 ticket 08 的注入路径。
+#[test]
+fn restore_puts_every_supported_format_on_the_clipboard() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+    let html = "<b>会议室</b>";
+    let rtf = r"{\rtf1\ansi 会议室}";
+    harness.copy_rich("会议室已确认", Some(html), Some(rtf));
+    let item = harness.first_item("剪贴板");
+
+    harness.summon(focused_app("editor"));
+    let outcome = harness.host.execute(&item);
+    assert_eq!(outcome.status, ActionStatus::PastePending);
+
+    // 写进系统剪贴板的必须是同一次复制的全部公开格式。
+    let written = harness
+        .clipboard
+        .last_content()
+        .expect("宿主必须真的写入剪贴板");
+    assert_eq!(written.text, "会议室已确认", "文本目标要拿到纯文本");
+    assert_eq!(written.html.as_deref(), Some(html), "富文本目标要拿到 HTML");
+    assert_eq!(written.rtf.as_deref(), Some(rtf), "富文本目标要拿到 RTF");
+    let report = harness.clipboard.last_report().expect("必须返回写入报告");
+    assert_eq!(
+        report.formats,
+        vec![
+            ClipboardFormatKind::Text,
+            ClipboardFormatKind::Html,
+            ClipboardFormatKind::Rtf
+        ],
+        "报告要如实列出真的进了剪贴板的格式"
+    );
+    assert!(report.skipped.is_empty(), "三种格式都能提供时没有跳过项");
+    assert!(
+        outcome
+            .paste
+            .as_ref()
+            .and_then(|plan| plan.formats_note.as_deref())
+            .is_none(),
+        "全部格式都提供时不打扰用户"
+    );
+
+    // 注入时剪贴板里就是这条历史，且自身写入不会被重新捕获成一条新历史。
+    let done = harness.host.complete_paste();
+    assert_eq!(done.status, ActionStatus::Done);
+    assert_eq!(
+        harness.paster.text_at_paste(),
+        vec![Some("会议室已确认".to_string())]
+    );
+    assert_eq!(harness.watcher.own_write_count(), 1, "自身写入必须登记");
+    for _ in 0..2 {
+        assert!(
+            matches!(
+                harness.host.capture_clipboard_once(),
+                ClipboardCaptureOutcome::Unchanged | ClipboardCaptureOutcome::Suppressed
+            ),
+            "恢复历史不得反过来形成自身写入循环"
+        );
+    }
+    assert_eq!(harness.entries().len(), 1);
+}
+
+/// 平台只能提供纯文本时（Linux 的 `wl-copy`、macOS 的 `pbcopy`）：文本目标仍然拿到
+/// 纯文本，反馈里如实写明哪些格式没有同时提供以及原因。
+#[test]
+fn text_only_platform_still_receives_plain_text_and_the_loss_is_reported() {
+    let device_dir = unique_dir("clipboard-text-only");
+    let reason = "pbcopy 只支持纯文本，富文本格式无法写回系统剪贴板";
+    let clipboard = Arc::new(flashcast_platform::fake::FakeClipboard::text_only(reason));
+    let harness = clipboard_host_with_clipboard(&device_dir, fast_settings(), clipboard);
+    harness.enable();
+
+    let html = "<b>要粘贴的内容</b>";
+    let rtf = r"{\rtf1\ansi 要粘贴的内容}";
+    harness.copy_rich("要粘贴的内容", Some(html), Some(rtf));
+    let item = harness.first_item("剪贴板");
+    harness.summon(focused_app("editor"));
+
+    let outcome = harness.host.execute(&item);
+    assert_eq!(outcome.status, ActionStatus::PastePending);
+    // 文本目标仍然能拿到纯文本。
+    assert_eq!(
+        harness.clipboard.last_write().as_deref(),
+        Some("要粘贴的内容")
+    );
+    let report = harness.clipboard.last_report().expect("必须返回写入报告");
+    assert_eq!(report.formats, vec![ClipboardFormatKind::Text]);
+    let skipped: Vec<&str> = report.skipped.iter().map(|item| item.kind.tag()).collect();
+    assert_eq!(skipped, vec!["html", "rtf"], "未提供的格式要逐个列出");
+    assert!(report.skipped.iter().all(|item| item.reason == reason));
+
+    // 反馈必须写清实际提供了哪些、哪些没有：用户不能以为样式也一起过去了。
+    let plan = outcome.paste.expect("应有粘贴计划");
+    let note = plan.formats_note.clone().expect("降级必须带说明");
+    assert!(note.contains("文字"), "说明要写实际提供的格式：{note}");
+    assert!(note.contains("未提供"), "说明要写清未提供的格式：{note}");
+    assert!(note.contains("HTML") && note.contains("RTF"), "{note}");
+    assert!(note.contains(reason), "原因要原样透传：{note}");
+
+    let done = harness.host.complete_paste();
+    assert_eq!(done.status, ActionStatus::Done);
+    let message = done.message.expect("完成反馈必须存在");
+    assert!(
+        message.contains("未提供"),
+        "粘贴完成后仍要说明降级：{message}"
+    );
+}
+
+/// 纯文本条目的恢复仍然只写文本，并且不产生任何降级说明。
+#[test]
+fn text_only_entry_restores_without_a_degradation_note() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+    harness.copy_rich("纯文本内容", None, None);
+    let item = harness.first_item("剪贴板");
+    harness.summon(focused_app("editor"));
+
+    let outcome = harness.host.execute(&item);
+    assert_eq!(outcome.status, ActionStatus::PastePending);
+    let written = harness.clipboard.last_content().expect("必须写入");
+    assert_eq!(written.text, "纯文本内容");
+    assert!(written.html.is_none() && written.rtf.is_none());
+    assert_eq!(
+        harness.clipboard.last_report().unwrap().formats,
+        vec![ClipboardFormatKind::Text]
+    );
+    assert!(
+        outcome.paste.and_then(|plan| plan.formats_note).is_none(),
+        "没有富文本就没有降级说明"
+    );
+}
+
+/// 预览必须安全：只渲染惰性纯文本，剪贴板提供的脚本 / 远端资源既不入 DOM 也不进
+/// 结果模型（因此不可能被执行或加载）。
+#[test]
+fn preview_renders_inert_text_and_never_embeds_clipboard_markup() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+    let hostile = "<script>alert('xss')</script><img src=\"https://example.invalid/track.png\" onerror=\"steal()\">";
+    harness.copy_rich("安全的正文", Some(hostile), None);
+
+    let item = harness.first_item("剪贴板");
+    match &item.preview {
+        flashcast_core::Preview::Text { body, .. } => {
+            assert_eq!(body, "安全的正文", "预览只能是可索引的纯文本");
+            assert!(!body.contains('<'), "预览里不得出现标记：{body}");
+        }
+        other => panic!("剪贴板预览必须是文本：{other:?}"),
+    }
+
+    // 宿主预览入口同样如此。
+    let preview = harness.host.preview(&item.id).expect("预览可用");
+    match preview {
+        flashcast_core::Preview::Text { body, .. } => {
+            assert_eq!(body, "安全的正文");
+        }
+        other => panic!("预览必须是惰性文本：{other:?}"),
+    }
+
+    // 结果模型整体序列化后也不得出现剪贴板提供的活动内容（UI 拿到的就是它）。
+    let json = serde_json::to_string(&item).expect("结果条目可序列化");
+    for needle in ["script", "alert", "onerror", "example.invalid", "<img"] {
+        assert!(
+            !json.contains(needle),
+            "结果模型里不得出现「{needle}」：{json}"
+        );
+    }
+    // 但载荷本身必须仍然保存在本机历史里（安全不等于丢弃）。
+    let event = &harness.entries()[0];
+    assert_eq!(event.payloads[0].inline.as_deref(), Some(hostile));
+}
+
+/// 去重语义不因富文本而改变：同一条纯文本被复制两次仍然只有一条历史；先纯文本、
+/// 后富文本时合并到同一条，并把后到的载荷补进去（不产生重复记录，也不丢格式）。
+#[test]
+fn dedupe_semantics_are_unchanged_and_a_later_rich_copy_enriches_the_entry() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+
+    assert!(matches!(
+        harness.copy("同一段内容"),
+        ClipboardCaptureOutcome::Captured { .. }
+    ));
+    let id = harness.entries()[0].id.clone();
+    assert_eq!(
+        harness.copy("同一段内容"),
+        ClipboardCaptureOutcome::Deduplicated {
+            id: id.clone(),
+            copies: 2
+        }
+    );
+    assert_eq!(harness.entries().len(), 1, "纯文本去重语义不变");
+    assert!(harness.entries()[0].payloads.is_empty());
+
+    // 同一段文字的富文本版本到达：仍然是同一条，载荷被补进去。
+    let html = "<b>同一段内容</b>";
+    assert_eq!(
+        harness.copy_rich("同一段内容", Some(html), None),
+        ClipboardCaptureOutcome::Deduplicated {
+            id: id.clone(),
+            copies: 3
+        }
+    );
+    let entries = harness.entries();
+    assert_eq!(entries.len(), 1, "不得拆成重复记录");
+    assert_eq!(entries[0].payloads.len(), 1);
+    assert_eq!(entries[0].payloads[0].inline.as_deref(), Some(html));
+    assert_eq!(
+        entries[0].content_hash,
+        flashcast_core::content_hash_text("同一段内容"),
+        "去重键仍是纯文本指纹"
+    );
+
+    // 之后的纯文本复制不会把已保存的富文本载荷抹掉。
+    assert!(matches!(
+        harness.copy("同一段内容"),
+        ClipboardCaptureOutcome::Deduplicated { copies: 4, .. }
+    ));
+    assert_eq!(
+        harness.entries()[0].payloads[0].inline.as_deref(),
+        Some(html)
     );
 }
 
