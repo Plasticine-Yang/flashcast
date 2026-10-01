@@ -596,3 +596,146 @@ fn manual_paste_message_uses_the_right_modifier_key_per_os() {
     assert!(!message.contains("Wayland"));
     let _ = SessionType::Wayland;
 }
+
+// ---------------------------------------------------------------------------
+// 关键词与标签冲突：插件入口与备忘录候选同时保留（ADR §4）
+// ---------------------------------------------------------------------------
+
+/// 输入正好等于插件关键词、同时又有备忘录带这个标签时：首屏**同时**给出插件入口与
+/// 标签命中的备忘录；执行入口进入范围，选择备忘录仍然可以直接粘贴。
+#[test]
+fn keyword_and_tag_collision_keeps_both_sides() {
+    let ph = PasteHost::new(Arc::new(FakeCapabilityProbe::linux_x11()));
+    // 一条备忘录的标签与插件关键词「memo」完全相同：这就是冲突场景。
+    let tagged = ph.create_memo("命名风波", &["memo"], "标签与关键词同名");
+    let other = ph.create_memo("无关", &["工作"], "另一条");
+
+    let response = ph.host.query("memo");
+
+    assert_eq!(
+        response.scope,
+        QueryScope::Home,
+        "冲突时必须留在首屏，否则标签命中会消失"
+    );
+    let entry_id = format!(
+        "{}{}",
+        flashcast_core::PLUGIN_ENTRY_PREFIX,
+        flashcast_core::MEMO_PLUGIN_ID
+    );
+    let entry = response
+        .items
+        .iter()
+        .find(|item| item.id == entry_id)
+        .expect("必须给出插件入口条目");
+    assert_eq!(entry.kind, ItemKind::Command);
+    assert_eq!(entry.default_action, flashcast_core::DefaultAction::Open);
+    assert_eq!(entry.title, "备忘录");
+    assert_eq!(
+        response.items.first().map(|item| item.id.clone()),
+        Some(entry_id.clone()),
+        "插件入口必须排在最前：直接回车的行为与「输入关键词进入范围」一致"
+    );
+    let memo_item = response
+        .items
+        .iter()
+        .find(|item| item.id == memo_item_id(&tagged))
+        .expect("标签命中的备忘录不得被关键词吞掉");
+    assert_eq!(memo_item.kind, ItemKind::Memo);
+    assert_eq!(memo_item.source, flashcast_core::MEMO_PLUGIN_ID);
+    assert_eq!(
+        memo_item.default_action,
+        flashcast_core::DefaultAction::Paste
+    );
+    assert!(
+        !response
+            .items
+            .iter()
+            .any(|item| item.id == memo_item_id(&other)),
+        "只有标签命中的那条参与首屏结果"
+    );
+
+    // 选择插件入口并回车：进入插件范围，范围内列出全部备忘录。
+    let outcome = ph.host.execute(&entry);
+    assert_eq!(outcome.status, ActionStatus::Done);
+    let scope = ph.host.snapshot();
+    assert_eq!(
+        scope.scope,
+        QueryScope::Plugin {
+            id: flashcast_core::MEMO_PLUGIN_ID.to_string(),
+            keyword: "memo".to_string(),
+        },
+        "执行入口必须真的进入范围"
+    );
+    assert!(scope.items.iter().all(|item| item.kind == ItemKind::Memo));
+    assert!(scope
+        .items
+        .iter()
+        .any(|item| item.id == memo_item_id(&tagged)));
+    assert!(scope
+        .items
+        .iter()
+        .any(|item| item.id == memo_item_id(&other)));
+
+    // UI 在执行命令条目后会按当前输入重新查询：这一次不能又被弹回首屏。
+    let again = ph.host.query("memo");
+    assert_eq!(
+        again.scope,
+        QueryScope::Plugin {
+            id: flashcast_core::MEMO_PLUGIN_ID.to_string(),
+            keyword: "memo".to_string(),
+        },
+        "已经在范围内时，同样的输入必须留在范围内"
+    );
+
+    // 从入口进入范围之后仍可返回首屏，并且首屏的冲突结果还在。
+    let back = ph.host.back();
+    assert!(back.restored, "应能返回首屏");
+    assert_eq!(back.response.scope, QueryScope::Home);
+}
+
+/// 没有冲突时，输入完整关键词仍然**直接**进入插件范围（ticket 07 的行为不能被改坏）。
+#[test]
+fn exact_keyword_without_collision_still_enters_the_scope() {
+    let ph = PasteHost::new(Arc::new(FakeCapabilityProbe::linux_x11()));
+    ph.create_memo("无关", &["工作"], "正文");
+
+    let response = ph.host.query("memo");
+
+    assert_eq!(
+        response.scope,
+        QueryScope::Plugin {
+            id: flashcast_core::MEMO_PLUGIN_ID.to_string(),
+            keyword: "memo".to_string(),
+        }
+    );
+    assert!(
+        response
+            .items
+            .iter()
+            .all(|item| item.kind == ItemKind::Memo),
+        "范围内只应有备忘录：{:?}",
+        response.items
+    );
+}
+
+/// 冲突时标签命中的备忘录照样可以执行：内容进剪贴板，粘贴计划的目标是唤起前的应用。
+#[test]
+fn colliding_tag_hit_can_still_be_pasted() {
+    let ph = PasteHost::observing(Arc::new(FakeCapabilityProbe::linux_x11()));
+    let tagged = ph.create_memo("命名风波", &["memo"], "标签与关键词同名");
+    ph.summon(&target_app());
+
+    let response = ph.host.query("memo");
+    let item = response
+        .items
+        .iter()
+        .find(|item| item.id == memo_item_id(&tagged))
+        .expect("标签命中必须可选")
+        .clone();
+
+    let outcome = ph.host.execute(&item);
+
+    assert_eq!(outcome.status, ActionStatus::PastePending);
+    assert_eq!(ph.clipboard_text().as_deref(), Some("标签与关键词同名"));
+    assert_eq!(ph.host.complete_paste().status, ActionStatus::Done);
+}

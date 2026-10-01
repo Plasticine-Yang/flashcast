@@ -25,9 +25,8 @@ use crate::git::{CommitOutcome, GitError, WorkspaceChanges};
 use crate::manifest::{ManifestEntry, ManifestError, PluginManifestFile};
 use crate::memo::{self, Memo, MemoBook, MemoError, MemoProblem};
 use crate::model::{
-    ActionOutcome, ActionStatus, BackOutcome, DefaultAction, ItemKind, Notice, PastePlan,
-    PluginFailure, Preview, QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES,
-    COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
+    ActionOutcome, BackOutcome, DefaultAction, ItemKind, MatchTier, Notice, PastePlan, PluginFailure, Preview, QueryResponse, QueryScope, Score, SearchItem,
+    COMMAND_CAPABILITIES, COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
 use crate::plugin::{PluginKind, PluginScope, SearchContext, CAP_CLIPBOARD_WRITE};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
@@ -204,7 +203,14 @@ const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// 查询方式：用户输入会改变输入状态，快照类操作不会。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchMode {
+    /// 用户在输入框里输入（含 `back()` 恢复历史后的重算）。
+    ///
+    /// 关键词与标签冲突时保留双方：首屏同时给出插件入口与标签命中的备忘录（ADR §4）。
     UserInput,
+    /// 用户明确选择了首屏的「插件入口」条目。
+    ///
+    /// 此时必须真的进入该插件范围，跳过冲突保留，否则入口会变成点不动的死路。
+    ExplicitPluginEntry,
 }
 
 impl Host {
@@ -2187,8 +2193,43 @@ impl Host {
                 ActionOutcome::done(Some(format!("已重新扫描软件列表，当前结果 {count} 条")))
             }
             COMMAND_CAPABILITIES => ActionOutcome::done(Some(self.capabilities_summary())),
-            other => ActionOutcome::failed(format!("未知命令：{other}")),
+            other => match other.strip_prefix(PLUGIN_ENTRY_PREFIX) {
+                // 首屏的插件入口条目：等价于用户直接输入该插件的关键词。
+                Some(plugin_id) => self.enter_plugin_scope(plugin_id),
+                None => ActionOutcome::failed(format!("未知命令：{other}")),
+            },
         }
+    }
+
+    /// 进入插件范围（首屏插件入口条目的执行路径）。
+    ///
+    /// 与「用户直接把关键词打全」走同一段逻辑，唯一区别是跳过关键词与标签的冲突保留：
+    /// 用户已经明确选择了插件入口，此时必须真的进入范围，而不是又留在首屏。
+    fn enter_plugin_scope(&self, plugin_id: &str) -> ActionOutcome {
+        let entry = lock(&self.inner).manifest.get(plugin_id).cloned();
+        let Some(entry) = entry.filter(|entry| entry.kind == PluginKind::Feature) else {
+            return ActionOutcome::failed(format!("插件「{plugin_id}」不在清单里，无法进入"));
+        };
+        if !entry.enabled || !self.deps.plugins.is_enabled(plugin_id) {
+            return ActionOutcome::failed(format!("插件「{}」已停用，无法进入", entry.name));
+        }
+        let Some(keyword) = entry.keywords.first().cloned() else {
+            return ActionOutcome::failed(format!("插件「{}」没有可用的关键词", entry.name));
+        };
+        let seq = self.next_seq();
+        let mut inner = lock(&self.inner);
+        let input = inner.input.clone();
+        self.search(
+            &mut inner,
+            &input,
+            SearchMode::ExplicitPluginEntry,
+            None,
+            seq,
+        );
+        ActionOutcome::done(Some(format!(
+            "已进入「{}」范围（关键词 {keyword}）",
+            entry.name
+        )))
     }
 
     /// 能力摘要，用于「查看平台能力」快速访问项的中文反馈。
@@ -2239,30 +2280,57 @@ impl Host {
         seq: u64,
     ) -> QueryResponse {
         let previous_input = inner.input.clone();
-        let same_input = previous_input == input && mode == SearchMode::UserInput;
+        let same_input = previous_input == input;
         let normalized = input.trim().to_lowercase();
 
         // 查询范围切换：输入完整匹配插件关键词时进入该插件范围。
-        if let Some((manifest, scope)) = self.deps.plugins.take_scope(input) {
-            let already_in_scope = matches!(
-                &inner.scope,
-                QueryScope::Plugin { id, .. } if id == &manifest.id
-            );
-            if !already_in_scope {
-                inner.history.push(HistoryEntry {
-                    input: previous_input,
-                    scope: inner.scope.clone(),
-                    selection: inner.selection,
-                });
-                inner
-                    .plugin_scopes
-                    .insert(manifest.id.clone(), Arc::from(scope));
-                inner.scope = QueryScope::Plugin {
-                    id: manifest.id.clone(),
-                    keyword: normalized.clone(),
-                };
-            } else {
-                // 同一插件用**另一个别名**再次进入（例如把输入从「备忘录」改成「memo」）：
+        //
+        // 例外是**关键词与标签冲突**（ADR §4）：如果首屏还有「标签精确匹配」的备忘录候选，
+        // 就留在首屏，同时给出明确的插件入口条目。任何一方都不静默消失。
+        let keyword_scope = self.deps.plugins.take_scope(input);
+        // 冲突判定用的关键词：插件清单里记录的那个别名，与用户输入等价。
+        let collision_keyword = keyword_scope.as_ref().and_then(|(manifest, _)| {
+            manifest
+                .matches_keyword(&normalized)
+                .or_else(|| Some(normalized.clone()))
+        });
+        // 已经在同一个插件的范围里时不算冲突：那是用户在范围里继续输入（关键词本身就
+        // 是范围的入口），此时必须留在范围内，否则「执行入口进入范围」会被下一次查询弹回首屏。
+        let keyword_plugin = keyword_scope.as_ref().map(|(manifest, _)| manifest.id.clone());
+        let already_in_keyword_scope = match (&inner.scope, &keyword_plugin) {
+            (QueryScope::Plugin { id, .. }, Some(keyword_id)) => id == keyword_id,
+            _ => false,
+        };
+        let collision = match (&collision_keyword, mode) {
+            (Some(keyword), SearchMode::UserInput) if !already_in_keyword_scope => {
+                self.home_tag_hits(inner, keyword)
+            }
+            _ => Vec::new(),
+        };
+        // 入口条目用的清单信息：必须在移动 `scope` 之前克隆出来。
+        let keyword_entry = keyword_scope
+            .as_ref()
+            .filter(|_| !collision.is_empty())
+            .map(|(manifest, _)| manifest.clone());
+        match keyword_scope {
+            // 有冲突：留在首屏（可能是从插件范围退回来的，因此显式置回首屏）。
+            Some(_) if !collision.is_empty() => {
+                inner.scope = QueryScope::Home;
+                inner.plugin_scopes.clear();
+            }
+            Some((manifest, scope)) => {
+                let already_in_scope = matches!(
+                    &inner.scope,
+                    QueryScope::Plugin { id, .. } if id == &manifest.id
+                );
+                if !already_in_scope {
+                    inner.history.push(HistoryEntry {
+                        input: previous_input,
+                        scope: inner.scope.clone(),
+                        selection: inner.selection,
+                    });
+                }
+                // 同一插件用**另一个别名**再次进入（例如把输入从「备忘录」改成「memo」）时
                 // 不记录新的历史，但必须更新记下的关键词并换上新的范围对象——范围标签与
                 // 「剥掉关键词前缀」都以它对依据，否则会显示旧别名、也搜不到东西。
                 inner
@@ -2273,10 +2341,12 @@ impl Host {
                     keyword: normalized.clone(),
                 };
             }
-        } else if !inner.scope.is_home() && normalized.is_empty() {
-            // 清空输入即离开插件范围，回到首屏。
-            inner.scope = QueryScope::Home;
-            inner.plugin_scopes.clear();
+            None if !inner.scope.is_home() && normalized.is_empty() => {
+                // 清空输入即离开插件范围，回到首屏。
+                inner.scope = QueryScope::Home;
+                inner.plugin_scopes.clear();
+            }
+            None => {}
         }
 
         inner.input = input.to_string();
@@ -2286,6 +2356,15 @@ impl Host {
             QueryScope::Home => self.search_home(inner, &ctx),
             QueryScope::Plugin { id, .. } => self.search_plugin_scope(inner, &ctx, &id),
         };
+        if let (Some(manifest), Some(keyword)) = (keyword_entry, collision_keyword.as_ref()) {
+            // 插件入口排在最前（匹配层级相同，相关度最高）：直接回车仍然进入插件范围，
+            // 往下选择则可以使用标签命中的备忘录。
+            ranked.push(RankedItem {
+                item: plugin_entry_item(&manifest, keyword),
+                source_order: 0,
+                source_priority: 0,
+            });
+        }
         sort_ranked(&mut ranked);
         inner.items = ranked.into_iter().map(|ranked| ranked.item).collect();
         inner.plugin_failures = failures;
@@ -2304,6 +2383,25 @@ impl Host {
                 .map(|message| Notice::error(message.clone()))
         });
         self.response(inner, seq, notice)
+    }
+
+    /// 首屏上与 `keyword` **标签精确相等**的候选（用于关键词/标签冲突判定）。
+    ///
+    /// 判定依据是宿主定义的结果模型，而不是插件的内部实现：任何参与首屏搜索的插件
+    /// 贡献出的 `Memo` 条目，只要匹配层级是「关键词或标签精确」，就算一次标签命中。
+    /// 插件搜索仍然走「独立线程 + 超时 + panic 隔离」，冲突判定不会把宿主拖住。
+    fn home_tag_hits(&self, inner: &HostInner, keyword: &str) -> Vec<SearchItem> {
+        let ctx = SearchContext::new(keyword, QueryScope::Home, 50);
+        self.deps
+            .plugins
+            .search_home(&ctx, inner.settings.plugin_timeout())
+            .results
+            .into_iter()
+            .flat_map(|(_source, items)| items)
+            .filter(|item| {
+                item.kind == ItemKind::Memo && item.score.tier == MatchTier::KeywordOrTagExact
+            })
+            .collect()
     }
 
     fn search_home(
@@ -2465,6 +2563,28 @@ fn command_item(id: &str, title: &str, subtitle: Option<String>) -> SearchItem {
         default_action: DefaultAction::Open,
         preview: Preview::None,
         score: Score::unordered(),
+    }
+}
+
+/// 首屏「插件入口」条目的标识前缀：`flashcast.plugin.<插件 id>`。
+pub const PLUGIN_ENTRY_PREFIX: &str = "flashcast.plugin.";
+
+/// 关键词与标签冲突时，首屏给出的插件入口条目（ADR §4）。
+///
+/// 相关度给到最高、来源优先级为宿主自身，因此它排在标签命中的备忘录之前：用户按输入
+/// 关键词时的第一反应（回车进入插件）保持不变，同时标签命中的备忘录就在下面，不会被
+/// 静默丢弃。
+pub fn plugin_entry_item(manifest: &crate::plugin::PluginManifest, keyword: &str) -> SearchItem {
+    SearchItem {
+        id: format!("{PLUGIN_ENTRY_PREFIX}{}", manifest.id),
+        title: manifest.name.clone(),
+        subtitle: Some(format!("插件 · 回车进入「{keyword}」范围")),
+        icon: None,
+        source: HOST_SOURCE.to_string(),
+        kind: ItemKind::Command,
+        default_action: DefaultAction::Open,
+        preview: Preview::None,
+        score: Score::new(MatchTier::KeywordOrTagExact, u8::MAX),
     }
 }
 
