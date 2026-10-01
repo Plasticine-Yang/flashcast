@@ -229,9 +229,12 @@ fn split_front_matter(text: &str) -> Result<Option<(&str, &str)>, MemoError> {
     };
     let front = &rest[..end];
     let after = &rest[end + 1 + FRONT_MATTER.len()..];
-    // 结束标记之后的内容（去掉紧随的一个换行）就是正文；正文首尾各去掉一个换行，
-    // 让 `to_markdown` 的「front matter + 空行 + 正文」往返稳定。
+    // 结束标记之后依次是：该行的换行、正文前的空行分隔（`to_markdown` 写出的就是
+    // 「---\n」+「\n」+ 正文 +「\n」），最后是文件末尾的换行。三者都是结构分隔而不是
+    // 正文内容，必须一并去掉，否则每次「读—写」都会给正文增加一个前导换行，
+    // 正文会随重启不断增长（往返不稳定）。正文自身以空行开头属于结构，不保留。
     let body = after.strip_prefix('\n').unwrap_or(after);
+    let body = body.strip_prefix('\n').unwrap_or(body);
     let body = body.strip_suffix('\n').unwrap_or(body);
     Ok(Some((front, body)))
 }

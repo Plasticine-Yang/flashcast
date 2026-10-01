@@ -145,6 +145,10 @@ impl PluginRegistry {
     /// 运行一次插件范围搜索。与首屏搜索同样有超时、取消与 panic 隔离（ADR §6）：
     /// 插件报错、无响应或 panic 时本轮返回 [`PluginFailure`]，宿主自身结果与其他
     /// 插件不受影响，搜索线程也不会被卡住。
+    ///
+    /// 停用（或已不在注册表里）的插件一律返回空结果：调用方可能仍持有进入范围时
+    /// 拿到的范围对象，停用必须立刻停止它的搜索贡献与后台活动。这里静默返回空而不是
+    /// 记录失败——用户刚停用插件，不该看到一条错误。
     pub fn search_scope(
         &self,
         plugin_id: &str,
@@ -152,6 +156,9 @@ impl PluginRegistry {
         ctx: &SearchContext,
         timeout: Duration,
     ) -> Result<Vec<SearchItem>, PluginFailure> {
+        if !self.is_enabled(plugin_id) {
+            return Ok(Vec::new());
+        }
         let (sender, receiver) = mpsc::channel::<PluginOutcome>();
         let scope_id = plugin_id.to_string();
         let thread_ctx = ctx.clone();

@@ -714,13 +714,29 @@ impl Host {
     /// `applied == false` 的结果。UI 需要的是一份可展示的结果，因此这里总是返回
     /// [`WorkspaceReload`]，而不是像 [`Host::wait_for_workspace_change`] 那样返回 `None`。
     pub fn reload_workspace(&self) -> WorkspaceReload {
-        let path = match &lock(&self.inner).workspace {
-            Some(workspace) => workspace.settings_path(),
+        let workspace = match &lock(&self.inner).workspace {
+            Some(workspace) => workspace.clone(),
             None => return self.unchanged_reload(PathBuf::new()),
         };
+        let path = workspace.settings_path();
         match self.reload_from_workspace(&path) {
             Some(reload) => reload,
-            None => self.unchanged_reload(path),
+            // `reload_from_workspace` 在设置文件内容没变时会提前返回（那是重复事件的热路径
+            // 判据），但 `memos/*.md` 等其它工作区内容仍可能被外部改过。显式重载入口因此
+            // 补一次备忘录读取，让「重新检测」与监听路径看到同样的内容。
+            None => {
+                let memos_changed = self.load_memos(&workspace);
+                if memos_changed {
+                    lock(&self.inner).reloads += 1;
+                }
+                WorkspaceReload {
+                    path,
+                    applied: memos_changed,
+                    settings: self.settings(),
+                    theme: self.theme_state(),
+                    error: None,
+                }
+            }
         }
     }
 
@@ -1590,17 +1606,28 @@ impl Host {
 
     /// 启用或停用插件（功能插件与主题插件共用）。
     ///
-    /// 停用当前选中的主题会退回内置浅色主题，并给出中文原因。
+    /// 停用当前选中的主题会退回内置浅色主题，并给出中文原因。停用一个功能插件时
+    /// 同时丢掉它的范围对象：如果用户正停在该插件的范围里，直接回到首屏，并按当前
+    /// 输入重算一次结果——列表里不会留着已停用插件的结果。
     pub fn set_plugin_enabled(&self, id: &str, enabled: bool) -> Result<(), ManifestError> {
-        let (manifest, selection, notice) = {
+        let (manifest, selection, notice, feature_changed) = {
             let mut inner = lock(&self.inner);
             let entry =
                 inner.manifest.get(id).cloned().ok_or_else(|| {
                     ManifestError::invalid(format!("插件清单里没有这个标识：{id}"))
                 })?;
             inner.manifest.set_enabled(id, enabled);
+            let mut feature_changed = false;
             if entry.kind == PluginKind::Feature {
                 self.deps.plugins.set_enabled(id, enabled);
+                feature_changed = true;
+                // 范围对象属于「已进入某个插件的范围」这一状态：插件停了就不能再留着。
+                inner.plugin_scopes.remove(id);
+                if !enabled
+                    && matches!(&inner.scope, QueryScope::Plugin { id: current, .. } if current == id)
+                {
+                    inner.scope = QueryScope::Home;
+                }
             }
             let mut notice = None;
             let selection =
@@ -1612,7 +1639,7 @@ impl Host {
                 } else {
                     None
                 };
-            (inner.manifest.clone(), selection, notice)
+            (inner.manifest.clone(), selection, notice, feature_changed)
         };
         self.persist_manifest(&manifest)?;
         if let Some(selection) = selection {
@@ -1625,6 +1652,13 @@ impl Host {
         if let Some(notice) = notice {
             // 一次性反馈：通过主题状态回传给调用方，不长期占用错误位置。
             lock(&self.inner).theme_error = Some(notice);
+        }
+        if feature_changed {
+            // 启停改变了「哪些来源参与搜索」，按当前输入重算，让界面立刻反映新状态。
+            let input = lock(&self.inner).input.clone();
+            let seq = self.next_seq();
+            let mut inner = lock(&self.inner);
+            self.search(&mut inner, &input, SearchMode::UserInput, None, seq);
         }
         Ok(())
     }
@@ -2036,6 +2070,17 @@ impl Host {
                     scope: inner.scope.clone(),
                     selection: inner.selection,
                 });
+                inner
+                    .plugin_scopes
+                    .insert(manifest.id.clone(), Arc::from(scope));
+                inner.scope = QueryScope::Plugin {
+                    id: manifest.id.clone(),
+                    keyword: normalized.clone(),
+                };
+            } else {
+                // 同一插件用**另一个别名**再次进入（例如把输入从「备忘录」改成「memo」）：
+                // 不记录新的历史，但必须更新记下的关键词并换上新的范围对象——范围标签与
+                // 「剥掉关键词前缀」都以它对依据，否则会显示旧别名、也搜不到东西。
                 inner
                     .plugin_scopes
                     .insert(manifest.id.clone(), Arc::from(scope));

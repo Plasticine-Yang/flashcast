@@ -934,3 +934,82 @@ impl FeaturePlugin for KeywordPlugin {
         }))
     }
 }
+
+/// 范围搜索的故障方式。
+#[derive(Clone, Copy)]
+pub enum ScopeFault {
+    /// 阻塞指定时长（超过插件超时，用于验证超时隔离）。
+    Hang(Duration),
+    /// 返回插件错误。
+    Fail,
+    /// panic（用于验证 panic 隔离）。
+    Panic,
+}
+
+/// 关键词入口正常、但**范围搜索**会故障的插件。
+///
+/// `KeywordPlugin` 的范围总是立刻成功，因此范围侧的隔离（ticket 07 新加的
+/// `PluginRegistry::search_scope`）需要这个替身才能验证。
+pub struct FaultyScopePlugin {
+    pub manifest: PluginManifest,
+    pub fault: ScopeFault,
+}
+
+impl FaultyScopePlugin {
+    pub fn new(id: &str, keyword: &str, fault: ScopeFault) -> Self {
+        Self {
+            manifest: PluginManifest::feature(id, id, "0.1.0").with_keywords([keyword]),
+            fault,
+        }
+    }
+}
+
+struct FaultyScope {
+    plugin_id: String,
+    keyword: String,
+    fault: ScopeFault,
+}
+
+impl PluginScope for FaultyScope {
+    fn plugin_id(&self) -> &str {
+        &self.plugin_id
+    }
+
+    fn keyword(&self) -> &str {
+        &self.keyword
+    }
+
+    fn search(&self, _ctx: &SearchContext) -> Result<Vec<SearchItem>, PluginError> {
+        match self.fault {
+            ScopeFault::Hang(delay) => {
+                std::thread::sleep(delay);
+                Ok(Vec::new())
+            }
+            ScopeFault::Fail => Err(PluginError::failed("范围搜索内部错误")),
+            ScopeFault::Panic => panic!("范围搜索故意 panic"),
+        }
+    }
+}
+
+impl FeaturePlugin for FaultyScopePlugin {
+    fn manifest(&self) -> PluginManifest {
+        self.manifest.clone()
+    }
+
+    fn contributes_to_home(&self) -> bool {
+        // 首屏不参与，故障只发生在范围里。
+        false
+    }
+
+    fn search(&self, _ctx: &SearchContext) -> Result<Vec<SearchItem>, PluginError> {
+        Ok(Vec::new())
+    }
+
+    fn take_scope(&self, keyword: &Keyword) -> Option<Box<dyn PluginScope>> {
+        Some(Box::new(FaultyScope {
+            plugin_id: self.manifest.id.clone(),
+            keyword: keyword.as_str().to_string(),
+            fault: self.fault,
+        }))
+    }
+}
