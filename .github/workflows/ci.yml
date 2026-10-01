@@ -8,9 +8,16 @@ on:
   pull_request:
 
 # 同一 ref 上的新提交取消旧的运行。
+# tag 的 ref 是 refs/tags/<tag>，与分支不同组，因此发布运行不会被后续分支推送取消。
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# 默认最小权限：整个 workflow 只需要读仓库内容。
+# 只有末尾的 publish 任务在 tag 上额外要 contents: write（创建 Release 与上传资产）。
+# 分支推送照旧不发布，也没有任何任务拿到写权限。
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -679,3 +686,72 @@ jobs:
           # 不能只警告——第一次真实运行就是因为相对输出路径而「静默没有产出」。
           if-no-files-found: error
           retention-days: 30
+
+  # ── ticket 18：正式 Release ─────────────────────────────────────────────
+  #
+  # 只有版本 tag（`v*`）才发布；分支推送照旧只产出候选包与校验和，行为不变。
+  #
+  # `needs` 覆盖全部必需任务：任一 verify 矩阵、bundle 或 checksums 失败时本任务不会运行
+  # （这里刻意不加 `if: always()`，残缺的构建不允许发布）。
+  #
+  # 权限：workflow 顶层是 contents: read，只有这个任务临时提到 contents: write。
+  # 发布脚本自己再做四道闸门：版本/tag/提交/文件名一致、五个安装包一个不少且无多余产物、
+  # 逐个重算 SHA256 并与汇总的 SHA256SUMS.txt 比对、发布后复核资产名称与大小。
+  # 重试幂等：Release 已存在时走 `gh release edit` + `gh release upload --clobber`，
+  # 不会创建第二个 Release，也不会把旧提交的产物混进来。
+  publish:
+    name: 发布 ${{ github.ref_name }} Release
+    needs: [verify, bundle, checksums]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 生成物写到 RUNNER_TEMP，避免和 CI 汇总 job 的 SHA256SUMS.txt 混在同一个目录里。
+          scripts/ci/publish-release.sh \
+            --tag "${GITHUB_REF_NAME}" \
+            --artifacts artifacts \
+            --commit "${GITHUB_SHA}" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --out "${RUNNER_TEMP}/flashcast-release"
+
+      - name: Summarise the published release
+        if: always()
+        run: |
+          set -uo pipefail
+          {
+            echo "### 发布 ${GITHUB_REF_NAME}"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| tag | \`${GITHUB_REF_NAME}\` |"
+            echo "| 提交 | \`${GITHUB_SHA}\` |"
+            echo "| 运行 | ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} |"
+            echo ""
+            if [ -f "${RUNNER_TEMP}/flashcast-release/SHA256SUMS.txt" ]; then
+              echo '```text'
+              cat "${RUNNER_TEMP}/flashcast-release/SHA256SUMS.txt"
+              echo '```'
+            else
+              echo "_没有生成 SHA256SUMS.txt：发布没有执行到校验步骤。_"
+            fi
+            echo ""
+            echo "发布说明是仓库里的 \`docs/release/${GITHUB_REF_NAME}.md\` 加上流水线生成的"
+            echo "「发布溯源」与「资产与 SHA256」两节；「未覆盖」项在该文件的「已知限制」一节逐条列出。"
+          } >>"$GITHUB_STEP_SUMMARY"
