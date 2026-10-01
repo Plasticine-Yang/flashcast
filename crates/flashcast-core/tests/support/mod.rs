@@ -19,7 +19,8 @@ use flashcast_core::{
 use flashcast_platform::catalog::{AppEntry, AppSource, IconRef};
 use flashcast_platform::chrome::ChromeProvider;
 use flashcast_platform::fake::{
-    FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeLauncher,
+    FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeFocusTracker, FakeLauncher,
+    FakePaster,
 };
 
 /// 构造一个软件条目。
@@ -139,6 +140,8 @@ pub fn host_restarted_with(
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
         chrome,
+        focus: Arc::new(FakeFocusTracker::default()),
+        paster: Arc::new(FakePaster::new()),
         plugins,
         device_dir: device_dir.to_path_buf(),
     };
@@ -190,6 +193,8 @@ pub fn official_host_with_device(
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: clipboard.clone(),
         chrome: no_chrome(),
+        focus: Arc::new(FakeFocusTracker::default()),
+        paster: Arc::new(FakePaster::new()),
         plugins: Arc::new(PluginRegistry::new()),
         device_dir: device_dir.clone(),
     };
@@ -213,12 +218,75 @@ pub fn official_host_with_chrome(
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
         chrome: Arc::clone(&chrome) as Arc<dyn ChromeProvider>,
+        focus: Arc::new(FakeFocusTracker::default()),
+        paster: Arc::new(FakePaster::new()),
         plugins: Arc::new(PluginRegistry::new()),
         device_dir: device_dir.clone(),
     };
     let host = Host::new(deps, settings);
     host.install_official_plugins();
     (host, chrome, device_dir)
+}
+
+/// 自动粘贴流程的测试载体：宿主 + 可观察的剪贴板 / 焦点 / 粘贴替身。
+///
+/// 焦点与粘贴替身必须由测试自己持有才能断言（「恢复了几次」「注入了几次」
+/// 「注入时剪贴板里是什么」），因此这里用一个显式的结构而不是元组。
+pub struct PasteHarness {
+    pub host: Host,
+    pub clipboard: Arc<FakeClipboard>,
+    pub focus: Arc<FakeFocusTracker>,
+    pub paster: Arc<FakePaster>,
+    pub device_dir: PathBuf,
+}
+
+impl PasteHarness {
+    /// 唤起：外壳在显示窗口之前捕获前台应用，并把它交给宿主。
+    pub fn summon(&self, app: flashcast_platform::FocusedApp) {
+        self.focus.set_active(Some(app.clone()));
+        self.host.set_paste_target(Some(app));
+    }
+
+    /// 唤起但拿不到前台应用（Wayland 等）：宿主必须降级为手动粘贴。
+    pub fn summon_without_target(&self) {
+        self.focus.set_active(None);
+        self.host.set_paste_target(None);
+    }
+}
+
+/// 构造带官方功能插件的宿主，并暴露剪贴板、焦点与粘贴替身（ticket 08）。
+pub fn official_host_with_paste(
+    apps: Vec<AppEntry>,
+    settings: Settings,
+    capabilities: Arc<dyn flashcast_platform::CapabilityProbe>,
+    focus: Arc<FakeFocusTracker>,
+    paster: Arc<FakePaster>,
+    clipboard: Arc<FakeClipboard>,
+) -> PasteHarness {
+    let device_dir = unique_dir("device");
+    // 宿主按能力注入：这里显式转成 trait 对象，替身仍由测试持有以便断言。
+    let focus_dep: Arc<dyn flashcast_platform::FocusTracker> = focus.clone();
+    let paster_dep: Arc<dyn flashcast_platform::Paster> = paster.clone();
+    let deps = HostDeps {
+        catalog: Arc::new(FakeAppCatalog::with_apps(apps)),
+        launcher: Arc::new(FakeLauncher::always_succeeds()),
+        capabilities,
+        clipboard: clipboard.clone(),
+        chrome: no_chrome(),
+        focus: focus_dep,
+        paster: paster_dep,
+        plugins: Arc::new(PluginRegistry::new()),
+        device_dir: device_dir.clone(),
+    };
+    let host = Host::new(deps, settings);
+    host.install_official_plugins();
+    PasteHarness {
+        host,
+        clipboard,
+        focus,
+        paster,
+        device_dir,
+    }
 }
 
 /// 同 [`official_host_with_device`]，但使用调用方提供的插件注册表与能力探测。
@@ -237,6 +305,8 @@ pub fn official_host_with_plugins(
         capabilities,
         clipboard: clipboard.clone(),
         chrome: no_chrome(),
+        focus: Arc::new(FakeFocusTracker::default()),
+        paster: Arc::new(FakePaster::new()),
         plugins,
         device_dir: device_dir.clone(),
     };
@@ -258,6 +328,8 @@ fn build_host(
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
         chrome: no_chrome(),
+        focus: Arc::new(FakeFocusTracker::default()),
+        paster: Arc::new(FakePaster::new()),
         plugins,
         device_dir,
     };

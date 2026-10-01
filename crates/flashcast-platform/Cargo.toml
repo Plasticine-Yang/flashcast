@@ -34,6 +34,11 @@ global-hotkey = "0.8.0"
 [target.'cfg(target_os = "linux")'.dependencies]
 # 与 global-hotkey 依赖的 x11rb 保持同一版本，避免重复编译两份。
 x11rb = "0.13.2"
+# 合成 Ctrl+V（研究笔记 §4.1：enigo 是唯一同时覆盖 Windows / macOS / X11 的成熟
+# 合成输入库，API 已逐项核对）。Linux 后端走 XTEST，只在 `x11rb` feature 下编译；
+# **不启用 `wayland` feature**：它依赖 wlroots 专有协议，GNOME 未实现，启用只会
+# 造成「看起来支持、实际无效」的假象（研究 §3.4.3）。
+enigo = { version = "0.6.1", default-features = false, features = ["x11rb"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # 与 Tauri 2.12 依赖的 `windows` 版本一致，feature 统一后共用同一份编译。
@@ -55,6 +60,9 @@ windows = { version = "0.62.2", features = [
 # 只读注册表，不需要 9 MB 的 `windows` bindings；用 wow64_32/wow64_64 视图，
 # 而不是拼接 WOW6432Node 字符串。
 windows-registry = "0.100.0"
+# 合成 Ctrl+V。Windows 后端用 user32 的 SendInput，并用 `dwExtraInfo` 打标，
+# 让宿主自己的全局快捷键不会把这次合成按键当成用户输入（研究 §4.1/§4.3）。
+enigo = { version = "0.6.1", default-features = false }
 
 # macOS 适配层。全部经 `cfg(target_os = "macos")` 条件编译，Linux 构建不受影响；
 # 这些 crate 只做 FFI，`cargo check --target x86_64-apple-darwin` 不需要 macOS SDK。
@@ -99,6 +107,10 @@ objc2-core-foundation = { version = "0.3.2", default-features = false, features 
     "CFDictionary",
     "objc2",
 ] }
+# 合成 Cmd+V。macOS 后端用 CGEvent，并用 `event_source_user_data` 打标；
+# 是否可用取决于「辅助功能」权限，权限判断在 `macos::focus` 里自己做，
+# 因此这里关掉 enigo 的自动权限弹窗（`open_prompt_to_get_permissions = false`）。
+enigo = { version = "0.6.1", default-features = false }
 
 [[bin]]
 name = "flashcast-platform-check"

@@ -50,19 +50,16 @@ impl FeaturePlugin for MemoPlugin {
 
     /// 备忘录参与首屏搜索：**按标签**命中（spec「首屏范围为软件与备忘录标签」）。
     ///
-    /// 关键词与标签冲突时不会静默丢弃任何一边：宿主在首屏同时给出软件 / 插件入口，
-    /// 这里照常返回带来源的备忘录候选；进入插件范围后标题、标签与正文都可检索。
+    /// 关键词与标签冲突时两边都不会静默消失，而判定权在宿主：插件**始终**按标签贡献
+    /// 候选（哪怕查询正好等于自己的关键词），由 `Host::search` 决定是进入范围还是留在
+    /// 首屏并同时给出「插件入口 + 标签命中」（ADR §4）。此前这里在关键词完全匹配时
+    /// 提前返回空结果，结果是「标签命中被关键词吞掉」，与 ADR 相反。
     fn contributes_to_home(&self) -> bool {
         true
     }
 
     fn search(&self, ctx: &SearchContext) -> Result<Vec<SearchItem>, PluginError> {
         if ctx.query.is_empty() {
-            return Ok(Vec::new());
-        }
-        // 输入已经完整匹配插件关键词时，范围入口才是主要结果；这里不重复贡献
-        // （宿主会把范围切换成该插件的范围，见 `Host::search`）。
-        if self.manifest.matches_keyword(&ctx.query).is_some() {
             return Ok(Vec::new());
         }
         let snapshot = self.book.snapshot();

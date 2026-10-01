@@ -2236,6 +2236,192 @@ async function main() {
       return `停用后关键词不再进入范围、结果里没有书签，截图 ${disabledShot}`;
     });
 
+    // 37. 自动粘贴：粘贴的是刚执行的那条内容，且没有目标时如实降级为手动粘贴。
+    await check("自动粘贴可用时粘贴刚才执行的那条；没有目标时提示手动粘贴", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      // 浏览器模拟宿主默认不能自动粘贴；这里打开它来验证 UI 的粘贴路径。
+      await page.evaluate(() => window.__flashcastMock.setAutoPasteSupported(true));
+
+      await page.fill(INPUT, "工作");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some((row) => row.dataset.kind === "memo"),
+        ROW,
+      );
+      /** 用方向键把选择移到标题为 `title` 的那一行（鼠标移动不算数）。 */
+      const selectRow = async (title) => {
+        const listed = await rows(page);
+        const index = listed.findIndex((row) => row.title === title);
+        assert(index >= 0, `列表里必须有「${title}」：${listed.map((r) => r.title).join("/")}`);
+        let current = (await selection(page)).index;
+        while (current !== index) {
+          const step = index > current ? 1 : -1;
+          await page.keyboard.press(step > 0 ? "ArrowDown" : "ArrowUp");
+          current += step;
+        }
+        await page.waitForFunction(
+          ({ selector, index }) =>
+            document.querySelectorAll(selector)[index]?.dataset.selected === "true",
+          { selector: ROW, index },
+        );
+      };
+
+      // 执行第一条：外壳顺序必须是 复制 → 关窗 → 恢复目标 → 注入粘贴。
+      await selectRow("常用回复");
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => window.__flashcastMock.lastPaste !== null);
+      const first = await page.evaluate(() => window.__flashcastMock.lastPaste);
+      assert(
+        first.content === "收到，我看一下再回复你。",
+        `粘贴的必须是刚执行的正文，实际「${first.content}」`,
+      );
+      assert(
+        first.sequence.join(" → ") === "copied → windowHidden → restored → pasted",
+        `外壳顺序不对：${first.sequence.join(" → ")}`,
+      );
+      assert(
+        first.target === "Visual Studio Code",
+        `粘贴目标必须是唤起前的应用，实际「${first.target}」`,
+      );
+      const firstShot = await shot(page, "61-memo-pasted.png");
+
+      // 切换到另一条再执行：粘贴的必须变成新的那条，不能是上一次的选择。
+      await page.evaluate(() => {
+        window.__flashcastMock.lastPaste = null;
+      });
+      await selectRow("会议邀请");
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => window.__flashcastMock.lastPaste !== null);
+      const second = await page.evaluate(() => window.__flashcastMock.lastPaste);
+      assert(
+        second.content === "下午三点在三楼会议室，麻烦确认一下时间。",
+        `切换结果后粘贴的必须是新选中那条，实际「${second.content}」`,
+      );
+      const secondShot = await shot(page, "62-memo-pasted-switched.png");
+
+      // 没有记录到唤起前的应用：内容照样进剪贴板，界面必须说清要手动粘贴。
+      await page.evaluate(() => {
+        window.__flashcastMock.setPreviousApp(null);
+        window.__flashcastMock.lastCopied = null;
+        window.__flashcastMock.lastPaste = null;
+      });
+      await page.keyboard.press("Enter");
+      await page.waitForSelector(NOTICE);
+      const notice = await text(NOTICE);
+      assert(notice.includes("已复制"), `降级反馈必须先说清已复制：${notice}`);
+      assert(
+        notice.includes("没有记录到唤起前的应用") && notice.includes("手动粘贴"),
+        `降级反馈必须说清原因与下一步：${notice}`,
+      );
+      const fallback = await page.evaluate(() => ({
+        copied: window.__flashcastMock.lastCopied,
+        pasted: window.__flashcastMock.lastPaste,
+      }));
+      assert(
+        fallback.copied === "下午三点在三楼会议室，麻烦确认一下时间。" && fallback.pasted === null,
+        `降级时仍必须复制内容且不注入按键：${JSON.stringify(fallback)}`,
+      );
+      const fallbackShot = await shot(page, "63-memo-paste-fallback.png");
+      return `粘贴「${first.content.slice(0, 6)}…」→ 切换后粘贴「${second.content.slice(0, 6)}…」→ 无目标时降级提示「${notice.slice(0, 18)}…」，截图 ${firstShot} / ${secondShot} / ${fallbackShot}`;
+    });
+
+    // 38. 关键词与标签冲突：插件入口与备忘录候选同时保留，入口仍然可用。
+    await check("关键词与标签冲突时同时保留插件入口与备忘录候选", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await linkMockWorkspace();
+      // 建一条标签与插件关键词（memo）完全相同的备忘录。
+      await page.locator(MEMO_SECTION).scrollIntoViewIfNeeded();
+      await page.waitForSelector(MEMO_ITEM);
+      await page.fill(MEMO_TITLE_INPUT, "关键词冲突样例");
+      await page.fill(MEMO_TAGS_INPUT, "memo");
+      await page.fill(MEMO_BODY_INPUT, "标签与关键词同名时的正文。");
+      await page.click(MEMO_SAVE);
+      await page.waitForFunction(
+        ({ sel, expected }) =>
+          [...document.querySelectorAll(sel)].some((node) => node.textContent?.includes(expected)),
+        { sel: MEMO_ITEM, expected: "关键词冲突样例" },
+      );
+      await page.click('[data-testid="settings-back"]');
+
+      await page.fill(INPUT, "memo");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some((row) => row.dataset.kind === "memo"),
+        ROW,
+      );
+      const scope = await text(SCOPE_LABEL);
+      assert(scope === "首屏", `冲突时必须留在首屏，实际「${scope}」`);
+      const listed = await rows(page);
+      const entry = listed.find((row) => row.kind === "command" && row.title === "备忘录");
+      assert(entry, `冲突时必须给出插件入口：${listed.map((row) => row.title).join("/")}`);
+      assert(
+        listed[0].id === entry.id,
+        `插件入口必须排在最前，实际第一条是「${listed[0].title}」`,
+      );
+      const collided = listed.find((row) => row.title === "关键词冲突样例");
+      assert(collided, `标签命中的备忘录不得消失：${listed.map((row) => row.title).join("/")}`);
+      const collisionShot = await shot(page, "64-memo-keyword-tag-collision.png");
+
+      // 插件入口就在第一条（输入后选择归零）：直接回车必须真的进入范围，
+      // 而不是又留在首屏。
+      const atEntry = await selection(page);
+      assert(atEntry && atEntry.id === entry.id, `选择应停在插件入口：${JSON.stringify(atEntry)}`);
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SCOPE_LABEL, expected: "memo 范围" },
+      );
+      const inScope = await rows(page);
+      assert(
+        inScope.every((row) => row.kind === "memo"),
+        `进入范围后只应有备忘录：${inScope.map((row) => row.kind).join("/")}`,
+      );
+      const scopeShot = await shot(page, "65-memo-collision-entered-scope.png");
+      return `首屏同时给出入口「${entry.title}」与备忘录「${collided.title}」，回车后进入范围 ${inScope.length} 条，截图 ${collisionShot} / ${scopeShot}`;
+    });
+
+    // 39. 中文组合输入：回车确认候选词时不得粘贴。
+    await check("输入法组合期间回车不粘贴备忘录", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() => window.__flashcastMock.setAutoPasteSupported(true));
+      const cdp = await page.context().newCDPSession(page);
+      await page.click(INPUT);
+      await cdp.send("Input.imeSetComposition", {
+        text: "工作",
+        selectionStart: 2,
+        selectionEnd: 2,
+      });
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some((row) => row.dataset.kind === "memo"),
+        ROW,
+      );
+      await page.evaluate(() => {
+        window.__flashcastMock.lastCopied = null;
+        window.__flashcastMock.lastPaste = null;
+      });
+      await page.keyboard.press("Enter");
+      const composing = await page.evaluate(() => ({
+        copied: window.__flashcastMock.lastCopied,
+        pasted: window.__flashcastMock.lastPaste,
+      }));
+      assert(
+        composing.copied === null && composing.pasted === null,
+        `组合期间回车不得复制或粘贴：${JSON.stringify(composing)}`,
+      );
+      const file = await shot(page, "66-memo-ime-no-paste.png");
+
+      // 正向对照：组合结束后回车必须真的执行。
+      await cdp.send("Input.insertText", { text: "工作" });
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => window.__flashcastMock.lastCopied !== null);
+      const copied = await page.evaluate(() => window.__flashcastMock.lastCopied);
+      return `组合中回车未复制（lastCopied=null）→ 组合结束后回车复制「${copied.slice(0, 8)}…」，截图 ${file}`;
+    });
+
     const failed = results.filter((result) => !result.ok).length;
     log("");
     log(`汇总：通过 ${results.length - failed}，失败 ${failed}（共 ${results.length} 项）`);

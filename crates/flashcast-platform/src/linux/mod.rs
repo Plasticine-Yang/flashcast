@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod focus;
 pub mod hotkeys;
 pub mod launcher;
+pub mod paste;
 pub mod x11;
 
 pub use cap::LinuxCapabilityProbe;
@@ -19,6 +20,7 @@ pub use clipboard::LinuxClipboard;
 pub use focus::LinuxFocusTracker;
 pub use hotkeys::LinuxHotkeyManager;
 pub use launcher::LinuxLauncher;
+pub use paste::LinuxPaster;
 
 use crate::capability::SessionType;
 
@@ -73,6 +75,16 @@ pub fn detect_session_type_from(
 pub const WAYLAND_FOCUS_REASON: &str =
     "Wayland 会话不向普通应用暴露全局焦点窗口；GNOME 等合成器未提供可用的公开接口。\
      如需记录唤起前应用，请在 X11 会话下运行，或使用后续 ticket 提供的替代方案。";
+
+/// Wayland 下无法自动粘贴的统一原因说明。
+///
+/// 这句话会出现在用户看到的能力报告与粘贴反馈里，因此必须说清「为什么不行」以及
+/// 「怎么才行」：合成器不提供把焦点交给其他应用后再注入按键的公开接口，只有
+/// XDG RemoteDesktop 门户（需要用户授权）才能做到，本版本不申请该权限。
+pub const WAYLAND_PASTE_REASON: &str =
+    "Wayland 不允许应用在把焦点交给其他应用后注入按键：GNOME 没有可用的公开接口，\
+     只有经 XDG RemoteDesktop 门户授权后才能做到，本版本不申请该权限。\
+     内容已复制到剪贴板，可手动粘贴。";
 
 /// 是否允许在 Wayland 会话下强制尝试 X11 后端（仅用于诊断）。
 pub fn force_x11_backend() -> bool {

@@ -31,7 +31,7 @@ pub fn create(app: &AppHandle<Wry>) -> tauri::Result<()> {
             "open" => summon::summon(app),
             "rescan" => crate::commands::rescan_and_push(app),
             "hide" => {
-                summon::hide(app);
+                summon::hide_and_cancel(app);
                 let _ = tauri::Emitter::emit(app, "flashcast://dismissed", ());
             }
             "quit" => app.exit(0),

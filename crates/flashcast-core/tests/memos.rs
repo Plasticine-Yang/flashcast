@@ -715,6 +715,10 @@ fn back_restores_query_selection_and_scope() {
 
 /// 备忘录的默认操作是复制：状态为「已复制，需手动粘贴」，反馈准确，
 /// 剪贴板里就是正文。
+///
+/// 本用例从未调用 `Host::set_paste_target`（也就是没有唤起前的应用），因此即使能力
+/// 报告说支持自动粘贴，也必须降级为手动粘贴。自动粘贴本身的完整流程（粘贴计划、
+/// 关窗后恢复与注入、过期选择与失败降级）在 `tests/paste.rs`。
 #[test]
 fn executing_a_memo_copies_its_body_and_asks_for_a_manual_paste() {
     let mh = MemoHost::new();

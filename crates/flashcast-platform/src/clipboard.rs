@@ -17,6 +17,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 /// 把文本写入系统剪贴板。属性读取与写入都需要原生能力，因此只在平台层实现。
 pub trait ClipboardAccess: Send + Sync {
@@ -74,10 +75,21 @@ pub(crate) fn find_program(program: &str) -> Option<PathBuf> {
     None
 }
 
+/// 等待外部剪贴板工具返回的上限。
+///
+/// 这些工具在正常桌面会话里立刻返回（它们 fork 出后台进程持有选区）。但在拿不到选区的
+/// 会话里（例如自动化会话没有可用的输入序列）`wl-copy` 会**永久阻塞**——实测观察到的
+/// 就是 5 分钟不返回。宿主执行「复制」时不能因此挂住，所以超过这个上限就杀掉进程并如实
+/// 报告「剪贴板工具没有返回」，由宿主的降级路径给用户中文反馈。
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// 用一个外部剪贴板工具写入文本：文本走标准输入。
 ///
 /// 这些工具（`wl-copy`、`xclip`、`pbcopy`）都会 fork 出后台进程持有选区，父进程随后
 /// 退出，因此必须显式关闭标准输入再 `wait`，避免写入端被 SIGPIPE 打断。
+///
+/// 等待是**有界**的（[`WRITE_TIMEOUT`]）。标准错误由独立线程读取：工具 fork 出的守护
+/// 进程会继承这个管道，父进程退出后管道仍未关闭，若在主线程里读到 EOF 就会再次挂住。
 pub(crate) fn write_with_tool(
     program: &Path,
     args: &[&str],
@@ -104,21 +116,70 @@ pub(crate) fn write_with_tool(
     }
     // 关闭标准输入（drop 掉句柄）后再等待，工具才知道内容已经结束。
     drop(child.stdin.take());
-    let output = child
-        .wait_with_output()
-        .map_err(|error| ClipboardError::Failed(format!("等待剪贴板工具失败：{error}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = child.stderr.take();
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buffer = String::new();
+        if let Some(mut stderr) = stderr {
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut buffer);
+        }
+        buffer
+    });
+
+    let deadline = Instant::now() + WRITE_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // 不 join 读取线程：它的管道可能永远不关闭；进程退出时线程自然消失。
+                return Err(ClipboardError::Failed(format!(
+                    "剪贴板工具 {} 超过 {} 秒没有返回，已中止（当前会话可能无法取得剪贴板选区）",
+                    program.display(),
+                    WRITE_TIMEOUT.as_secs()
+                )));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                return Err(ClipboardError::Failed(format!(
+                    "等待剪贴板工具失败：{error}"
+                )));
+            }
+        }
+    };
+    let stderr = stderr_reader.join().unwrap_or_default();
+    if !status.success() {
         let stderr = stderr.trim();
         return Err(ClipboardError::Failed(if stderr.is_empty() {
-            format!(
-                "剪贴板工具 {} 以状态 {} 退出",
-                program.display(),
-                output.status
-            )
+            format!("剪贴板工具 {} 以状态 {status} 退出", program.display())
         } else {
             format!("剪贴板工具 {} 失败：{stderr}", program.display())
         }));
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// 工具卡住时必须**有界**返回，而不是让宿主的执行入口挂死。
+    ///
+    /// 这里用真实的 `sh -c 'sleep 30'` 当替身：它是真的会阻塞的进程，不依赖任何平台替身。
+    #[test]
+    fn blocking_tool_is_aborted_after_the_timeout() {
+        let started = Instant::now();
+        let result = write_with_tool(Path::new("/bin/sh"), &["-c", "sleep 30"], "正文");
+        let elapsed = started.elapsed();
+        let error = result.expect_err("阻塞的工具必须被判定为失败");
+        assert!(
+            error.to_string().contains("没有返回"),
+            "失败原因必须说明工具没有返回：{error}"
+        );
+        assert!(
+            elapsed < WRITE_TIMEOUT * 3,
+            "必须在超时附近返回，实际耗时 {elapsed:?}"
+        );
+    }
 }

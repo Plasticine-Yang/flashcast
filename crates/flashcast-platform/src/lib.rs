@@ -17,6 +17,7 @@ pub mod hotkey;
 pub mod launch;
 pub mod launch_request;
 pub mod macos;
+pub mod paste;
 pub mod shortcut;
 pub mod unsupported;
 pub mod windows;
@@ -41,10 +42,11 @@ pub use chrome::{
     PathChromeProvider, UserDataCandidate, UserDataOrigin,
 };
 pub use clipboard::{ClipboardAccess, ClipboardError};
-pub use focus::{FocusError, FocusTracker, FocusedApp};
+pub use focus::{same_app, FocusError, FocusTracker, FocusedApp};
 pub use hotkey::{HotkeySpec, HotkeySpecError, Key, Modifier, DEFAULT_HOTKEY};
 pub use launch::{AppLauncher, LaunchError, LaunchReceipt};
 pub use launch_request::LaunchRequest;
+pub use paste::{manual_paste_hint, manual_paste_message, PasteError, Paster};
 pub use shortcut::{HotkeyError, HotkeyHandle, HotkeyManager, PressCallback};
 
 /// 宿主注入使用的适配器集合。
@@ -58,6 +60,8 @@ pub struct PlatformAdapters {
     pub clipboard: Arc<dyn ClipboardAccess>,
     /// Chrome 发现与启动（ADR §5 的 `ChromeProvider`）。
     pub chrome: Arc<dyn ChromeProvider>,
+    /// 合成粘贴（ADR §5）。只有宿主在核对过「前台确实是唤起前的应用」之后才调用它。
+    pub paster: Arc<dyn Paster>,
 }
 
 /// 当前平台的适配器集合。
@@ -75,6 +79,7 @@ pub fn current() -> PlatformAdapters {
             capabilities: Arc::new(linux::LinuxCapabilityProbe::new()),
             clipboard: Arc::new(linux::LinuxClipboard::new()),
             chrome: Arc::new(linux::LinuxChromeProvider::new()),
+            paster: Arc::new(linux::LinuxPaster::new()),
         }
     }
     #[cfg(target_os = "windows")]
@@ -87,6 +92,7 @@ pub fn current() -> PlatformAdapters {
             capabilities: Arc::new(windows::WindowsCapabilityProbe::new()),
             clipboard: Arc::new(windows::WindowsClipboard::new()),
             chrome: Arc::new(windows::WindowsChromeProvider::new()),
+            paster: Arc::new(windows::WindowsPaster::new()),
         }
     }
     #[cfg(target_os = "macos")]
@@ -99,6 +105,7 @@ pub fn current() -> PlatformAdapters {
             capabilities: Arc::new(macos::MacosCapabilityProbe::new()),
             clipboard: Arc::new(macos::MacosClipboard::new()),
             chrome: Arc::new(macos::MacosChromeProvider::new()),
+            paster: Arc::new(macos::MacosPaster::new()),
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
@@ -111,6 +118,7 @@ pub fn current() -> PlatformAdapters {
             capabilities: Arc::new(unsupported::UnsupportedCapabilityProbe),
             clipboard: Arc::new(unsupported::UnsupportedClipboard),
             chrome: Arc::new(unsupported::UnsupportedChrome),
+            paster: Arc::new(unsupported::UnsupportedPaster),
         }
     }
 }

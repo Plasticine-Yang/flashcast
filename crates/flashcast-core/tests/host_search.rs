@@ -167,7 +167,8 @@ fn rescan_reflects_newly_installed_application() {
 
     use flashcast_core::{Host, HostDeps, PluginRegistry};
     use flashcast_platform::fake::{
-        FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeLauncher,
+        FakeAppCatalog, FakeCapabilityProbe, FakeChrome, FakeClipboard, FakeFocusTracker,
+        FakeLauncher, FakePaster,
     };
 
     let catalog = Arc::new(FakeAppCatalog::with_scan_results(vec![
@@ -183,6 +184,8 @@ fn rescan_reflects_newly_installed_application() {
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
         chrome: Arc::new(FakeChrome::not_installed("测试环境未配置 Chrome")),
+        focus: Arc::new(FakeFocusTracker::default()),
+        paster: Arc::new(FakePaster::new()),
         plugins: Arc::new(PluginRegistry::new()),
         device_dir: support::unique_dir("device"),
     };

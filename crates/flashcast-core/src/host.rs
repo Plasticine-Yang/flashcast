@@ -17,8 +17,10 @@ use flashcast_platform::chrome::{
     build_open_args, validate_open_url, ChromeLaunchRequest, ChromeProvider,
 };
 use flashcast_platform::clipboard::ClipboardAccess;
+use flashcast_platform::focus::{same_app, FocusTracker, FocusedApp};
 use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
+use flashcast_platform::paste::{manual_paste_message, Paster};
 
 use crate::chrome::{
     BookmarkEntry, BookmarkIndex, ChromeAssociation, ChromeBookmarkError, ChromeProfileView,
@@ -30,9 +32,9 @@ use crate::git::{CommitOutcome, GitError, WorkspaceChanges};
 use crate::manifest::{ManifestEntry, ManifestError, PluginManifestFile};
 use crate::memo::{self, Memo, MemoBook, MemoError, MemoProblem};
 use crate::model::{
-    ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview,
-    QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES, COMMAND_PREFIX,
-    COMMAND_RESCAN, HOST_SOURCE,
+    ActionOutcome, BackOutcome, DefaultAction, ItemKind, MatchTier, Notice, PastePlan,
+    PluginFailure, Preview, QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES,
+    COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
 use crate::plugin::{PluginKind, PluginScope, SearchContext, CAP_CLIPBOARD_WRITE};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
@@ -62,10 +64,28 @@ pub struct HostDeps {
     /// Chrome 发现与启动（ADR §5 的 `ChromeProvider`）。只有宿主在命令入口里经权限
     /// 校验后调用它；功能插件拿不到这个句柄。
     pub chrome: Arc<dyn ChromeProvider>,
+    /// 焦点读取与恢复（ADR §5）。自动粘贴前用它把焦点还给唤起前的应用，
+    /// 并在注入之前核对「恢复后的前台确实是那个应用」。
+    pub focus: Arc<dyn FocusTracker>,
+    /// 合成粘贴（ADR §5）。只在核对通过之后调用。
+    pub paster: Arc<dyn Paster>,
     pub plugins: Arc<PluginRegistry>,
     /// 设备本地数据根目录（应用数据目录）。工作区之外的本机数据都放这里：
     /// 当前工作区的路径、缓存、设备路径、权限状态、日志与凭证。
     pub device_dir: PathBuf,
+}
+
+/// 自动粘贴的会话状态。
+///
+/// 分成两半是刻意的：`target` 是外壳在**唤起时**（窗口显示之前）捕获的目标应用，
+/// `plan` 是最近一次 `execute` 产出的待完成粘贴。两者都不是长期状态：每次唤起都会
+/// 覆盖 `target` 并作废 `plan`，因此「上一次唤起的应用」不可能被这一轮粘贴用到。
+#[derive(Default)]
+struct PasteState {
+    /// 唤起前处于前台的应用程序。
+    target: Option<FocusedApp>,
+    /// 待外壳关闭浮窗后完成的粘贴计划（永远是最新一次 `execute` 的产物）。
+    plan: Option<PastePlan>,
 }
 
 /// 一次查询历史。`back()` 用它恢复此前的查询、范围与选择。
@@ -162,6 +182,14 @@ pub struct Host {
     sync: Mutex<SyncControl>,
     /// 是否有 Git 操作正在进行（网络操作期间为 `true`）。
     git_busy: AtomicBool,
+    /// 自动粘贴的会话状态：唤起时捕获的目标应用与待完成的粘贴计划。
+    ///
+    /// 单独一把锁（不放进 `inner`）是为了让锁的持有时间尽可能短：粘贴流程会调用
+    /// 平台适配层，绝不能在持有宿主的全局锁时做这件事。
+    paste: Mutex<PasteState>,
+    /// 粘贴计划序号，单调递增。作用与查询的 `seq` 相同：让外壳/测试能识别并丢弃
+    /// 过期计划，快速连续执行时只有最后一次会被真正粘贴。
+    paste_epoch: AtomicU64,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -170,13 +198,36 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// 自动粘贴的能力前提。返回 `Some(原因)` 表示不能自动粘贴，必须降级为手动粘贴。
+///
+/// 三种状态区别对待，但结论一致：
+///
+/// - `Supported`：可以做（还需要一个捕获到的目标应用，由调用方另行判断）；
+/// - `Unsupported`：平台明确做不到（Wayland、缺辅助功能权限、没有交互桌面），
+///   把平台给出的中文原因原样透传，它已经写清了「为什么」与「怎么办」；
+/// - `Unknown`：当前环境无法判定——**不能**当作可以做，如实说明「无法确认」。
+fn auto_paste_blocker(capabilities: &Capabilities) -> Option<String> {
+    match &capabilities.auto_paste {
+        Support::Supported => None,
+        Support::Unsupported { reason } => Some(reason.clone()),
+        Support::Unknown { reason } => Some(format!("无法确认当前环境能否自动粘贴（{reason}）")),
+    }
+}
+
 /// [`Host::wait_for_workspace_change`] 的轮询间隔。
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// 查询方式：用户输入会改变输入状态，快照类操作不会。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchMode {
+    /// 用户在输入框里输入（含 `back()` 恢复历史后的重算）。
+    ///
+    /// 关键词与标签冲突时保留双方：首屏同时给出插件入口与标签命中的备忘录（ADR §4）。
     UserInput,
+    /// 用户明确选择了首屏的「插件入口」条目。
+    ///
+    /// 此时必须真的进入该插件范围，跳过冲突保留，否则入口会变成点不动的死路。
+    ExplicitPluginEntry,
 }
 
 impl Host {
@@ -225,6 +276,8 @@ impl Host {
             clone: Mutex::new(CloneControl::new()),
             sync: Mutex::new(SyncControl::new()),
             git_busy: AtomicBool::new(false),
+            paste: Mutex::new(PasteState::default()),
+            paste_epoch: AtomicU64::new(0),
         };
         host.rescan_catalog();
         host.restore_workspace();
@@ -2219,11 +2272,152 @@ impl Host {
         }
     }
 
-    /// 备忘录的默认操作：复制内容。
+    // -----------------------------------------------------------------------
+    // 自动粘贴（spec「粘贴是宿主级操作」，ticket 08）
+    // -----------------------------------------------------------------------
+
+    /// 外壳在**唤起时**（显示窗口之前）把唤起前的前台应用交给宿主。
+    ///
+    /// 每次都覆盖，并作废上一次未完成的粘贴计划：这样「上一次唤起的应用」不可能被
+    /// 这一轮粘贴用到。`None` 表示本次拿不到（例如 Wayland 不允许读取全局焦点），
+    /// 此时自动粘贴会自动降级为「已复制，请手动粘贴」，绝不会猜一个目标。
+    pub fn set_paste_target(&self, target: Option<FocusedApp>) {
+        let mut paste = lock(&self.paste);
+        paste.target = target;
+        paste.plan = None;
+    }
+
+    /// 当前记录的粘贴目标（唤起前的应用）。诊断与测试用。
+    pub fn paste_target(&self) -> Option<FocusedApp> {
+        lock(&self.paste).target.clone()
+    }
+
+    /// 外壳在**没有**执行粘贴的情况下关闭浮窗时调用（Escape、失焦、托盘切换）。
+    ///
+    /// 丢掉待完成的计划，这样随后哪怕有一次迟到的 `complete_paste` 也不会注入按键：
+    /// 「快速关闭」不可能粘贴到上一次的选择。
+    pub fn cancel_paste(&self) {
+        lock(&self.paste).plan = None;
+    }
+
+    /// 是否有待外壳完成的粘贴计划。
+    pub fn has_pending_paste(&self) -> bool {
+        lock(&self.paste).plan.is_some()
+    }
+
+    /// 剪贴板**已经写入** `text` 之后，决定能否自动粘贴，并给出准确的结果。
+    ///
+    /// 这是粘贴流程里可复用的接缝（ticket 09 的剪贴板历史走同一条路）：调用方先把内容
+    /// 写进剪贴板，再调用本方法，就会得到两种结果之一：
+    ///
+    /// - [`ActionOutcome::paste_pending`]：外壳必须关闭浮窗、等焦点交出，然后调用
+    ///   [`Host::complete_paste`] 完成恢复 + 注入；
+    /// - [`ActionOutcome::copied_needs_manual_paste`]：内容已在剪贴板，中文反馈里说清
+    ///   为什么没有自动粘贴以及用户该怎么做。
+    ///
+    /// 决策只依据两件事：平台能力报告（Wayland / 缺权限 / 未覆盖都算不能）与
+    /// 唤起时捕获到的目标应用。任何一项不成立都**不**尝试注入。
+    pub fn finish_copy_for_paste(&self, label: &str, text: &str) -> ActionOutcome {
+        let capabilities = self.capabilities();
+        let target = { lock(&self.paste).target.clone() };
+        let Some(target) = target else {
+            return ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+                label,
+                capabilities.os,
+                Some("没有记录到唤起前的应用，无法确定粘贴目标"),
+            ));
+        };
+        if let Some(blocker) = auto_paste_blocker(&capabilities) {
+            return ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+                label,
+                capabilities.os,
+                Some(&blocker),
+            ));
+        }
+        let epoch = self.paste_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let target_name = target.name.clone();
+        let plan = PastePlan {
+            target,
+            label: label.to_string(),
+            epoch,
+            text_bytes: text.len(),
+        };
+        {
+            // 覆盖旧计划：只有最新一次执行会被粘贴。
+            lock(&self.paste).plan = Some(plan.clone());
+        }
+        ActionOutcome::paste_pending(
+            plan,
+            format!("已复制「{label}」，正在粘贴到「{target_name}」…"),
+        )
+    }
+
+    /// 外壳关闭浮窗之后调用：恢复目标应用、核对前台、注入系统粘贴。
+    ///
+    /// 顺序与判据都不可省略：
+    ///
+    /// 1. 取出**最新**的粘贴计划；没有计划或计划已过期（期间又执行了别的条目）就放弃；
+    /// 2. 把焦点还给唤起前的应用；
+    /// 3. 回读前台，确认它**就是**捕获的那个应用——不是则绝不注入（spec 明确禁止把
+    ///    内容粘贴到别的应用）；
+    /// 4. 注入系统粘贴。
+    ///
+    /// 2–4 任何一步失败都退回「已复制，请手动粘贴」：内容已经在剪贴板里，用户按一次
+    /// 粘贴键即可，不会既没粘贴又没有提示。
+    pub fn complete_paste(&self) -> ActionOutcome {
+        let capabilities = self.capabilities();
+        let plan = { lock(&self.paste).plan.take() };
+        let Some(plan) = plan else {
+            return ActionOutcome::failed("没有待完成的粘贴：窗口可能已被关闭或该操作已被取消");
+        };
+        if plan.epoch != self.paste_epoch.load(Ordering::SeqCst) {
+            return ActionOutcome::failed(format!(
+                "粘贴计划已过期（期间执行了其它条目），已丢弃「{}」的粘贴",
+                plan.label
+            ));
+        }
+        let manual = |blocker: String| {
+            ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+                &plan.label,
+                capabilities.os,
+                Some(&blocker),
+            ))
+        };
+        if let Err(error) = self.deps.focus.restore(&plan.target) {
+            return manual(format!("无法把焦点还给「{}」：{error}", plan.target.name));
+        }
+        // 恢复焦点后必须回读核对：把内容粘贴到用户没有预期的窗口是明确的错误。
+        match self.deps.focus.capture() {
+            Ok(current) if same_app(&current, &plan.target) => {}
+            Ok(current) => {
+                return manual(format!(
+                    "焦点恢复后前台是「{}」，不是唤起前的「{}」，已取消自动粘贴",
+                    current.name, plan.target.name
+                ))
+            }
+            Err(error) => {
+                return manual(format!(
+                    "无法确认焦点已回到「{}」：{error}",
+                    plan.target.name
+                ))
+            }
+        }
+        match self.deps.paster.paste() {
+            Ok(()) => ActionOutcome::done(Some(format!(
+                "已粘贴「{}」到「{}」",
+                plan.label, plan.target.name
+            ))),
+            Err(error) => manual(format!("自动粘贴没有成功：{error}")),
+        }
+    }
+
+    /// 备忘录的默认操作：把**当前**内容写进剪贴板，然后尽力粘贴回唤起前的应用。
     ///
     /// 权限校验放在**原生边界**：来源插件必须在清单里、已启用，并且声明了
-    /// `clipboard.write`；随后才调用平台剪贴板适配层。自动粘贴（ticket 08）不在本切片，
-    /// 因此成功状态是「已复制，需手动粘贴」，并给出准确的中文反馈。
+    /// `clipboard.write`；随后才调用平台剪贴板适配层。
+    ///
+    /// 内容以工作区里**当前**的内容为准，而不是列表快照里的：列表可能是上一次查询的
+    /// 结果，用户可能在期间改过这条备忘录。写进剪贴板的永远是「刚刚执行的那条内容」。
     fn execute_memo(&self, item: &SearchItem) -> ActionOutcome {
         let Some(memo_id) = crate::plugins::memo::memo_id_from_item_id(&item.id) else {
             return ActionOutcome::failed(format!("无法识别的备忘录条目：{}", item.id));
@@ -2247,20 +2441,17 @@ impl Host {
         if let Support::Unsupported { reason } = self.capabilities().clipboard {
             return ActionOutcome::failed(format!("系统剪贴板不可用：{reason}"));
         }
-        // 内容以工作区里**当前**的内容为准：列表可能是上一次查询的快照。
         let Some(memo) = self.memos.find(memo_id) else {
             return ActionOutcome::failed(format!(
                 "找不到「{}」对应的备忘录，可能已被删除或改名，请重新查询",
                 item.title
             ));
         };
-        match self.deps.clipboard.write_text(&memo.body) {
-            Ok(()) => ActionOutcome::copied_needs_manual_paste(format!(
-                "已复制「{}」到剪贴板；自动粘贴由后续版本提供，请手动粘贴",
-                memo.title
-            )),
-            Err(error) => ActionOutcome::failed(format!("无法复制「{}」：{error}", memo.title)),
+        let (label, text) = (memo.title.clone(), memo.body.clone());
+        if let Err(error) = self.deps.clipboard.write_text(&text) {
+            return ActionOutcome::failed(format!("无法复制「{label}」：{error}"));
         }
+        self.finish_copy_for_paste(&label, &text)
     }
 
     fn execute_application(&self, item: &SearchItem) -> ActionOutcome {
@@ -2302,8 +2493,43 @@ impl Host {
                 ActionOutcome::done(Some(format!("已重新扫描软件列表，当前结果 {count} 条")))
             }
             COMMAND_CAPABILITIES => ActionOutcome::done(Some(self.capabilities_summary())),
-            other => ActionOutcome::failed(format!("未知命令：{other}")),
+            other => match other.strip_prefix(PLUGIN_ENTRY_PREFIX) {
+                // 首屏的插件入口条目：等价于用户直接输入该插件的关键词。
+                Some(plugin_id) => self.enter_plugin_scope(plugin_id),
+                None => ActionOutcome::failed(format!("未知命令：{other}")),
+            },
         }
+    }
+
+    /// 进入插件范围（首屏插件入口条目的执行路径）。
+    ///
+    /// 与「用户直接把关键词打全」走同一段逻辑，唯一区别是跳过关键词与标签的冲突保留：
+    /// 用户已经明确选择了插件入口，此时必须真的进入范围，而不是又留在首屏。
+    fn enter_plugin_scope(&self, plugin_id: &str) -> ActionOutcome {
+        let entry = lock(&self.inner).manifest.get(plugin_id).cloned();
+        let Some(entry) = entry.filter(|entry| entry.kind == PluginKind::Feature) else {
+            return ActionOutcome::failed(format!("插件「{plugin_id}」不在清单里，无法进入"));
+        };
+        if !entry.enabled || !self.deps.plugins.is_enabled(plugin_id) {
+            return ActionOutcome::failed(format!("插件「{}」已停用，无法进入", entry.name));
+        }
+        let Some(keyword) = entry.keywords.first().cloned() else {
+            return ActionOutcome::failed(format!("插件「{}」没有可用的关键词", entry.name));
+        };
+        let seq = self.next_seq();
+        let mut inner = lock(&self.inner);
+        let input = inner.input.clone();
+        self.search(
+            &mut inner,
+            &input,
+            SearchMode::ExplicitPluginEntry,
+            None,
+            seq,
+        );
+        ActionOutcome::done(Some(format!(
+            "已进入「{}」范围（关键词 {keyword}）",
+            entry.name
+        )))
     }
 
     /// 能力摘要，用于「查看平台能力」快速访问项的中文反馈。
@@ -2354,30 +2580,59 @@ impl Host {
         seq: u64,
     ) -> QueryResponse {
         let previous_input = inner.input.clone();
-        let same_input = previous_input == input && mode == SearchMode::UserInput;
+        let same_input = previous_input == input;
         let normalized = input.trim().to_lowercase();
 
         // 查询范围切换：输入完整匹配插件关键词时进入该插件范围。
-        if let Some((manifest, scope)) = self.deps.plugins.take_scope(input) {
-            let already_in_scope = matches!(
-                &inner.scope,
-                QueryScope::Plugin { id, .. } if id == &manifest.id
-            );
-            if !already_in_scope {
-                inner.history.push(HistoryEntry {
-                    input: previous_input,
-                    scope: inner.scope.clone(),
-                    selection: inner.selection,
-                });
-                inner
-                    .plugin_scopes
-                    .insert(manifest.id.clone(), Arc::from(scope));
-                inner.scope = QueryScope::Plugin {
-                    id: manifest.id.clone(),
-                    keyword: normalized.clone(),
-                };
-            } else {
-                // 同一插件用**另一个别名**再次进入（例如把输入从「备忘录」改成「memo」）：
+        //
+        // 例外是**关键词与标签冲突**（ADR §4）：如果首屏还有「标签精确匹配」的备忘录候选，
+        // 就留在首屏，同时给出明确的插件入口条目。任何一方都不静默消失。
+        let keyword_scope = self.deps.plugins.take_scope(input);
+        // 冲突判定用的关键词：插件清单里记录的那个别名，与用户输入等价。
+        let collision_keyword = keyword_scope.as_ref().and_then(|(manifest, _)| {
+            manifest
+                .matches_keyword(&normalized)
+                .or_else(|| Some(normalized.clone()))
+        });
+        // 已经在同一个插件的范围里时不算冲突：那是用户在范围里继续输入（关键词本身就
+        // 是范围的入口），此时必须留在范围内，否则「执行入口进入范围」会被下一次查询弹回首屏。
+        let keyword_plugin = keyword_scope
+            .as_ref()
+            .map(|(manifest, _)| manifest.id.clone());
+        let already_in_keyword_scope = match (&inner.scope, &keyword_plugin) {
+            (QueryScope::Plugin { id, .. }, Some(keyword_id)) => id == keyword_id,
+            _ => false,
+        };
+        let collision = match (&collision_keyword, mode) {
+            (Some(keyword), SearchMode::UserInput) if !already_in_keyword_scope => {
+                self.home_tag_hits(inner, keyword)
+            }
+            _ => Vec::new(),
+        };
+        // 入口条目用的清单信息：必须在移动 `scope` 之前克隆出来。
+        let keyword_entry = keyword_scope
+            .as_ref()
+            .filter(|_| !collision.is_empty())
+            .map(|(manifest, _)| manifest.clone());
+        match keyword_scope {
+            // 有冲突：留在首屏（可能是从插件范围退回来的，因此显式置回首屏）。
+            Some(_) if !collision.is_empty() => {
+                inner.scope = QueryScope::Home;
+                inner.plugin_scopes.clear();
+            }
+            Some((manifest, scope)) => {
+                let already_in_scope = matches!(
+                    &inner.scope,
+                    QueryScope::Plugin { id, .. } if id == &manifest.id
+                );
+                if !already_in_scope {
+                    inner.history.push(HistoryEntry {
+                        input: previous_input,
+                        scope: inner.scope.clone(),
+                        selection: inner.selection,
+                    });
+                }
+                // 同一插件用**另一个别名**再次进入（例如把输入从「备忘录」改成「memo」）时
                 // 不记录新的历史，但必须更新记下的关键词并换上新的范围对象——范围标签与
                 // 「剥掉关键词前缀」都以它对依据，否则会显示旧别名、也搜不到东西。
                 inner
@@ -2388,10 +2643,12 @@ impl Host {
                     keyword: normalized.clone(),
                 };
             }
-        } else if !inner.scope.is_home() && normalized.is_empty() {
-            // 清空输入即离开插件范围，回到首屏。
-            inner.scope = QueryScope::Home;
-            inner.plugin_scopes.clear();
+            None if !inner.scope.is_home() && normalized.is_empty() => {
+                // 清空输入即离开插件范围，回到首屏。
+                inner.scope = QueryScope::Home;
+                inner.plugin_scopes.clear();
+            }
+            None => {}
         }
 
         inner.input = input.to_string();
@@ -2401,6 +2658,15 @@ impl Host {
             QueryScope::Home => self.search_home(inner, &ctx),
             QueryScope::Plugin { id, .. } => self.search_plugin_scope(inner, &ctx, &id),
         };
+        if let (Some(manifest), Some(keyword)) = (keyword_entry, collision_keyword.as_ref()) {
+            // 插件入口排在最前（匹配层级相同，相关度最高）：直接回车仍然进入插件范围，
+            // 往下选择则可以使用标签命中的备忘录。
+            ranked.push(RankedItem {
+                item: plugin_entry_item(&manifest, keyword),
+                source_order: 0,
+                source_priority: 0,
+            });
+        }
         sort_ranked(&mut ranked);
         inner.items = ranked.into_iter().map(|ranked| ranked.item).collect();
         inner.plugin_failures = failures;
@@ -2419,6 +2685,25 @@ impl Host {
                 .map(|message| Notice::error(message.clone()))
         });
         self.response(inner, seq, notice)
+    }
+
+    /// 首屏上与 `keyword` **标签精确相等**的候选（用于关键词/标签冲突判定）。
+    ///
+    /// 判定依据是宿主定义的结果模型，而不是插件的内部实现：任何参与首屏搜索的插件
+    /// 贡献出的 `Memo` 条目，只要匹配层级是「关键词或标签精确」，就算一次标签命中。
+    /// 插件搜索仍然走「独立线程 + 超时 + panic 隔离」，冲突判定不会把宿主拖住。
+    fn home_tag_hits(&self, inner: &HostInner, keyword: &str) -> Vec<SearchItem> {
+        let ctx = SearchContext::new(keyword, QueryScope::Home, 50);
+        self.deps
+            .plugins
+            .search_home(&ctx, inner.settings.plugin_timeout())
+            .results
+            .into_iter()
+            .flat_map(|(_source, items)| items)
+            .filter(|item| {
+                item.kind == ItemKind::Memo && item.score.tier == MatchTier::KeywordOrTagExact
+            })
+            .collect()
     }
 
     fn search_home(
@@ -2580,6 +2865,28 @@ fn command_item(id: &str, title: &str, subtitle: Option<String>) -> SearchItem {
         default_action: DefaultAction::Open,
         preview: Preview::None,
         score: Score::unordered(),
+    }
+}
+
+/// 首屏「插件入口」条目的标识前缀：`flashcast.plugin.<插件 id>`。
+pub const PLUGIN_ENTRY_PREFIX: &str = "flashcast.plugin.";
+
+/// 关键词与标签冲突时，首屏给出的插件入口条目（ADR §4）。
+///
+/// 相关度给到最高、来源优先级为宿主自身，因此它排在标签命中的备忘录之前：用户按输入
+/// 关键词时的第一反应（回车进入插件）保持不变，同时标签命中的备忘录就在下面，不会被
+/// 静默丢弃。
+pub fn plugin_entry_item(manifest: &crate::plugin::PluginManifest, keyword: &str) -> SearchItem {
+    SearchItem {
+        id: format!("{PLUGIN_ENTRY_PREFIX}{}", manifest.id),
+        title: manifest.name.clone(),
+        subtitle: Some(format!("插件 · 回车进入「{keyword}」范围")),
+        icon: None,
+        source: HOST_SOURCE.to_string(),
+        kind: ItemKind::Command,
+        default_action: DefaultAction::Open,
+        preview: Preview::None,
+        score: Score::new(MatchTier::KeywordOrTagExact, u8::MAX),
     }
 }
 

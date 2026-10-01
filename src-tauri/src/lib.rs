@@ -93,6 +93,8 @@ pub fn run() {
                 capabilities: Arc::clone(&platform.capabilities),
                 clipboard: Arc::clone(&platform.clipboard),
                 chrome: Arc::clone(&platform.chrome),
+                focus: Arc::clone(&platform.focus),
+                paster: Arc::clone(&platform.paster),
                 plugins,
                 device_dir,
             };
@@ -123,6 +125,9 @@ pub fn run() {
             // 关闭按钮不退出应用，只隐藏；托盘与快捷键仍可唤起。
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
+                // 用户主动关闭：作废待完成的粘贴计划。
+                let state = window.app_handle().state::<AppState>();
+                state.host.cancel_paste();
                 let _ = window.hide();
                 let _ = tauri::Emitter::emit(window.app_handle(), "flashcast://dismissed", ());
             }

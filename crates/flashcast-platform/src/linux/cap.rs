@@ -87,7 +87,7 @@ impl CapabilityProbe for LinuxCapabilityProbe {
             desktop_available,
             hotkey,
             clipboard: clipboard_support(session),
-            auto_paste: auto_paste_support(session),
+            auto_paste: auto_paste_support(session, self.force_x11),
             notes,
         }
     }
@@ -124,21 +124,44 @@ fn clipboard_support(session: SessionType) -> Support {
     }
 }
 
-/// 自动粘贴支持。Wayland 下普通应用无法把焦点转给其他应用后注入按键。
-fn auto_paste_support(session: SessionType) -> Support {
-    if session == SessionType::Wayland {
-        return Support::Unsupported {
-            reason: "Wayland 不允许应用在转移焦点后注入按键；需 XDG RemoteDesktop 门户授权"
-                .to_string(),
-        };
+/// 自动粘贴支持。
+///
+/// X11：能不能注入取决于服务器是否提供 XTEST，因此这里真的去问一次服务器；问不到
+/// 就如实报「不支持」，不写成未覆盖。
+/// Wayland：普通应用无法把焦点转给其他应用后注入按键（研究 §3.4），直接不支持。
+fn auto_paste_support(session: SessionType, force_x11: bool) -> Support {
+    match session {
+        SessionType::X11 => x11_paste_support(),
+        SessionType::Wayland if force_x11 => match x11_paste_support() {
+            Support::Supported => Support::Unknown {
+                reason: "已通过 FLASHCAST_FORCE_X11_BACKEND 强制使用 X11 后端：只有 \
+                         XWayland 里的 X11 客户端能收到合成按键，原生 Wayland 客户端收不到，\
+                         因此不能算作 Wayland 支持"
+                    .to_string(),
+            },
+            other => other,
+        },
+        SessionType::Wayland => Support::Unsupported {
+            reason: super::WAYLAND_PASTE_REASON.to_string(),
+        },
+        SessionType::Headless => Support::Unsupported {
+            reason: "当前没有桌面会话，无法注入粘贴".to_string(),
+        },
+        SessionType::Unknown | SessionType::NotApplicable => Support::Unknown {
+            reason: "无法确定会话类型，未覆盖自动粘贴检查".to_string(),
+        },
     }
-    match which("xdotool") {
-        Some(tool) => Support::Unknown {
-            reason: format!("自动粘贴适配尚未实现（ticket 08 覆盖）；环境已具备 {tool}"),
-        },
-        None => Support::Unsupported {
-            reason: "未找到 xdotool，无法在 X11 下发起系统粘贴".to_string(),
-        },
+}
+
+/// X11 下的自动粘贴支持：以服务器是否提供 XTEST 扩展为准。
+pub fn x11_paste_support() -> Support {
+    if super::x11::xtest_available() {
+        Support::Supported
+    } else {
+        Support::Unsupported {
+            reason: "X11 服务器未提供 XTEST 扩展（或无法连接 DISPLAY），无法注入粘贴按键"
+                .to_string(),
+        }
     }
 }
 
