@@ -11,6 +11,16 @@
 //!
 //! Wayland 下选区由持有者进程提供，数据在进程退出后消失；`wl-paste` 在拿不到选区时
 //! 会一直等待，因此读取同样走有界等待（[`crate::clipboard::READ_TIMEOUT`]）。
+//!
+//! ## 富文本格式
+//!
+//! 读：`wl-paste --type text/html`、`xclip -selection clipboard -t text/html -o` 按 MIME
+//! 类型取；没有提供该类型时工具以非 0 退出，被当成「这次事件里没有这个格式」。`xsel`
+//! 不支持指定类型，因此只提供文本。
+//!
+//! 写：只能提供纯文本。`wl-copy` 的 `--type` 决定唯一一种提供类型（`wl-clipboard 2.2.1`
+//! 手册），再调用一次会接管选区并让上一个格式消失；`xclip` 同样一次只服务一个 target。
+//! 因此恢复时写文本并如实报告 HTML/RTF 未同时提供——富文本载荷仍在本机历史里。
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -18,7 +28,8 @@ use std::sync::Mutex;
 use crate::capability::SessionType;
 use crate::clipboard::{
     check_text, find_program, fingerprint, read_with_tool, write_with_tool, ClipboardAccess,
-    ClipboardCapture, ClipboardError, ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
+    ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFormatKind, ClipboardPoll,
+    ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport,
 };
 
 use super::{force_x11_backend, x11};
@@ -106,6 +117,39 @@ impl LinuxClipboard {
     pub fn read_backend_name(&self) -> Result<&'static str, ClipboardError> {
         self.read_backend().map(|(name, _, _)| name)
     }
+
+    /// 按 MIME 类型读剪贴板里的一种格式；没有这种格式时返回 `Ok(None)`。
+    ///
+    /// `wl-paste` 用 `--type`、`xclip` 用 `-t`；两者在「没有提供该类型」时都以非 0 退出，
+    /// 因此 [`read_with_tool`] 会把它当成「没有这种格式」，而不是失败。`xsel` 不支持指定
+    /// 类型，此时如实返回 `None`（不猜一个格式出来）。
+    ///
+    /// 读取同样**有界**（[`crate::clipboard::READ_TIMEOUT`]），不会让后台轮询线程卡住。
+    pub(crate) fn read_typed(&self, mime: &str) -> Result<Option<String>, ClipboardError> {
+        let (name, program, args) = self.read_backend()?;
+        match name {
+            "wl-paste" => {
+                let mut args = args;
+                args.push("--type");
+                args.push(mime);
+                read_with_tool(&program, &args)
+            }
+            "xclip" => {
+                // `xclip -selection clipboard -o` → `… -t <mime> -o`（顺序与手册一致）。
+                let mut typed: Vec<&str> = Vec::with_capacity(args.len() + 2);
+                for arg in args {
+                    if arg == "-o" {
+                        typed.push("-t");
+                        typed.push(mime);
+                    }
+                    typed.push(arg);
+                }
+                read_with_tool(&program, &typed)
+            }
+            // xsel 只能读写文本，没有按类型取数据的接口。
+            _ => Ok(None),
+        }
+    }
 }
 
 impl ClipboardAccess for LinuxClipboard {
@@ -118,6 +162,41 @@ impl ClipboardAccess for LinuxClipboard {
     fn read_text(&self) -> Result<Option<String>, ClipboardError> {
         let (_, program, args) = self.read_backend()?;
         read_with_tool(&program, &args)
+    }
+
+    /// 恢复剪贴板历史：Linux 上只能提供**纯文本**。
+    ///
+    /// `wl-copy` 的 `--type` 决定「提供内容的类型」（单数），再调用一次会接管选区并让
+    /// 上一个格式消失；`xclip` 同样一次只服务一个 target。因此这里只写文本，并如实报告
+    /// HTML/RTF 没有同时提供——而不是写一遍富文本、让纯文本目标什么都拿不到。
+    /// 富文本载荷仍然完整地保存在本机历史里（见 `flashcast-core` 的 `clipboard_payloads`）。
+    fn write_content(
+        &self,
+        content: &ClipboardContent,
+    ) -> Result<ClipboardWriteReport, ClipboardError> {
+        check_text(&content.text)?;
+        let rich: Vec<ClipboardFormatKind> = content
+            .requested_formats()
+            .into_iter()
+            .filter(|kind| *kind != ClipboardFormatKind::Text)
+            .collect();
+        if rich.is_empty() {
+            let (_, program, args) = self.write_backend()?;
+            write_with_tool(&program, &args, &content.text)?;
+            return Ok(ClipboardWriteReport {
+                formats: vec![ClipboardFormatKind::Text],
+                skipped: Vec::new(),
+            });
+        }
+        let (name, program, args) = self.write_backend()?;
+        write_with_tool(&program, &args, &content.text)?;
+        Ok(ClipboardWriteReport::text_only(
+            format!(
+                "{name} 一次只能提供一种 MIME 类型，同时提供会让纯文本目标拿不到内容；富文本载荷仍保存在本机历史里"
+            )
+            .as_str(),
+            rich,
+        ))
     }
 }
 
@@ -164,6 +243,21 @@ impl LinuxClipboardWatcher {
         LinuxClipboard::with_session(self.session, self.force_x11).read_text()
     }
 
+    /// 读取一种富文本格式。**尽力而为**：拿不到这种格式（没提供、工具不支持、读取失败）
+    /// 一律按「这次事件里没有这个格式」处理，绝不影响纯文本的捕获，也不凭空造一个载荷。
+    fn read_rich(&self, mimes: &[&str]) -> Option<String> {
+        let clipboard = LinuxClipboard::with_session(self.session, self.force_x11);
+        for mime in mimes {
+            match clipboard.read_typed(mime) {
+                Ok(Some(value)) if !value.is_empty() => return Some(value),
+                Ok(_) => continue,
+                // 读取失败（例如选区持有者没有响应）：不再试其它类型，如实当作没有。
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
     /// 这次读取是否走 X11 一族（来源应用只能在 X11 上查到）。
     fn uses_x11(&self) -> bool {
         self.session != SessionType::Wayland || self.force_x11
@@ -206,11 +300,13 @@ impl ClipboardWatcher for LinuxClipboardWatcher {
             }
             *last = Some(print);
         }
-        Ok(ClipboardPoll::Changed(ClipboardCapture {
-            formats: vec![crate::clipboard::ClipboardFormatKind::Text],
-            text: Some(text),
-            source: self.source(),
-        }))
+        // 同一次复制事件的富文本格式**必须与文本一起**进同一条捕获，不能拆成第二条。
+        // 读取是尽力而为的：拿不到就按「这次事件里没有这个格式」处理。
+        let html = self.read_rich(&["text/html"]);
+        let rtf = self.read_rich(&["text/rtf", "application/rtf"]);
+        let mut capture = ClipboardCapture::rich(text, html, rtf);
+        capture.source = self.source();
+        Ok(ClipboardPoll::Changed(capture))
     }
 
     fn note_own_write(&self, text: &str) {

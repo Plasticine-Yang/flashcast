@@ -42,8 +42,9 @@ pub use chrome::{
     PathChromeProvider, UserDataCandidate, UserDataOrigin,
 };
 pub use clipboard::{
-    fingerprint, ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFormatKind,
-    ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
+    cf_html_bytes, cf_html_fragment, fingerprint, ClipboardAccess, ClipboardCapture,
+    ClipboardContent, ClipboardError, ClipboardFormatKind, ClipboardPoll, ClipboardSkippedFormat,
+    ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport,
 };
 pub use focus::{same_app, FocusError, FocusTracker, FocusedApp};
 pub use hotkey::{HotkeySpec, HotkeySpecError, Key, Modifier, DEFAULT_HOTKEY};
