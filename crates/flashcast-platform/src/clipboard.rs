@@ -1174,6 +1174,25 @@ pub const READ_TIMEOUT: Duration = Duration::from_secs(3);
 /// 这些工具（`wl-copy`、`xclip`、`pbcopy`）都会 fork 出后台进程持有选区，父进程随后
 /// 退出，因此必须显式关闭标准输入再 `wait`，避免写入端被 SIGPIPE 打断。
 ///
+/// 读取工具标准错误的等待上限。
+///
+/// 工具**成功退出**后不能 `join` 读取线程：`wl-copy` 会 fork 出持有选区的守护进程，
+/// 守护进程继承了同一个标准错误管道，管道写端一直不关闭，`join`（或直接读到 EOF）
+/// 就会永久挂起。实测（ticket 17）：
+///
+/// ```text
+/// printf x | wl-copy            # 立刻以 0 退出
+/// printf x | wl-copy 2>&1 | cat # 永不返回：cat 等不到 EOF
+/// ```
+///
+/// 标准错误只是补充诊断信息，等不到就用空串，绝不让调用方挂死。
+const STDERR_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// 有界地取回读取线程收集到的标准错误；工具 fork 出的守护进程不关管道时返回空串。
+pub(crate) fn drain_tool_stderr(rx: &std::sync::mpsc::Receiver<String>) -> String {
+    rx.recv_timeout(STDERR_DRAIN_TIMEOUT).unwrap_or_default()
+}
+
 /// 等待是**有界**的（[`WRITE_TIMEOUT`]）。标准错误由独立线程读取：工具 fork 出的守护
 /// 进程会继承这个管道，父进程退出后管道仍未关闭，若在主线程里读到 EOF 就会再次挂住。
 pub(crate) fn write_with_tool(
@@ -1203,12 +1222,13 @@ pub(crate) fn write_with_tool(
     // 关闭标准输入（drop 掉句柄）后再等待，工具才知道内容已经结束。
     drop(child.stdin.take());
     let stderr = child.stderr.take();
-    let stderr_reader = std::thread::spawn(move || {
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut buffer = String::new();
         if let Some(mut stderr) = stderr {
             let _ = std::io::Read::read_to_string(&mut stderr, &mut buffer);
         }
-        buffer
+        let _ = stderr_tx.send(buffer);
     });
 
     let deadline = Instant::now() + WRITE_TIMEOUT;
@@ -1219,7 +1239,7 @@ pub(crate) fn write_with_tool(
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                // 不 join 读取线程：它的管道可能永远不关闭；进程退出时线程自然消失。
+                // 不等待读取线程：它的管道可能永远不关闭；进程退出时线程自然消失。
                 return Err(ClipboardError::Failed(format!(
                     "剪贴板工具 {} 超过 {} 秒没有返回，已中止（当前会话可能无法取得剪贴板选区）",
                     program.display(),
@@ -1234,7 +1254,7 @@ pub(crate) fn write_with_tool(
             }
         }
     };
-    let stderr = stderr_reader.join().unwrap_or_default();
+    let stderr = drain_tool_stderr(&stderr_rx);
     if !status.success() {
         let stderr = stderr.trim();
         return Err(ClipboardError::Failed(if stderr.is_empty() {
@@ -1298,12 +1318,13 @@ pub(crate) fn write_bytes_with_tool(
     }
     drop(child.stdin.take());
     let stderr = child.stderr.take();
-    let stderr_reader = std::thread::spawn(move || {
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut buffer = String::new();
         if let Some(mut stderr) = stderr {
             let _ = std::io::Read::read_to_string(&mut stderr, &mut buffer);
         }
-        buffer
+        let _ = stderr_tx.send(buffer);
     });
     let deadline = Instant::now() + WRITE_TIMEOUT;
     let status = loop {
@@ -1327,7 +1348,7 @@ pub(crate) fn write_bytes_with_tool(
             }
         }
     };
-    let stderr = stderr_reader.join().unwrap_or_default();
+    let stderr = drain_tool_stderr(&stderr_rx);
     if !status.success() {
         let stderr = stderr.trim();
         return Err(ClipboardError::Failed(if stderr.is_empty() {
@@ -1592,6 +1613,43 @@ mod tests {
         assert!(
             elapsed < WRITE_TIMEOUT * 3,
             "必须在超时附近返回，实际耗时 {elapsed:?}"
+        );
+    }
+
+    /// 工具**成功退出**、但它 fork 出的守护进程仍持有管道时，必须立刻返回。
+    ///
+    /// 这是 ticket 17 在本机实测到的真实故障：`wl-copy` 立刻以 0 退出，fork 出的选区
+    /// 持有者继承了标准错误管道，管道写端不关闭，`join` 读取线程永远不返回——
+    /// 于是在真实 Wayland 桌面上「回车粘贴」会永久挂住。`sh` 的 `sleep 30 &` 精确复现
+    /// 了「父进程退出、子进程持有管道」这一形状，不依赖任何平台替身。
+    #[test]
+    fn forked_daemon_holding_the_pipe_does_not_hang_the_writer() {
+        let started = Instant::now();
+        let result = write_with_tool(
+            Path::new("/bin/sh"),
+            &["-c", "echo diagnostic >&2; sleep 30 & exit 0"],
+            "正文",
+        );
+        let elapsed = started.elapsed();
+        assert!(result.is_ok(), "工具成功退出时写入必须成功：{result:?}");
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "工具已退出、只是守护进程还持有管道，必须立刻返回，实际耗时 {elapsed:?}"
+        );
+    }
+
+    /// 修复不能丢掉诊断信息：失败工具的标准错误仍然要出现在中文原因里。
+    #[test]
+    fn failing_tool_still_reports_its_stderr() {
+        let result = write_with_tool(
+            Path::new("/bin/sh"),
+            &["-c", "echo boom >&2; exit 3"],
+            "正文",
+        );
+        let error = result.expect_err("退出码非 0 必须判定为失败");
+        assert!(
+            error.to_string().contains("boom"),
+            "必须带上工具的标准错误：{error}"
         );
     }
 
