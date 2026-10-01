@@ -89,6 +89,8 @@ pub fn run() {
                 launcher: Arc::clone(&platform.launcher),
                 capabilities: Arc::clone(&platform.capabilities),
                 clipboard: Arc::clone(&platform.clipboard),
+                focus: Arc::clone(&platform.focus),
+                paster: Arc::clone(&platform.paster),
                 plugins,
                 device_dir,
             };

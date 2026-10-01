@@ -14,8 +14,10 @@ use std::time::Duration;
 use flashcast_platform::capability::{Capabilities, CapabilityProbe, Support};
 use flashcast_platform::catalog::{AppCatalog, AppEntry};
 use flashcast_platform::clipboard::ClipboardAccess;
+use flashcast_platform::focus::{same_app, FocusTracker, FocusedApp};
 use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
+use flashcast_platform::paste::{manual_paste_message, Paster};
 
 use crate::clone::{self, CloneControl, CloneOutcome, CloneProgress, CredentialProvider};
 use crate::device::{CredentialStore, DeviceStore, StoredToken};
@@ -23,9 +25,9 @@ use crate::git::{CommitOutcome, GitError, WorkspaceChanges};
 use crate::manifest::{ManifestEntry, ManifestError, PluginManifestFile};
 use crate::memo::{self, Memo, MemoBook, MemoError, MemoProblem};
 use crate::model::{
-    ActionOutcome, BackOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview,
-    QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES, COMMAND_PREFIX,
-    COMMAND_RESCAN, HOST_SOURCE,
+    ActionOutcome, ActionStatus, BackOutcome, DefaultAction, ItemKind, Notice, PastePlan,
+    PluginFailure, Preview, QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES,
+    COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
 use crate::plugin::{PluginKind, PluginScope, SearchContext, CAP_CLIPBOARD_WRITE};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
@@ -52,10 +54,28 @@ pub struct HostDeps {
     /// 剪贴板（ADR §5）。只有宿主在命令入口里经权限校验后调用它；
     /// 功能插件拿不到这个句柄。
     pub clipboard: Arc<dyn ClipboardAccess>,
+    /// 焦点读取与恢复（ADR §5）。自动粘贴前用它把焦点还给唤起前的应用，
+    /// 并在注入之前核对「恢复后的前台确实是那个应用」。
+    pub focus: Arc<dyn FocusTracker>,
+    /// 合成粘贴（ADR §5）。只在核对通过之后调用。
+    pub paster: Arc<dyn Paster>,
     pub plugins: Arc<PluginRegistry>,
     /// 设备本地数据根目录（应用数据目录）。工作区之外的本机数据都放这里：
     /// 当前工作区的路径、缓存、设备路径、权限状态、日志与凭证。
     pub device_dir: PathBuf,
+}
+
+/// 自动粘贴的会话状态。
+///
+/// 分成两半是刻意的：`target` 是外壳在**唤起时**（窗口显示之前）捕获的目标应用，
+/// `plan` 是最近一次 `execute` 产出的待完成粘贴。两者都不是长期状态：每次唤起都会
+/// 覆盖 `target` 并作废 `plan`，因此「上一次唤起的应用」不可能被这一轮粘贴用到。
+#[derive(Default)]
+struct PasteState {
+    /// 唤起前处于前台的应用程序。
+    target: Option<FocusedApp>,
+    /// 待外壳关闭浮窗后完成的粘贴计划（永远是最新一次 `execute` 的产物）。
+    plan: Option<PastePlan>,
 }
 
 /// 一次查询历史。`back()` 用它恢复此前的查询、范围与选择。
@@ -146,12 +166,36 @@ pub struct Host {
     sync: Mutex<SyncControl>,
     /// 是否有 Git 操作正在进行（网络操作期间为 `true`）。
     git_busy: AtomicBool,
+    /// 自动粘贴的会话状态：唤起时捕获的目标应用与待完成的粘贴计划。
+    ///
+    /// 单独一把锁（不放进 `inner`）是为了让锁的持有时间尽可能短：粘贴流程会调用
+    /// 平台适配层，绝不能在持有宿主的全局锁时做这件事。
+    paste: Mutex<PasteState>,
+    /// 粘贴计划序号，单调递增。作用与查询的 `seq` 相同：让外壳/测试能识别并丢弃
+    /// 过期计划，快速连续执行时只有最后一次会被真正粘贴。
+    paste_epoch: AtomicU64,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 自动粘贴的能力前提。返回 `Some(原因)` 表示不能自动粘贴，必须降级为手动粘贴。
+///
+/// 三种状态区别对待，但结论一致：
+///
+/// - `Supported`：可以做（还需要一个捕获到的目标应用，由调用方另行判断）；
+/// - `Unsupported`：平台明确做不到（Wayland、缺辅助功能权限、没有交互桌面），
+///   把平台给出的中文原因原样透传，它已经写清了「为什么」与「怎么办」；
+/// - `Unknown`：当前环境无法判定——**不能**当作可以做，如实说明「无法确认」。
+fn auto_paste_blocker(capabilities: &Capabilities) -> Option<String> {
+    match &capabilities.auto_paste {
+        Support::Supported => None,
+        Support::Unsupported { reason } => Some(reason.clone()),
+        Support::Unknown { reason } => Some(format!("无法确认当前环境能否自动粘贴（{reason}）")),
+    }
 }
 
 /// [`Host::wait_for_workspace_change`] 的轮询间隔。
@@ -206,6 +250,8 @@ impl Host {
             clone: Mutex::new(CloneControl::new()),
             sync: Mutex::new(SyncControl::new()),
             git_busy: AtomicBool::new(false),
+            paste: Mutex::new(PasteState::default()),
+            paste_epoch: AtomicU64::new(0),
         };
         host.rescan_catalog();
         host.restore_workspace();
@@ -1920,11 +1966,152 @@ impl Host {
         }
     }
 
-    /// 备忘录的默认操作：复制内容。
+    // -----------------------------------------------------------------------
+    // 自动粘贴（spec「粘贴是宿主级操作」，ticket 08）
+    // -----------------------------------------------------------------------
+
+    /// 外壳在**唤起时**（显示窗口之前）把唤起前的前台应用交给宿主。
+    ///
+    /// 每次都覆盖，并作废上一次未完成的粘贴计划：这样「上一次唤起的应用」不可能被
+    /// 这一轮粘贴用到。`None` 表示本次拿不到（例如 Wayland 不允许读取全局焦点），
+    /// 此时自动粘贴会自动降级为「已复制，请手动粘贴」，绝不会猜一个目标。
+    pub fn set_paste_target(&self, target: Option<FocusedApp>) {
+        let mut paste = lock(&self.paste);
+        paste.target = target;
+        paste.plan = None;
+    }
+
+    /// 当前记录的粘贴目标（唤起前的应用）。诊断与测试用。
+    pub fn paste_target(&self) -> Option<FocusedApp> {
+        lock(&self.paste).target.clone()
+    }
+
+    /// 外壳在**没有**执行粘贴的情况下关闭浮窗时调用（Escape、失焦、托盘切换）。
+    ///
+    /// 丢掉待完成的计划，这样随后哪怕有一次迟到的 `complete_paste` 也不会注入按键：
+    /// 「快速关闭」不可能粘贴到上一次的选择。
+    pub fn cancel_paste(&self) {
+        lock(&self.paste).plan = None;
+    }
+
+    /// 是否有待外壳完成的粘贴计划。
+    pub fn has_pending_paste(&self) -> bool {
+        lock(&self.paste).plan.is_some()
+    }
+
+    /// 剪贴板**已经写入** `text` 之后，决定能否自动粘贴，并给出准确的结果。
+    ///
+    /// 这是粘贴流程里可复用的接缝（ticket 09 的剪贴板历史走同一条路）：调用方先把内容
+    /// 写进剪贴板，再调用本方法，就会得到两种结果之一：
+    ///
+    /// - [`ActionOutcome::paste_pending`]：外壳必须关闭浮窗、等焦点交出，然后调用
+    ///   [`Host::complete_paste`] 完成恢复 + 注入；
+    /// - [`ActionOutcome::copied_needs_manual_paste`]：内容已在剪贴板，中文反馈里说清
+    ///   为什么没有自动粘贴以及用户该怎么做。
+    ///
+    /// 决策只依据两件事：平台能力报告（Wayland / 缺权限 / 未覆盖都算不能）与
+    /// 唤起时捕获到的目标应用。任何一项不成立都**不**尝试注入。
+    pub fn finish_copy_for_paste(&self, label: &str, text: &str) -> ActionOutcome {
+        let capabilities = self.capabilities();
+        let target = { lock(&self.paste).target.clone() };
+        let Some(target) = target else {
+            return ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+                label,
+                capabilities.os,
+                Some("没有记录到唤起前的应用，无法确定粘贴目标"),
+            ));
+        };
+        if let Some(blocker) = auto_paste_blocker(&capabilities) {
+            return ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+                label,
+                capabilities.os,
+                Some(&blocker),
+            ));
+        }
+        let epoch = self.paste_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let target_name = target.name.clone();
+        let plan = PastePlan {
+            target,
+            label: label.to_string(),
+            epoch,
+            text_bytes: text.len(),
+        };
+        {
+            // 覆盖旧计划：只有最新一次执行会被粘贴。
+            lock(&self.paste).plan = Some(plan.clone());
+        }
+        ActionOutcome::paste_pending(
+            plan,
+            format!("已复制「{label}」，正在粘贴到「{target_name}」…"),
+        )
+    }
+
+    /// 外壳关闭浮窗之后调用：恢复目标应用、核对前台、注入系统粘贴。
+    ///
+    /// 顺序与判据都不可省略：
+    ///
+    /// 1. 取出**最新**的粘贴计划；没有计划或计划已过期（期间又执行了别的条目）就放弃；
+    /// 2. 把焦点还给唤起前的应用；
+    /// 3. 回读前台，确认它**就是**捕获的那个应用——不是则绝不注入（spec 明确禁止把
+    ///    内容粘贴到别的应用）；
+    /// 4. 注入系统粘贴。
+    ///
+    /// 2–4 任何一步失败都退回「已复制，请手动粘贴」：内容已经在剪贴板里，用户按一次
+    /// 粘贴键即可，不会既没粘贴又没有提示。
+    pub fn complete_paste(&self) -> ActionOutcome {
+        let capabilities = self.capabilities();
+        let plan = { lock(&self.paste).plan.take() };
+        let Some(plan) = plan else {
+            return ActionOutcome::failed("没有待完成的粘贴：窗口可能已被关闭或该操作已被取消");
+        };
+        if plan.epoch != self.paste_epoch.load(Ordering::SeqCst) {
+            return ActionOutcome::failed(format!(
+                "粘贴计划已过期（期间执行了其它条目），已丢弃「{}」的粘贴",
+                plan.label
+            ));
+        }
+        let manual = |blocker: String| {
+            ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+                &plan.label,
+                capabilities.os,
+                Some(&blocker),
+            ))
+        };
+        if let Err(error) = self.deps.focus.restore(&plan.target) {
+            return manual(format!("无法把焦点还给「{}」：{error}", plan.target.name));
+        }
+        // 恢复焦点后必须回读核对：把内容粘贴到用户没有预期的窗口是明确的错误。
+        match self.deps.focus.capture() {
+            Ok(current) if same_app(&current, &plan.target) => {}
+            Ok(current) => {
+                return manual(format!(
+                    "焦点恢复后前台是「{}」，不是唤起前的「{}」，已取消自动粘贴",
+                    current.name, plan.target.name
+                ))
+            }
+            Err(error) => {
+                return manual(format!(
+                    "无法确认焦点已回到「{}」：{error}",
+                    plan.target.name
+                ))
+            }
+        }
+        match self.deps.paster.paste() {
+            Ok(()) => ActionOutcome::done(Some(format!(
+                "已粘贴「{}」到「{}」",
+                plan.label, plan.target.name
+            ))),
+            Err(error) => manual(format!("自动粘贴没有成功：{error}")),
+        }
+    }
+
+    /// 备忘录的默认操作：把**当前**内容写进剪贴板，然后尽力粘贴回唤起前的应用。
     ///
     /// 权限校验放在**原生边界**：来源插件必须在清单里、已启用，并且声明了
-    /// `clipboard.write`；随后才调用平台剪贴板适配层。自动粘贴（ticket 08）不在本切片，
-    /// 因此成功状态是「已复制，需手动粘贴」，并给出准确的中文反馈。
+    /// `clipboard.write`；随后才调用平台剪贴板适配层。
+    ///
+    /// 内容以工作区里**当前**的内容为准，而不是列表快照里的：列表可能是上一次查询的
+    /// 结果，用户可能在期间改过这条备忘录。写进剪贴板的永远是「刚刚执行的那条内容」。
     fn execute_memo(&self, item: &SearchItem) -> ActionOutcome {
         let Some(memo_id) = crate::plugins::memo::memo_id_from_item_id(&item.id) else {
             return ActionOutcome::failed(format!("无法识别的备忘录条目：{}", item.id));
@@ -1948,20 +2135,17 @@ impl Host {
         if let Support::Unsupported { reason } = self.capabilities().clipboard {
             return ActionOutcome::failed(format!("系统剪贴板不可用：{reason}"));
         }
-        // 内容以工作区里**当前**的内容为准：列表可能是上一次查询的快照。
         let Some(memo) = self.memos.find(memo_id) else {
             return ActionOutcome::failed(format!(
                 "找不到「{}」对应的备忘录，可能已被删除或改名，请重新查询",
                 item.title
             ));
         };
-        match self.deps.clipboard.write_text(&memo.body) {
-            Ok(()) => ActionOutcome::copied_needs_manual_paste(format!(
-                "已复制「{}」到剪贴板；自动粘贴由后续版本提供，请手动粘贴",
-                memo.title
-            )),
-            Err(error) => ActionOutcome::failed(format!("无法复制「{}」：{error}", memo.title)),
+        let (label, text) = (memo.title.clone(), memo.body.clone());
+        if let Err(error) = self.deps.clipboard.write_text(&text) {
+            return ActionOutcome::failed(format!("无法复制「{label}」：{error}"));
         }
+        self.finish_copy_for_paste(&label, &text)
     }
 
     fn execute_application(&self, item: &SearchItem) -> ActionOutcome {

@@ -167,7 +167,8 @@ fn rescan_reflects_newly_installed_application() {
 
     use flashcast_core::{Host, HostDeps, PluginRegistry};
     use flashcast_platform::fake::{
-        FakeAppCatalog, FakeCapabilityProbe, FakeClipboard, FakeLauncher,
+        FakeAppCatalog, FakeCapabilityProbe, FakeClipboard, FakeFocusTracker, FakeLauncher,
+        FakePaster,
     };
 
     let catalog = Arc::new(FakeAppCatalog::with_scan_results(vec![
@@ -182,6 +183,8 @@ fn rescan_reflects_newly_installed_application() {
         launcher: Arc::new(FakeLauncher::always_succeeds()),
         capabilities: Arc::new(FakeCapabilityProbe::linux_x11()),
         clipboard: Arc::new(FakeClipboard::new()),
+        focus: Arc::new(FakeFocusTracker::default()),
+        paster: Arc::new(FakePaster::new()),
         plugins: Arc::new(PluginRegistry::new()),
         device_dir: support::unique_dir("device"),
     };
