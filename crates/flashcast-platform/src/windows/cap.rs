@@ -75,8 +75,8 @@ impl CapabilityProbe for WindowsCapabilityProbe {
     }
 }
 
-/// 剪贴板支持。ticket 02 尚未实现剪贴板适配，因此只报告**环境前提**，
-/// 状态保持「未覆盖」，不得写成支持。
+/// 剪贴板支持。只报告**环境前提**是否具备（适配已由 ticket 09/10/11 实现：
+/// 文字、HTML/RTF 与图片），状态保持「未覆盖」，不得写成支持。
 fn clipboard_support(desktop_available: bool) -> Support {
     if !desktop_available {
         return Support::Unsupported {
@@ -84,8 +84,9 @@ fn clipboard_support(desktop_available: bool) -> Support {
         };
     }
     Support::Unknown {
-        reason: "剪贴板适配尚未实现（ticket 09/10 覆盖）；Windows 提供 OpenClipboard 与 \
-                 WinRT Clipboard API，环境本身具备条件"
+        reason: "文字、HTML/RTF 与图片已实现（ticket 09/10/11：一次剪贴板打开里读全部格式，\
+                 图片同时提供 CF_DIB 与注册格式 PNG）；文件列表尚未实现（ticket 12 覆盖）；\
+                 Windows 提供 OpenClipboard 与 WinRT Clipboard API，环境本身具备条件"
             .to_string(),
     }
 }

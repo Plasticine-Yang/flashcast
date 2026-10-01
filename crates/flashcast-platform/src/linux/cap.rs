@@ -95,8 +95,9 @@ impl CapabilityProbe for LinuxCapabilityProbe {
 
 /// 剪贴板支持。
 ///
-/// ticket 01 尚未实现剪贴板适配，因此这里只报告**环境前提**是否具备，
-/// 状态保持「未覆盖」，不得写成支持。
+/// 只报告**环境前提**是否具备（文字、图片与富文本的适配已由 ticket 09/10/11 实现，
+/// 但真实读写能否成功取决于当前会话有没有可用的选区），因此状态保持「未覆盖」，
+/// 不得写成支持。
 fn clipboard_support(session: SessionType) -> Support {
     let wayland_tool = which("wl-copy");
     let x11_tool = which("xclip").or_else(|| which("xsel"));
@@ -104,7 +105,7 @@ fn clipboard_support(session: SessionType) -> Support {
         SessionType::Wayland => match wayland_tool {
             Some(tool) => Support::Unknown {
                 reason: format!(
-                    "文字与 HTML/RTF 公开格式已实现（ticket 09/11：读按 MIME 类型，写只提供纯文本）；图片与文件列表尚未实现（ticket 10/12 覆盖）；环境已具备 {tool}"
+                    "文字、HTML/RTF 与图片已实现（ticket 09/10/11：读按 MIME 类型，写只提供纯文本，图片按 image/png 写）；文件列表尚未实现（ticket 12 覆盖）；环境已具备 {tool}"
                 ),
             },
             None => Support::Unsupported {
@@ -114,7 +115,7 @@ fn clipboard_support(session: SessionType) -> Support {
         _ => match x11_tool {
             Some(tool) => Support::Unknown {
                 reason: format!(
-                    "文字与 HTML/RTF 公开格式已实现（ticket 09/11：读按 MIME 类型，写只提供纯文本）；图片与文件列表尚未实现（ticket 10/12 覆盖）；环境已具备 {tool}"
+                    "文字、HTML/RTF 与图片已实现（ticket 09/10/11：读按 MIME 类型，写只提供纯文本，图片按 image/png 写）；文件列表尚未实现（ticket 12 覆盖）；环境已具备 {tool}"
                 ),
             },
             None => Support::Unsupported {

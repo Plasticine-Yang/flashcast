@@ -97,10 +97,11 @@ pub fn capabilities_for(
                 reason: "当前没有可交互的桌面会话（无 Aqua 会话）".to_string(),
             }
         },
-        // 剪贴板适配不在本 ticket 范围内（ticket 09/10），只报告环境前提。
+        // 剪贴板适配：ticket 09/10/11 分别实现文字、图片与富文本的读；写只提供纯文本。
         clipboard: Support::Unknown {
-            reason: "剪贴板适配尚未实现（ticket 09/10 覆盖）；macOS 由 NSPasteboard 提供，\
-                     无需外部工具"
+            reason: "文字与图片已实现（ticket 09/10：pbpaste 读文本、图片经 osascript 读写）；\
+                     HTML/RTF 不声称支持（ticket 11）；文件列表尚未实现（ticket 12 覆盖）；\
+                     macOS 由 NSPasteboard 提供，无需外部工具"
                 .to_string(),
         },
         auto_paste: if environment.accessibility_granted {

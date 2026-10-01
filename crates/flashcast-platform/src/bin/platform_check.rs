@@ -364,6 +364,8 @@ fn main() {
         // 5c. 富文本格式（ticket 11）：只读探测；加 --allow-clipboard-write 时实测写回
         //     与降级结论（Linux 只能提供纯文本）。
         checks.push(clipboard_rich_check(options.allow_clipboard_write));
+        // 5d. 图片（ticket 10）：只读探测；加 --allow-clipboard-write 时实测写入 + 逐像素读回。
+        checks.push(clipboard_image_check(options.allow_clipboard_write));
 
         // 6b. 自动粘贴：能力结论 + 注入前置条件（真实查询 XTEST / 会话类型）。
         checks.push(CheckResult {
@@ -906,6 +908,169 @@ fn clipboard_rich_check(options_allow_write: bool) -> CheckResult {
             detail: format!(
                 "写入没有完成：{reason}。当前会话里剪贴板工具（wl-copy / xclip）无法取得选区；\
                  自动化会话缺少可用的输入序列时就是这样，这不代表真实桌面上的复制会失败"
+            ),
+            command: command.to_string(),
+        },
+    }
+}
+
+/// Linux 图片剪贴板（ticket 10）的真实写入 + 逐像素读回。
+///
+/// 两种模式，各自只回答它能回答的问题：
+///
+/// - 只读（默认）：读当前选区里的图片（`wl-paste -t image/png` / `xclip -t image/png -o`）。
+///   读到了就是**实测通过**（按 MIME 类型读图片这条真实路径可用）；选区里没有图片、或拿不到
+///   选区，都是**未覆盖**并写明原因——自动化会话没有选区持有者时必然如此，这不代表真实
+///   桌面上的图片复制会失败。
+/// - `--allow-clipboard-write`：写一张 3×2 的已知像素 PNG，再读回并**逐像素**比对。写不进去
+///   说明这个会话拿不到选区（未覆盖）；写进去了却读不回、或读回的像素不一致，才是**实测失败**。
+#[cfg(target_os = "linux")]
+fn clipboard_image_check(options_allow_write: bool) -> CheckResult {
+    use flashcast_platform::clipboard::{ClipboardAccess, ClipboardImage, IMAGE_MIME_PNG};
+
+    let command = "cargo run -p flashcast-platform --bin flashcast-platform-check \
+                   -- --allow-clipboard-write";
+    let title = "图片剪贴板读写（PNG）";
+
+    if !options_allow_write {
+        let result = run_bounded_blocking(
+            move || {
+                flashcast_platform::linux::LinuxClipboard::new()
+                    .read_image_detailed()
+                    .map_err(|error| error.to_string())
+            },
+            Duration::from_secs(8),
+        );
+        return match result {
+            Ok(Ok((Some(image), _))) => CheckResult {
+                id: "clipboard.image",
+                title,
+                status: Status::MeasuredPass,
+                detail: format!(
+                    "当前选区里有图片：读到 {} {}（{} 字节）：按 MIME 类型读取图片这条真实路径可用",
+                    image.mime,
+                    image.size_label(),
+                    image.bytes.len()
+                ),
+                command: command.to_string(),
+            },
+            Ok(Ok((None, Some(problem)))) => CheckResult {
+                id: "clipboard.image",
+                title,
+                status: Status::MeasuredPass,
+                detail: format!(
+                    "当前选区里有图片但无法保存（{problem}）：失败原因被如实上报，\
+                     不会生成看似成功的空历史"
+                ),
+                command: command.to_string(),
+            },
+            Ok(Ok((None, None))) => CheckResult {
+                id: "clipboard.image",
+                title,
+                status: Status::NotCovered,
+                detail: "当前剪贴板的选区里没有 PNG 图片（此刻可能没有复制图片；自动化会话里\
+                         也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的\
+                         图片写入与读回"
+                    .to_string(),
+                command: command.to_string(),
+            },
+            Ok(Err(reason)) => CheckResult {
+                id: "clipboard.image",
+                title,
+                status: Status::NotCovered,
+                detail: format!("读取没有完成：{reason}；这不代表真实桌面上的图片复制失败"),
+                command: command.to_string(),
+            },
+            Err(reason) => CheckResult {
+                id: "clipboard.image",
+                title,
+                status: Status::NotCovered,
+                detail: format!("{reason}；自动化会话缺少可用的选区持有者时会这样"),
+                command: command.to_string(),
+            },
+        };
+    }
+
+    // 写入一张 3×2 的已知像素 PNG，再读回并逐像素比对。
+    let result = run_bounded_blocking(
+        move || {
+            let clipboard = flashcast_platform::linux::LinuxClipboard::new();
+            let rgba: Vec<u8> = vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 10, 20, 30, 255, 40, 50, 60, 255,
+                70, 80, 90, 255,
+            ];
+            let png = flashcast_platform::clipboard::encode_png(3, 2, &rgba)
+                .map_err(|error| format!("无法生成测试 PNG：{error}"))?;
+            let image = ClipboardImage::new(IMAGE_MIME_PNG, png.clone());
+            let written = image.bytes.len();
+            clipboard
+                .write_image(&image)
+                .map_err(|error| error.to_string())?;
+            let read_back = clipboard.read_image().map_err(|error| error.to_string())?;
+            Ok::<_, String>((png, written, read_back))
+        },
+        Duration::from_secs(10),
+    );
+    match result {
+        Ok(Ok((png, written, Some(read_back)))) => {
+            // 两次都走同一条「解码 → 重编码」路径：结果一致即像素一致。
+            let expected = flashcast_platform::clipboard::png_thumbnail(&png, 96).ok();
+            let actual = flashcast_platform::clipboard::png_thumbnail(&read_back.bytes, 96).ok();
+            let same_pixels = matches!((&expected, &actual), (Some(a), Some(b)) if a == b);
+            CheckResult {
+                id: "clipboard.image",
+                title,
+                status: if same_pixels {
+                    Status::MeasuredPass
+                } else {
+                    Status::MeasuredFail
+                },
+                detail: format!(
+                    "写入 3×2 PNG（{written} 字节）并读回 {} {}（{} 字节）：像素{}",
+                    read_back.mime,
+                    read_back.size_label(),
+                    read_back.bytes.len(),
+                    if same_pixels {
+                        "逐点一致"
+                    } else {
+                        "与写入的不一致"
+                    }
+                ),
+                command: command.to_string(),
+            }
+        }
+        Ok(Ok((_, written, None))) => CheckResult {
+            id: "clipboard.image",
+            title,
+            status: Status::MeasuredFail,
+            detail: format!(
+                "写入报告成功（{written} 字节），但按 image/png 读不回任何图片：适配层自相矛盾"
+            ),
+            command: command.to_string(),
+        },
+        Ok(Err(reason)) => CheckResult {
+            id: "clipboard.image",
+            title,
+            // 「工具没有返回」说明这个会话拿不到选区（自动化会话的常态），属于未覆盖；
+            // 其它写入错误才是实现失败。与 clipboard.text / clipboard.rich 的判定一致。
+            status: if selection_unavailable(&reason) {
+                Status::NotCovered
+            } else {
+                Status::MeasuredFail
+            },
+            detail: format!(
+                "写入没有完成：{reason}。当前会话里剪贴板工具（wl-copy / xclip）可能无法取得\
+                 选区；这不代表真实桌面上的图片写入会失败"
+            ),
+            command: command.to_string(),
+        },
+        Err(reason) => CheckResult {
+            id: "clipboard.image",
+            title,
+            status: Status::NotCovered,
+            detail: format!(
+                "写入没有完成：{reason}。当前会话里剪贴板工具（wl-copy / xclip）无法取得选区；\
+                 自动化会话缺少可用的输入序列时就是这样，这不代表真实桌面上的图片复制会失败"
             ),
             command: command.to_string(),
         },

@@ -1,8 +1,8 @@
 //! 剪贴板适配（ADR §5 的 `ClipboardAccess` 与 `ClipboardWatcher`）。
 //!
-//! ticket 07 只需要「把文本写进系统剪贴板」这一项：备忘录的默认操作是粘贴，而
-//! 自动粘贴（ticket 08）尚未实现，因此先复制并如实提示手动粘贴。图片、HTML/RTF 与
-//! 文件列表属于剪贴板历史（ticket 09/10），会在同一 trait 上继续增加方法。
+//! ticket 07 只需要「把文本写进系统剪贴板」这一项；ticket 09 起在同一 trait 上增加
+//! 了变化监听，ticket 10 增加图片的读写，ticket 11 增加 HTML/RTF 的按格式读写；
+//! 文件列表属于 ticket 12。
 //!
 //! ticket 09 增加「监听」这一半：剪贴板历史需要在用户复制后把内容捕获下来（ADR §5 的
 //! `ClipboardWatcher`）。可用的 Rust 剪贴板库（`arboard`）**不提供变化事件**，因此这里
