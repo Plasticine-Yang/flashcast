@@ -84,8 +84,8 @@ fn clipboard_support(desktop_available: bool) -> Support {
         };
     }
     Support::Unknown {
-        reason: "文字、HTML/RTF 与图片已实现（ticket 09/10/11：一次剪贴板打开里读全部格式，\
-                 图片同时提供 CF_DIB 与注册格式 PNG）；文件列表尚未实现（ticket 12 覆盖）；\
+        reason: "文字、HTML/RTF、图片与文件列表已实现（ticket 09/10/11/12：一次剪贴板打开里读全部格式，\
+                 图片同时提供 CF_DIB 与注册格式 PNG，文件列表用 CF_HDROP）；\
                  Windows 提供 OpenClipboard 与 WinRT Clipboard API，环境本身具备条件"
             .to_string(),
     }
