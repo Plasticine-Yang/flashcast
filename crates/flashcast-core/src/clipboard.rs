@@ -211,8 +211,18 @@ pub fn event_from_capture(
         // 文字与图片的元数据以真实内容为准，已经在上面加过。
         let format = match kind {
             ClipboardFormatKind::Text | ClipboardFormatKind::Image => continue,
-            ClipboardFormatKind::Html => ClipboardFormat::Html { bytes: 0 },
-            ClipboardFormatKind::Rtf => ClipboardFormat::Rtf { bytes: 0 },
+            ClipboardFormatKind::Html => {
+                let Some(html) = html.as_deref() else {
+                    continue;
+                };
+                ClipboardFormat::Html { bytes: html.len() }
+            }
+            ClipboardFormatKind::Rtf => {
+                let Some(rtf) = rtf.as_deref() else {
+                    continue;
+                };
+                ClipboardFormat::Rtf { bytes: rtf.len() }
+            }
             ClipboardFormatKind::Files => ClipboardFormat::Files {
                 count: 0,
                 names: Vec::new(),

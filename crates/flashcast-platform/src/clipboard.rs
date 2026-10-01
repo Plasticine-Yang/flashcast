@@ -470,7 +470,13 @@ pub fn png_thumbnail(png: &[u8], max_edge: u32) -> Result<Vec<u8>, String> {
         return Err("缩略图边长必须大于 0".to_string());
     }
     let decoded = image::load_from_memory(png).map_err(|error| format!("无法解码图片：{error}"))?;
-    let thumbnail = decoded.thumbnail(max_edge, max_edge).to_rgba8();
+    // 已经在上限之内就保持原尺寸：`thumbnail()` 会放大到填满上限，那只会让载荷更大、
+    // 画面更糊，不是缩略图该做的事。
+    let thumbnail = if decoded.width() <= max_edge && decoded.height() <= max_edge {
+        decoded.to_rgba8()
+    } else {
+        decoded.thumbnail(max_edge, max_edge).to_rgba8()
+    };
     let (width, height) = thumbnail.dimensions();
     encode_png(width, height, thumbnail.as_raw())
 }
