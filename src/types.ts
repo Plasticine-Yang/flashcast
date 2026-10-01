@@ -223,6 +223,40 @@ export interface ClipboardEntryView {
   imageDataUrl: string | null;
   /** 图片的类型与尺寸，例如 `PNG 4×3`；非图片条目为 null。 */
   imageSize: string | null;
+  /** 文件类附件（引用与已保存副本）；非文件条目为空。 */
+  files: ClipboardFileView[];
+  /** 引用数量。 */
+  references: number;
+  /** 已保存副本数量。 */
+  fileCopies: number;
+}
+
+/** 附件种类的结构化标签（对应 flashcast_core::AttachmentKind）。 */
+export type AttachmentKindView =
+  | { kind: "image" }
+  | { kind: "fileReference" }
+  | { kind: "fileCopy" }
+  | { kind: "other"; name: string };
+
+/**
+ * 一条剪贴板历史里的文件条目（对应 flashcast_core::ClipboardFileView）。
+ *
+ * `kindLabel` 与 `recoverable` 回答两个不同的问题：**这是引用还是副本**，以及
+ * **现在还能不能恢复**。引用在原文件消失后 `recoverable` 为 false 并给出 `problem`；
+ * 已保存副本在原文件消失后仍然可恢复。
+ */
+export interface ClipboardFileView {
+  attachmentId: string;
+  name: string;
+  /** 结构化种类：UI 据此决定是否给出「保存本机副本」。 */
+  kind: AttachmentKindView;
+  /** 中文名：引用 / 已保存副本 / 图片 / 未知附件。 */
+  kindLabel: string;
+  mime: string | null;
+  bytes: number;
+  recoverable: boolean;
+  /** 不可恢复的中文原因；可恢复时为 null。 */
+  problem: string | null;
 }
 
 /**

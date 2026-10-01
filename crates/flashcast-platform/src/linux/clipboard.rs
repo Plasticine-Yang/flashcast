@@ -27,7 +27,8 @@ use std::sync::Mutex;
 
 use crate::capability::SessionType;
 use crate::clipboard::{
-    check_image_write, check_text, find_program, fingerprint, fingerprint_bytes, image_from_bytes,
+    check_files, check_image_write, check_text, file_entries, find_program, fingerprint,
+    fingerprint_bytes, fingerprint_files, format_uri_list, image_from_bytes, parse_uri_list,
     read_bytes_bounded, read_with_tool, write_bytes_with_tool, write_with_tool, ClipboardAccess,
     ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFormatKind, ClipboardImage,
     ClipboardPoll, ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport, IMAGE_MIME_PNG,
@@ -38,6 +39,10 @@ use super::{force_x11_backend, x11};
 
 /// 打开一次剪贴板后端所需的全部信息：名字、可执行文件与参数。
 type Backend = (&'static str, PathBuf, Vec<&'static str>);
+
+/// Linux 文件列表的公开格式。GNOME 的私有种格式只是回退（第一行 `copy`/`cut`）。
+const URI_LIST: &str = "text/uri-list";
+const GNOME_COPIED_FILES: &str = "x-special/gnome-copied-files";
 
 /// 按会话选择首选工具，首选缺失时回退到另一族（XWayland 场景下两者都可能可用）。
 fn pick_backend(
@@ -184,6 +189,82 @@ impl LinuxClipboard {
         Ok(image_from_bytes(IMAGE_MIME_PNG, bytes))
     }
 
+    /// 写入**文件列表**的后端：只有 `wl-copy` 与 `xclip` 能指定 MIME 类型，
+    /// `xsel` 没有等价参数，因此不能用来写文件列表（不能把 URI 当成普通文本写进去，
+    /// 那会让目标应用收到一段文字而不是文件）。
+    fn write_files_backend(&self) -> Result<Backend, ClipboardError> {
+        let x11 = || {
+            find_program("xclip").map(|path| {
+                (
+                    "xclip",
+                    path,
+                    vec!["-selection", "clipboard", "-t", URI_LIST, "-in"],
+                )
+            })
+        };
+        let wayland =
+            || find_program("wl-copy").map(|path| ("wl-copy", path, vec!["--type", URI_LIST]));
+        pick_backend(self.session, self.force_x11, [&wayland, &x11])
+    }
+
+    /// 读取文件列表的后端与类型，按「公开格式优先、GNOME 私有种格式兜底」排序。
+    fn read_files_candidates(&self) -> Vec<(&'static str, PathBuf, Vec<&'static str>)> {
+        let x11 = |mime: &'static str| {
+            find_program("xclip").map(|path| {
+                (
+                    "xclip",
+                    path,
+                    vec!["-selection", "clipboard", "-t", mime, "-o"],
+                )
+            })
+        };
+        let wayland = |mime: &'static str| {
+            find_program("wl-paste")
+                .map(|path| ("wl-paste", path, vec!["--no-newline", "--type", mime]))
+        };
+        let (first, second): (
+            fn(&'static str) -> Option<Backend>,
+            fn(&'static str) -> Option<Backend>,
+        ) = if self.session == SessionType::Wayland && !self.force_x11 {
+            (wayland, x11)
+        } else {
+            (x11, wayland)
+        };
+        let mut candidates = Vec::new();
+        for mime in [URI_LIST, GNOME_COPIED_FILES] {
+            if let Some(found) = first(mime) {
+                candidates.push(found);
+            }
+            if let Some(found) = second(mime) {
+                candidates.push(found);
+            }
+        }
+        candidates
+    }
+
+    /// 读取当前剪贴板里的文件列表；没有文件列表时 `Ok(None)`。
+    ///
+    /// 每种类型都**有界**读取（与文本一致）；工具缺失时返回 `Ok(None)` 而不是报错——
+    /// 「当前会话没有可用的剪贴板工具」与「本次没有文件列表」在 watcher 里都会退化为
+    /// 「没有变化」，而写入侧的失败会如实报告。
+    fn read_files_optional(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        for (_, program, args) in self.read_files_candidates() {
+            match read_with_tool(&program, &args) {
+                Ok(Some(text)) => {
+                    let paths = parse_uri_list(&text);
+                    if !paths.is_empty() {
+                        return Ok(Some(paths));
+                    }
+                }
+                // 工具以非 0 退出＝当前剪贴板没有这种类型；继续试下一个类型。
+                Ok(None) => {}
+                // 读取失败（例如工具卡住被中止）：如实上报，不能当成「没有文件」。
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(None)
+    }
+
     /// 按 MIME 类型读剪贴板里的一种格式；没有这种格式时返回 `Ok(None)`。
     ///
     /// `wl-paste` 用 `--type`、`xclip` 用 `-t`；两者在「没有提供该类型」时都以非 0 退出，
@@ -247,6 +328,17 @@ impl ClipboardAccess for LinuxClipboard {
         Ok(self.read_image_detailed()?.0)
     }
 
+    fn write_files(&self, paths: &[PathBuf]) -> Result<(), ClipboardError> {
+        check_files(paths)?;
+        let (_, program, args) = self.write_files_backend()?;
+        let content = format_uri_list(paths);
+        write_with_tool(&program, &args, &content)
+    }
+
+    fn read_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        self.read_files_optional()
+    }
+
     /// 恢复剪贴板历史：Linux 上只能提供**纯文本**。
     ///
     /// `wl-copy` 的 `--type` 决定「提供内容的类型」（单数），再调用一次会接管选区并让
@@ -290,10 +382,14 @@ impl ClipboardAccess for LinuxClipboard {
 pub struct LinuxClipboardWatcher {
     session: SessionType,
     force_x11: bool,
-    /// 上一次报告过的内容指纹。
+    /// 上一次报告过的**文本**内容指纹。
     last: Mutex<Option<u64>>,
-    /// 由 Flashcast 自己写入、尚未被 `poll` 消费掉的内容指纹。
+    /// 上一次报告过的**文件列表**内容指纹。
+    last_files: Mutex<Option<u64>>,
+    /// 由 Flashcast 自己写入、尚未被 `poll` 消费掉的文本指纹。
     own: Mutex<Vec<u64>>,
+    /// 由 Flashcast 自己写入、尚未被 `poll` 消费掉的文件列表指纹。
+    own_files: Mutex<Vec<u64>>,
 }
 
 impl Default for LinuxClipboardWatcher {
@@ -308,7 +404,9 @@ impl LinuxClipboardWatcher {
             session: super::detect_session_type(),
             force_x11: force_x11_backend(),
             last: Mutex::new(None),
+            last_files: Mutex::new(None),
             own: Mutex::new(Vec::new()),
+            own_files: Mutex::new(Vec::new()),
         }
     }
 
@@ -317,7 +415,9 @@ impl LinuxClipboardWatcher {
             session,
             force_x11,
             last: Mutex::new(None),
+            last_files: Mutex::new(None),
             own: Mutex::new(Vec::new()),
+            own_files: Mutex::new(Vec::new()),
         }
     }
 
@@ -329,6 +429,11 @@ impl LinuxClipboardWatcher {
     /// 读取当前剪贴板图片（ticket 10）。
     fn read_image(&self) -> Result<(Option<ClipboardImage>, Option<String>), ClipboardError> {
         LinuxClipboard::with_session(self.session, self.force_x11).read_image_detailed()
+    }
+
+    /// 读取当前剪贴板的文件列表（ticket 12）。
+    fn read_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        LinuxClipboard::with_session(self.session, self.force_x11).read_files()
     }
 
     /// 读取一种富文本格式。**尽力而为**：拿不到这种格式（没提供、工具不支持、读取失败）
@@ -363,10 +468,49 @@ impl LinuxClipboardWatcher {
             app_id,
         })
     }
+
+    /// 文件列表的一次变化：先看是不是自身写入，再看是不是和上次相同。
+    fn poll_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        let Some(paths) = self.read_files()? else {
+            return Ok(None);
+        };
+        let print = fingerprint_files(&paths);
+        {
+            let mut own = self.own_files.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(index) = own.iter().position(|item| *item == print) {
+                own.remove(index);
+                *self.last_files.lock().unwrap_or_else(|p| p.into_inner()) = Some(print);
+                return Ok(None);
+            }
+        }
+        {
+            let mut last = self.last_files.lock().unwrap_or_else(|p| p.into_inner());
+            if *last == Some(print) {
+                return Ok(None);
+            }
+            *last = Some(print);
+        }
+        Ok(Some(paths))
+    }
 }
 
 impl ClipboardWatcher for LinuxClipboardWatcher {
     fn poll(&self) -> Result<ClipboardPoll, ClipboardError> {
+        // 文件列表优先：文件管理器复制文件时剪贴板里同时有 `text/uri-list` 与一段
+        // 可读文字（URI 本身）。先按文件捕获，才能把「复制文件」与「复制这段文字」
+        // 区分开，而不是把文件列表存成一条文字历史。
+        if let Some(paths) = self.poll_files()? {
+            return Ok(ClipboardPoll::Changed(ClipboardCapture {
+                formats: vec![ClipboardFormatKind::Files],
+                text: None,
+                image: None,
+                image_problem: None,
+                files: file_entries(&paths),
+                html: None,
+                rtf: None,
+                source: self.source(),
+            }));
+        }
         // 文字与图片都读一次：一次复制事件可能同时带来两者（例如浏览器同时给出
         // 图片与图片地址），只读其中一种会漏掉另一半。
         let text = self.read()?.filter(|text| !text.is_empty());
@@ -423,6 +567,7 @@ impl ClipboardWatcher for LinuxClipboardWatcher {
             text,
             image,
             image_problem: problem,
+            files: Vec::new(),
             html,
             rtf,
             source: self.source(),
@@ -437,5 +582,15 @@ impl ClipboardWatcher for LinuxClipboardWatcher {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .push(fingerprint(text));
+    }
+
+    fn note_own_write_files(&self, paths: &[PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        self.own_files
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(fingerprint_files(paths));
     }
 }

@@ -350,6 +350,53 @@ body {
   color: var(--fc-error-text);
 }
 
+/* ---------------------------------------------------------------------------
+ * 剪贴板文件条目（ticket 12）。
+ *
+ * 文件行嵌在紧凑的条目行里：条目在文件条目时允许换行，文件列表占满下一整行。
+ * 与结果列表共用同一套令牌；这是键盘高频操作的界面，因此一律不加动画。
+ * ------------------------------------------------------------------------- */
+
+.clipboard-item-files {
+  flex-wrap: wrap;
+}
+
+.clipboard-files {
+  flex: 1 1 100%;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.clipboard-file {
+  display: flex;
+  align-items: center;
+  gap: var(--fc-space-section-gap);
+  padding: 4px 8px;
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-control);
+  background: var(--fc-info-bg);
+  transition: none;
+}
+
+.clipboard-file .theme-name {
+  font-size: var(--fc-font-aux);
+}
+
+/* 引用已经失效：整行按错误色呈现，与「不可恢复」徽标一起，不靠颜色单独传达状态。 */
+.clipboard-file[data-recoverable="false"] {
+  border-color: var(--fc-error-border);
+  background: var(--fc-error-bg);
+}
+
+.clipboard-file[data-recoverable="false"] .theme-name {
+  color: var(--fc-error-text);
+}
+
 .path-input {
   flex: 1;
   min-width: 0;

@@ -67,6 +67,7 @@ pub fn run() {
             commands::pin_clipboard_entry,
             commands::delete_clipboard_entry,
             commands::clear_clipboard_history,
+            commands::save_clipboard_file_copy,
             commands::create_memo,
             commands::update_memo,
             commands::delete_memo,

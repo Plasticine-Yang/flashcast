@@ -55,7 +55,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flashcast_platform::clipboard::{
-    ClipboardCapture, ClipboardFormatKind, ClipboardImage, ClipboardSourceApp,
+    ClipboardCapture, ClipboardFileEntry, ClipboardFormatKind, ClipboardImage, ClipboardSourceApp,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -157,9 +157,8 @@ impl ClipboardFormat {
 
 /// 由平台捕获结果构造一次复制事件。
 ///
-/// 返回 `None` 表示这次变化里没有任何本版本能保存的内容（例如只有非文本格式，
-/// 而文本以外的捕获在 tickets 10–12）。**不**返回一个空条目：那会让历史出现
-/// 「点开什么都没有」的条目。
+/// 返回 `None` 表示这次变化里没有任何本版本能保存的内容（既没有文字，也没有文件）。
+/// **不**返回一个空条目：那会让历史出现「点开什么都没有」的条目。
 ///
 /// 图片（ticket 10）在这里映射成 [`ClipboardFormat::Image`] 加一条
 /// [`ClipboardAttachment`]：附件路径落在 `attachments_dir` 下，字节由调用方
@@ -168,11 +167,27 @@ impl ClipboardFormat {
 ///
 /// HTML/RTF（ticket 11）作为同一事件里的载荷进入 `payloads`：一次复制只有一条历史。
 ///
+/// ## 文件列表（ticket 12）走同一个入口
+///
+/// - 每个文件生成一个 [`AttachmentKind::FileReference`] 附件，`depends_on_source` 为
+///   `true`——它依赖原文件，原文件消失后不可恢复；
+/// - 图片（ticket 10）生成一个 [`AttachmentKind::Image`] 附件，字节落在
+///   `attachments_dir` 下、`depends_on_source` 为 `false`（本机副本，原来源消失后仍可恢复）；
+/// - 有文件时摘要与去重键都按**文件列表**计算（`files:` 前缀），与文字事件的 `text:`
+///   键不会互相误判（spec「视频按文件处理」「去重不跨类型误判」）；
+/// - 视频文件与其它文件没有任何差别。
+///
+/// 图片与文字的去重键在两者之间**不共通**：文字用文本指纹、图片用字节指纹，
+/// 因此两种内容不可能互相误判成同一条；同时带回文字与图片时按文字处理。
+///
+/// ## 去重键不因富文本而改变
+///
+/// 只有文字的事件，[`ClipboardEvent::content_hash`] 始终是**纯文本**的指纹
+/// （[`content_hash_text`]）。因此同一次复制先后以「纯文本」和「文本 + HTML」出现时
+/// 仍然合并到同一条（纯文本条目的去重语义完全不变），而富文本载荷永远不会变成检索键。
+///
 /// `capture.image_problem`（有图片但无法保存）不在这里处理：它没有可落库的内容，
 /// 由捕获管线转成一次如实的失败。
-///
-/// 去重键（`content_hash`）在文字与图片之间**不共通**：文字用文本指纹、图片用字节指纹，
-/// 因此两种内容不可能互相误判成同一条。
 pub fn event_from_capture(
     capture: &ClipboardCapture,
     now_ms: i64,
@@ -183,10 +198,18 @@ pub fn event_from_capture(
     let image = capture.image.as_ref();
     let html = capture.html.clone().filter(|html| !html.is_empty());
     let rtf = capture.rtf.clone().filter(|rtf| !rtf.is_empty());
-    if text.is_none() && image.is_none() {
+    let files: Vec<ClipboardFileEntry> = capture
+        .files
+        .iter()
+        .filter(|file| !file.path.as_os_str().is_empty())
+        .cloned()
+        .collect();
+    if text.is_none() && image.is_none() && files.is_empty() {
         return None;
     }
 
+    // 只记录**真的有内容**的格式：格式集合与载荷必须一致，否则会出现「声称有 RTF、
+    // 点开却没有」的条目。
     let mut formats: Vec<ClipboardFormat> = Vec::new();
     let mut push = |format: ClipboardFormat| {
         if !formats
@@ -208,7 +231,7 @@ pub fn event_from_capture(
         });
     }
     for kind in &capture.formats {
-        // 文字与图片的元数据以真实内容为准，已经在上面加过。
+        // 文字、图片与文件列表的元数据以真实内容为准，已经在上面加过。
         let format = match kind {
             ClipboardFormatKind::Text | ClipboardFormatKind::Image => continue,
             ClipboardFormatKind::Html => {
@@ -223,31 +246,44 @@ pub fn event_from_capture(
                 };
                 ClipboardFormat::Rtf { bytes: rtf.len() }
             }
-            ClipboardFormatKind::Files => ClipboardFormat::Files {
-                count: 0,
-                names: Vec::new(),
-            },
+            ClipboardFormatKind::Files => {
+                if files.is_empty() {
+                    continue;
+                }
+                ClipboardFormat::Files {
+                    count: files.len(),
+                    names: files.iter().map(|file| file.name.clone()).collect(),
+                }
+            }
         };
         push(format);
     }
     // 平台没有在 `formats` 里列出、但确实带回了载荷的格式同样要记上（宁可多记，
-    // 不可让「保存了却没有格式标记」的内容在界面上隐身）。
+    // 不可让「保存了却没有格式标记」的内容在界面上隐身）；反过来，声明了格式却没有
+    // 条目/载荷的也不记——两种都由实际内容说了算。
     if let Some(html) = html.as_deref() {
         push(ClipboardFormat::Html { bytes: html.len() });
     }
     if let Some(rtf) = rtf.as_deref() {
         push(ClipboardFormat::Rtf { bytes: rtf.len() });
     }
+    if !files.is_empty() {
+        push(ClipboardFormat::Files {
+            count: files.len(),
+            names: files.iter().map(|file| file.name.clone()).collect(),
+        });
+    }
     if formats.is_empty() {
         let text = text.as_ref()?;
         formats.push(ClipboardFormat::Text { bytes: text.len() });
     }
 
-    let attachment = image.map(|image| {
+    let mut attachments: Vec<ClipboardAttachment> = Vec::new();
+    if let Some(image) = image {
         let id = new_attachment_id();
         // 附件是本机副本（`depends_on_source = false`）：原来源消失后仍可恢复
         // （spec「图片及已保存文件副本在原来源消失后仍可恢复」）。
-        ClipboardAttachment {
+        attachments.push(ClipboardAttachment {
             path: attachments_dir.join(format!("{id}.png")),
             name: attachment_name(image),
             mime: Some(image.mime.clone()),
@@ -256,8 +292,19 @@ pub fn event_from_capture(
             created_at_ms: now_ms,
             kind: AttachmentKind::Image,
             id,
-        }
-    });
+        });
+    }
+    // 文件引用（`depends_on_source = true`）：原文件消失后不可恢复，界面据此提示。
+    attachments.extend(files.iter().map(|file| ClipboardAttachment {
+        id: new_attachment_id(),
+        kind: AttachmentKind::FileReference,
+        path: file.path.clone(),
+        name: file.name.clone(),
+        mime: file.mime.clone(),
+        bytes: file.bytes.unwrap_or(0),
+        depends_on_source: true,
+        created_at_ms: now_ms,
+    }));
 
     let payloads: Vec<ClipboardPayload> = html
         .clone()
@@ -278,14 +325,18 @@ pub fn event_from_capture(
         }))
         .collect();
 
-    let content_hash = match (&text, image) {
-        (Some(text), _) => content_hash_text(text),
-        (None, Some(image)) => content_hash_image(&image.bytes),
-        (None, None) => return None,
-    };
-    let summary = match &text {
-        Some(text) => summary_for_text(text),
-        None => summary_for_image(image.expect("上面已经排除了两者都为空")),
+    // 去重键：有文件时按文件列表（`files:` 前缀），否则按可索引的文字或图片指纹——
+    // 纯文本条目的去重语义不因富文本载荷而改变，文件列表也不会和同名文字互相误判。
+    let (content_hash, summary) = if !files.is_empty() {
+        let paths: Vec<PathBuf> = files.iter().map(|file| file.path.clone()).collect();
+        let names: Vec<String> = files.iter().map(|file| file.name.clone()).collect();
+        (content_hash_files(&paths), summary_for_files(&names))
+    } else {
+        match (&text, image) {
+            (Some(text), _) => (content_hash_text(text), summary_for_text(text)),
+            (None, Some(image)) => (content_hash_image(&image.bytes), summary_for_image(image)),
+            (None, None) => return None,
+        }
     };
 
     Some(ClipboardEvent {
@@ -295,20 +346,12 @@ pub fn event_from_capture(
         summary,
         text,
         formats,
-        attachments: attachment.into_iter().collect(),
+        attachments,
         payloads,
         source: capture.source.clone(),
         pinned: false,
         copies: 1,
     })
-}
-
-/// 生成一个新的附件标识。
-pub fn new_attachment_id() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
-    format!("att-{:x}-{counter:x}", now_ms())
 }
 
 /// 附件在历史里的显示名。
@@ -493,6 +536,45 @@ pub fn content_hash_text(text: &str) -> String {
     format!("text:{hash:016x}")
 }
 
+/// 文件列表的去重键。
+///
+/// 与 [`content_hash_text`] 用同一套 FNV-1a 64，但**前缀是 `files:`**，并且按顺序把每个
+/// 路径和长度都混进来：同样的文字与同样的文件列表不会互相误判成同一条历史
+/// （spec「去重不跨类型误判」）。路径之间夹一个 0 字节，`["ab","c"]` 与 `["a","bc"]`
+/// 不会算出同一个键。
+pub fn content_hash_files(paths: &[PathBuf]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for path in paths {
+        mix(path.to_string_lossy().as_bytes());
+        mix(&[0]);
+    }
+    format!("files:{hash:016x}")
+}
+
+/// 由文件名称生成可读摘要；名称全部保留到截断为止，便于在结果里按名称检索。
+pub fn summary_for_files(names: &[String]) -> String {
+    if names.is_empty() {
+        return "（空文件列表）".to_string();
+    }
+    let joined = if names.len() == 1 {
+        names[0].clone()
+    } else {
+        format!("{} 个文件：{}", names.len(), names.join("、"))
+    };
+    if joined.chars().count() <= SUMMARY_MAX_CHARS {
+        return joined;
+    }
+    let mut summary: String = joined.chars().take(SUMMARY_MAX_CHARS).collect();
+    summary.push('…');
+    summary
+}
+
 /// 由文字生成可读摘要：折叠空白、截断到 [`SUMMARY_MAX_CHARS`]。
 pub fn summary_for_text(text: &str) -> String {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -585,6 +667,252 @@ pub fn describe_age(captured_at_ms: i64, now: i64) -> String {
     }
 }
 
+/// 生成一个附件标识（图片、文件副本共用一套前缀）。
+pub fn new_attachment_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
+    format!("att-{:x}-{counter:x}", now_ms())
+}
+
+/// 单份本机副本的容量上限（一个文件）。
+pub const MAX_COPY_BYTES: u64 = 512 * 1024 * 1024;
+
+/// 本机副本占用的**总**容量上限（附件目录里的所有副本文件）。
+pub const MAX_COPY_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// 已保存副本记录其来源原文件的载荷角色。
+///
+/// 用载荷行（role 是字符串标签）而不是新增列：ticket 09 定下的 schema 不再迁移，
+/// 未知 role 在读写两侧都会降级成 [`PayloadRole::Other`]，将来也不会丢数据。
+pub const PAYLOAD_ROLE_FILE_SOURCE: &str = "file-source";
+
+/// 显式保存本机副本时的准确失败原因。每一种都必须能被用户看懂，不能都折成「失败」。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ClipboardCopyError {
+    #[error("找不到这条剪贴板历史或它的文件条目：{0}")]
+    NotFound(String),
+    #[error("「{0}」已经是本机副本，不需要再复制一次")]
+    AlreadySaved(String),
+    #[error("原文件已不存在或被移动：{0}")]
+    SourceMissing(PathBuf),
+    #[error("无法读取原文件「{path}」：{reason}")]
+    AccessFailed { path: PathBuf, reason: String },
+    #[error("不支持的文件类型（目录或特殊文件）：{0}")]
+    UnsupportedType(PathBuf),
+    #[error("文件 {bytes} 字节，超过单份副本上限 {limit} 字节")]
+    TooLarge { bytes: u64, limit: u64 },
+    #[error("本机副本已占用 {used} 字节，再加 {bytes} 字节会超过总上限 {limit} 字节")]
+    TotalLimitReached { used: u64, limit: u64, bytes: u64 },
+    #[error("复制中断：{reason}")]
+    CopyFailed { reason: String },
+    #[error("剪贴板历史存储失败：{0}")]
+    Storage(String),
+}
+
+/// 恢复文件列表时的失败原因。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ClipboardRestoreError {
+    #[error("「{0}」不是文件列表，没有可恢复的文件")]
+    NotAFileList(String),
+    #[error("这些文件已不可恢复：{names}（原文件已被移动或删除，且没有保存本机副本）", names = names.join("、"))]
+    Unrecoverable { names: Vec<String> },
+}
+
+/// 列表与预览里的一个文件条目。
+///
+/// `kind` 与 `recoverable` 一起回答两个不同的问题：**这是引用还是副本**，以及
+/// **现在还能不能恢复**。引用在原文件消失后必须如实显示不可恢复，而副本必须仍然可恢复。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardFileView {
+    pub attachment_id: String,
+    pub name: String,
+    /// 恢复时实际写进剪贴板的路径（引用＝原路径，副本＝原文件仍在时的原路径）。
+    pub path: PathBuf,
+    /// 副本记录的原文件路径；引用与未知类型为 `None`。
+    pub source_path: Option<PathBuf>,
+    /// 引用 / 已保存副本 / 未知附件类型。
+    pub kind: AttachmentKind,
+    pub mime: Option<String>,
+    pub bytes: u64,
+    /// 现在是否可以恢复。
+    pub recoverable: bool,
+    /// 不可恢复的中文原因；可恢复时为 `None`。
+    pub problem: Option<String>,
+}
+
+impl ClipboardFileView {
+    /// 面向用户的状态：引用、已保存副本，或未知类型。
+    pub fn kind_label_zh(&self) -> &'static str {
+        file_kind_label_zh(&self.kind)
+    }
+}
+
+/// 文件类附件的中文名。
+pub fn file_kind_label_zh(kind: &AttachmentKind) -> &'static str {
+    match kind {
+        AttachmentKind::FileReference => "引用",
+        AttachmentKind::FileCopy => "已保存副本",
+        AttachmentKind::Image => "图片",
+        AttachmentKind::Other { .. } => "未知附件",
+    }
+}
+
+/// 附件是否是**文件类**（引用或副本）。图片不算文件列表。
+pub fn is_file_attachment(attachment: &ClipboardAttachment) -> bool {
+    matches!(
+        attachment.kind,
+        AttachmentKind::FileReference | AttachmentKind::FileCopy
+    )
+}
+
+impl ClipboardEvent {
+    /// 这条事件里的文件格式（如果有）。
+    pub fn files_format(&self) -> Option<&ClipboardFormat> {
+        self.formats
+            .iter()
+            .find(|format| matches!(format, ClipboardFormat::Files { .. }))
+    }
+
+    /// 这条事件是否是文件列表。
+    pub fn is_file_list(&self) -> bool {
+        self.files_format().is_some()
+            || self
+                .attachments
+                .iter()
+                .any(|attachment| is_file_attachment(attachment))
+    }
+
+    /// 文件类附件，按存储顺序（引用与副本都算）。
+    pub fn file_attachments(&self) -> Vec<&ClipboardAttachment> {
+        self.attachments
+            .iter()
+            .filter(|attachment| is_file_attachment(attachment))
+            .collect()
+    }
+
+    /// 引用与已保存副本的数量。
+    pub fn file_counts(&self) -> (usize, usize) {
+        let references = self
+            .attachments
+            .iter()
+            .filter(|attachment| attachment.kind == AttachmentKind::FileReference)
+            .count();
+        let copies = self
+            .attachments
+            .iter()
+            .filter(|attachment| attachment.kind == AttachmentKind::FileCopy)
+            .count();
+        (references, copies)
+    }
+
+    /// 副本记录的原文件路径（由 `file-source` 载荷承载）。
+    pub fn attachment_source_path(&self, attachment: &ClipboardAttachment) -> Option<PathBuf> {
+        self.payloads
+            .iter()
+            .find(|payload| {
+                payload.role.tag() == PAYLOAD_ROLE_FILE_SOURCE
+                    && payload.attachment_id.as_deref() == Some(attachment.id.as_str())
+            })
+            .and_then(|payload| payload.inline.clone())
+            .map(PathBuf::from)
+    }
+
+    /// 现在能不能恢复，以及恢复时会用哪个路径。
+    fn file_state(&self, attachment: &ClipboardAttachment) -> (Option<PathBuf>, Option<String>) {
+        let source = self.attachment_source_path(attachment);
+        match attachment.kind {
+            AttachmentKind::FileReference => {
+                if attachment.path.is_file() {
+                    (Some(attachment.path.clone()), None)
+                } else if attachment.path.exists() {
+                    (
+                        None,
+                        Some(format!(
+                            "不支持的文件类型（目录或特殊文件）：{}",
+                            attachment.path.display()
+                        )),
+                    )
+                } else {
+                    (
+                        None,
+                        Some(format!("原文件已不存在：{}", attachment.path.display())),
+                    )
+                }
+            }
+            AttachmentKind::FileCopy => {
+                // 原文件还在就用原路径（避免粘贴出一份重复文件）；原文件没了才用副本。
+                if let Some(source) = source.as_ref().filter(|source| source.is_file()) {
+                    return (Some(source.clone()), None);
+                }
+                if attachment.path.is_file() {
+                    (Some(attachment.path.clone()), None)
+                } else {
+                    (
+                        None,
+                        Some(format!("本机副本已丢失：{}", attachment.path.display())),
+                    )
+                }
+            }
+            _ => (None, Some("未知的附件类型，无法恢复".to_string())),
+        }
+    }
+
+    /// 列表与预览用的文件条目（包含不可恢复的条目，状态如实）。
+    pub fn file_views(&self) -> Vec<ClipboardFileView> {
+        self.attachments
+            .iter()
+            .filter(|attachment| {
+                is_file_attachment(attachment)
+                    || matches!(attachment.kind, AttachmentKind::Other { .. })
+            })
+            .map(|attachment| {
+                let (path, problem) = self.file_state(attachment);
+                ClipboardFileView {
+                    attachment_id: attachment.id.clone(),
+                    name: attachment.name.clone(),
+                    path: path.unwrap_or_else(|| attachment.path.clone()),
+                    source_path: self.attachment_source_path(attachment),
+                    kind: attachment.kind.clone(),
+                    mime: attachment.mime.clone(),
+                    bytes: attachment.bytes,
+                    recoverable: problem.is_none(),
+                    problem,
+                }
+            })
+            .collect()
+    }
+
+    /// 恢复用的文件列表：**整份**列表要么全部可恢复，要么如实失败。
+    ///
+    /// 只要有一个引用或副本不可用就整体失败：往剪贴板放一份缺了文件的列表，目标应用
+    /// 会静默地少粘贴一个文件，那是比明确报错更糟的结果（spec「不伪造成功」）。
+    pub fn restore_paths(&self) -> Result<Vec<PathBuf>, ClipboardRestoreError> {
+        let files = self.file_attachments();
+        if files.is_empty() {
+            return Err(ClipboardRestoreError::NotAFileList(self.summary.clone()));
+        }
+        let mut paths = Vec::with_capacity(files.len());
+        let mut missing = Vec::new();
+        for attachment in files {
+            let (path, problem) = self.file_state(attachment);
+            match path {
+                Some(path) => paths.push(path),
+                None => missing.push(format!(
+                    "{}（{}）",
+                    attachment.name,
+                    problem.unwrap_or_else(|| "不可恢复".to_string())
+                )),
+            }
+        }
+        if !missing.is_empty() {
+            return Err(ClipboardRestoreError::Unrecoverable { names: missing });
+        }
+        Ok(paths)
+    }
+}
+
 /// 剪贴板历史**管理操作**（置顶、删除、清空）的失败原因，面向用户的中文。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ClipboardActionError {
@@ -592,8 +920,10 @@ pub enum ClipboardActionError {
     NotFound(String),
     #[error("{0}")]
     Storage(String),
+    /// 显式保存本机副本失败（容量、访问、中断等）。
+    #[error("{0}")]
+    Copy(#[from] ClipboardCopyError),
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ClipboardStoreError {
     #[error("剪贴板历史存储不可用：{0}")]
@@ -879,12 +1209,18 @@ impl ClipboardStore {
             let mut events = Vec::new();
             match &pattern {
                 Some(pattern) => {
+                    // 文件名称存在 `clipboard_formats.names`（JSON 数组）里，摘要可能因为
+                    // 截断而看不到后面的文件，因此名称**单独**参与检索（ticket 12）。
                     let sql = format!(
                         "SELECT {EVENT_COLUMNS} FROM clipboard_events
                          WHERE text_content LIKE ?1 ESCAPE '\\'
                             OR summary LIKE ?1 ESCAPE '\\'
                             OR source_app_id LIKE ?1 ESCAPE '\\'
                             OR source_title LIKE ?1 ESCAPE '\\'
+                            OR EXISTS (
+                                 SELECT 1 FROM clipboard_formats fmt
+                                 WHERE fmt.event_id = clipboard_events.id
+                                   AND fmt.names LIKE ?1 ESCAPE '\\')
                          ORDER BY pinned DESC, captured_at DESC, rowid DESC LIMIT ?2"
                     );
                     let mut stmt = conn.prepare(&sql)?;
@@ -952,6 +1288,197 @@ impl ClipboardStore {
         // 附件文件随条目一起回收。
         let _ = self.reclaim_attachment_files();
         Ok(removed)
+    }
+
+    /// 公开的孤儿附件回收：删除一条历史之后由宿主调用（spec「历史删除与过期清理同步
+    /// 回收不再引用的附件」）。
+    ///
+    /// 只删除**本机附件目录内**、且没有任何附件行（任何事件）指向的文件：两份历史共享
+    /// 同一个副本文件时，删掉其中一条不会把另一条还在用的副本删掉。
+    pub fn reclaim_orphan_files(&self) -> Result<usize, ClipboardStoreError> {
+        self.reclaim_attachment_files()
+    }
+
+    /// 一个原文件对应的副本落点（去重键 + 安全文件名）。
+    ///
+    /// 对调用方（宿主）没有用，公开只是为了测试能构造「复制中断」这种真实故障：
+    /// 在落点上放一个同名目录，原子改名就会失败并如实报「复制中断」。
+    #[doc(hidden)]
+    pub fn file_copy_target_path(&self, source: &Path, bytes: u64, name: &str) -> PathBuf {
+        self.attachments_dir().join(format!(
+            "{}-{}",
+            copy_key(source, bytes),
+            safe_file_name(name)
+        ))
+    }
+
+    /// 附件目录里所有副本文件占用的字节数（共享的副本只算一次）。
+    pub fn copy_dir_bytes(&self) -> Result<u64, ClipboardStoreError> {
+        let dir = self.attachments_dir();
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => {
+                return Err(ClipboardStoreError::Unavailable(format!(
+                    "无法读取附件目录 {}：{error}",
+                    dir.display()
+                )))
+            }
+        };
+        let mut total = 0u64;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                total = total.saturating_add(entry.metadata().map(|meta| meta.len()).unwrap_or(0));
+            }
+        }
+        Ok(total)
+    }
+
+    /// 为一个**文件引用**显式保存本机副本（spec「用户可以明确保存受容量限制的本机副本」）。
+    ///
+    /// 语义逐条对应 spec：
+    ///
+    /// - **不自动**：只有调用方显式要求才会复制，捕获路径永远不会调用它；
+    /// - **不动原文件**：只从原文件读，从不移动或删除它；
+    /// - **容量受限**：单份超过 [`MAX_COPY_BYTES`] 或总量超过 [`MAX_COPY_TOTAL_BYTES`]
+    ///   时如实拒绝，并在失败原因里给出数字；
+    /// - **去重共享**：副本路径由「原文件路径 + 大小」决定，同一原文件被两条历史各保存
+    ///   一次时**复用同一个文件**，因此删除其中一条不能删掉另一条还在用的副本；
+    /// - **中断可恢复**：先写临时文件再原子改名，任何一步失败都清掉临时文件并如实报
+    ///   「复制中断」，不会留下半份副本，也不会留下半行记录。
+    pub fn save_file_copy(
+        &self,
+        event_id: &str,
+        attachment_id: &str,
+        per_file_limit: u64,
+        total_limit: u64,
+    ) -> Result<ClipboardAttachment, ClipboardCopyError> {
+        let event = self
+            .find(event_id)
+            .map_err(|error| ClipboardCopyError::Storage(error.to_string()))?
+            .ok_or_else(|| ClipboardCopyError::NotFound(event_id.to_string()))?;
+        let attachment = event
+            .attachments
+            .iter()
+            .find(|attachment| attachment.id == attachment_id)
+            .cloned()
+            .ok_or_else(|| ClipboardCopyError::NotFound(attachment_id.to_string()))?;
+        if attachment.kind == AttachmentKind::FileCopy {
+            return Err(ClipboardCopyError::AlreadySaved(attachment.name));
+        }
+        if !is_file_attachment(&attachment) {
+            return Err(ClipboardCopyError::UnsupportedType(attachment.path));
+        }
+        let source = attachment.path.clone();
+        let metadata = std::fs::metadata(&source).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                ClipboardCopyError::SourceMissing(source.clone())
+            } else {
+                ClipboardCopyError::AccessFailed {
+                    path: source.clone(),
+                    reason: error.to_string(),
+                }
+            }
+        })?;
+        if !metadata.is_file() {
+            return Err(ClipboardCopyError::UnsupportedType(source));
+        }
+        let bytes = metadata.len();
+        if per_file_limit > 0 && bytes > per_file_limit {
+            return Err(ClipboardCopyError::TooLarge {
+                bytes,
+                limit: per_file_limit,
+            });
+        }
+        let dir = self.attachments_dir();
+        std::fs::create_dir_all(&dir).map_err(|error| {
+            ClipboardCopyError::Storage(format!("无法创建附件目录 {}：{error}", dir.display()))
+        })?;
+        let target = dir.join(format!(
+            "{}-{}",
+            copy_key(&source, bytes),
+            safe_file_name(&attachment.name)
+        ));
+        if !target.is_file() {
+            let used = self
+                .copy_dir_bytes()
+                .map_err(|error| ClipboardCopyError::Storage(error.to_string()))?;
+            if total_limit > 0 && used.saturating_add(bytes) > total_limit {
+                return Err(ClipboardCopyError::TotalLimitReached {
+                    used,
+                    limit: total_limit,
+                    bytes,
+                });
+            }
+            copy_atomically(&source, &target, &dir)?;
+        }
+        let copy = ClipboardAttachment {
+            // 引用行**原地**变成副本行：一个文件在列表里只出现一次，状态从「引用」
+            // 变成「已保存副本」，不会同时显示一条不可恢复的引用和一条可恢复的副本。
+            id: attachment.id.clone(),
+            kind: AttachmentKind::FileCopy,
+            path: target,
+            name: attachment.name.clone(),
+            mime: attachment.mime.clone(),
+            bytes,
+            depends_on_source: false,
+            created_at_ms: now_ms(),
+        };
+        self.replace_reference_with_copy(event_id, &copy, &source)
+            .map_err(|error| ClipboardCopyError::Storage(error.to_string()))?;
+        Ok(copy)
+    }
+
+    /// 把一行文件引用改写成已保存副本，并记录它对应的原文件路径。
+    ///
+    /// 在同一个事务里完成：不会出现「行改了一半」或「副本没有来源记录」的中间状态。
+    fn replace_reference_with_copy(
+        &self,
+        event_id: &str,
+        copy: &ClipboardAttachment,
+        source: &Path,
+    ) -> Result<(), ClipboardStoreError> {
+        self.with_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let ordinal: i64 = tx.query_row(
+                "SELECT ordinal FROM clipboard_attachments WHERE id = ?1 AND event_id = ?2",
+                params![copy.id, event_id],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "UPDATE clipboard_attachments
+                    SET kind = ?1, path = ?2, name = ?3, mime = ?4, bytes = ?5,
+                        depends_on_source = 0, created_at = ?6
+                  WHERE id = ?7 AND event_id = ?8",
+                params![
+                    copy.kind.tag(),
+                    copy.path.to_string_lossy(),
+                    copy.name,
+                    copy.mime,
+                    copy.bytes as i64,
+                    copy.created_at_ms,
+                    copy.id,
+                    event_id,
+                ],
+            )?;
+            tx.execute(
+                "INSERT OR REPLACE INTO clipboard_payloads
+                     (event_id, role, ordinal, inline_text, attachment_id, mime, bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    event_id,
+                    PAYLOAD_ROLE_FILE_SOURCE,
+                    ordinal,
+                    source.to_string_lossy(),
+                    copy.id,
+                    Option::<String>::None,
+                    copy.bytes as i64,
+                ],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     /// 回收过期条目与超容量条目，并回收不再被引用的附件文件。
@@ -1076,6 +1603,76 @@ impl ClipboardStore {
             }
         }
         Ok(removed)
+    }
+}
+
+/// 副本文件名的去重键：原文件路径 + 观察到的字节数。
+///
+/// 同一原文件保存两次会得到同一个键，因此副本文件被复用（而不是复制两份）；原文件内容
+/// 变了（大小不同）就是另一份副本。键只影响本机文件名，不参与历史条目的去重。
+fn copy_key(path: &Path, bytes: u64) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |data: &[u8]| {
+        for byte in data {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    mix(path.to_string_lossy().as_bytes());
+    mix(&[0]);
+    mix(&bytes.to_le_bytes());
+    format!("{hash:016x}")
+}
+
+/// 把用户文件名变成安全的单层文件名：去掉路径分隔符与控制字符，非 ASCII 原样保留。
+fn safe_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|character| {
+            if character == '/' || character == '\\' || character.is_control() {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim_matches(['.', ' ']).to_string();
+    if cleaned.is_empty() {
+        return "file".to_string();
+    }
+    cleaned.chars().take(120).collect()
+}
+
+/// 原子复制：先写同目录下的临时文件，成功后再改名。
+///
+/// 任何一步失败都删掉临时文件并返回 [`ClipboardCopyError::CopyFailed`]（「复制中断」），
+/// 不留下半份副本；`rename` 在同一目录内是原子的，因此不会出现「文件名存在但内容不全」。
+fn copy_atomically(source: &Path, target: &Path, dir: &Path) -> Result<(), ClipboardCopyError> {
+    use std::io::{Read, Write};
+    let temp = dir.join(format!(".part-{}-{}", std::process::id(), now_ms()));
+    let result = (|| -> std::io::Result<()> {
+        let mut input = std::fs::File::open(source)?;
+        let mut output = std::fs::File::create(&temp)?;
+        let mut buffer = vec![0u8; 64 * 1024];
+        loop {
+            let read = input.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..read])?;
+        }
+        output.sync_all()?;
+        drop(output);
+        std::fs::rename(&temp, target)
+    })();
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(ClipboardCopyError::CopyFailed {
+                reason: format!("写入 {} 失败：{error}", target.display()),
+            })
+        }
     }
 }
 
@@ -1883,6 +2480,24 @@ impl ClipboardRuntime {
         let hash = content_hash_text(text);
         state.own_writes.push(hash);
         // 只保留最近若干次：抑制窗口不需要无限长，太多会误伤用户随后真的复制同样内容。
+        const MAX_REMEMBERED: usize = 8;
+        if state.own_writes.len() > MAX_REMEMBERED {
+            let excess = state.own_writes.len() - MAX_REMEMBERED;
+            state.own_writes.drain(..excess);
+        }
+    }
+
+    /// 登记一次由 Flashcast 自己发起的**文件列表**写入（与 [`Self::note_own_write`] 对称）。
+    ///
+    /// 兜底一层用 [`content_hash_files`]，与 `event_from_capture` 算出的键完全一致，
+    /// 因此适配层没有抑制成功时宿主仍然不会把自己写入的文件列表收成新条目。
+    pub fn note_own_write_files(&self, paths: &[std::path::PathBuf]) {
+        self.watcher.note_own_write_files(paths);
+        if paths.is_empty() {
+            return;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.own_writes.push(content_hash_files(paths));
         const MAX_REMEMBERED: usize = 8;
         if state.own_writes.len() > MAX_REMEMBERED {
             let excess = state.own_writes.len() - MAX_REMEMBERED;

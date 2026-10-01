@@ -582,6 +582,48 @@ pub struct ClipboardEntryView {
     pub image_data_url: Option<String>,
     /// 图片的类型与尺寸，例如 `PNG 1920×1080`；非图片条目为 `null`。
     pub image_size: Option<String>,
+    /// 文件类附件（引用与已保存副本），按存储顺序。非文件条目为空。
+    ///
+    /// 状态按**当前**文件系统计算，不是捕获时的快照：原文件删掉后再次读取这里就是
+    /// 「不可恢复」（spec「原文件失效时引用显示不可恢复状态」）。
+    pub files: Vec<ClipboardFileView>,
+    /// 引用数与已保存副本数（与结果副标题口径一致）。
+    pub references: usize,
+    pub file_copies: usize,
+}
+
+/// 展示用的文件条目：名称、类型、引用/副本、现在是否能恢复。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardFileView {
+    /// 显式保存副本时用它定位这一条。
+    pub attachment_id: String,
+    pub name: String,
+    /// 结构化的附件种类：UI 据此区分引用与已保存副本。
+    pub kind: flashcast_core::AttachmentKind,
+    /// 中文名（引用 / 已保存副本 / 图片 / 未知附件）。
+    pub kind_label: String,
+    pub mime: Option<String>,
+    pub bytes: u64,
+    /// 现在是否可以恢复。
+    pub recoverable: bool,
+    /// 不可恢复的中文原因；可恢复时为 null。
+    pub problem: Option<String>,
+}
+
+impl From<flashcast_core::ClipboardFileView> for ClipboardFileView {
+    fn from(view: flashcast_core::ClipboardFileView) -> Self {
+        Self {
+            attachment_id: view.attachment_id,
+            name: view.name,
+            kind_label: flashcast_core::file_kind_label_zh(&view.kind).to_string(),
+            kind: view.kind,
+            mime: view.mime,
+            bytes: view.bytes,
+            recoverable: view.recoverable,
+            problem: view.problem,
+        }
+    }
 }
 
 /// 剪贴板历史面板需要的全部状态：宿主状态 + 当前条目列表。
@@ -621,6 +663,13 @@ fn clipboard_state_view(state: &AppState) -> ClipboardStateView {
                 .image_attachment()
                 .and_then(|attachment| thumbnail_data_url(&attachment.path)),
             image_size: event.image_label(),
+            files: event
+                .file_views()
+                .into_iter()
+                .map(ClipboardFileView::from)
+                .collect(),
+            references: event.file_counts().0,
+            file_copies: event.file_counts().1,
         })
         .collect();
     ClipboardStateView {
@@ -696,6 +745,24 @@ pub fn clear_clipboard_history(state: State<'_, AppState>) -> Result<ClipboardSt
     state
         .host
         .clear_clipboard_history()
+        .map_err(|error| error.to_string())?;
+    Ok(clipboard_state_view(&state))
+}
+
+/// 用户**显式**为一个原文件保存受容量限制的本机副本（ticket 12）。
+///
+/// 这是唯一会复制原文件内容的入口：捕获路径永远不会自动复制。原文件只会被读取，
+/// 不会被移动或删除；失败时把宿主给出的准确原因（原文件失效、访问失败、超过单份或
+/// 总容量、复制中断、不支持的类型）原样带回 UI。
+#[tauri::command(rename_all = "snake_case")]
+pub fn save_clipboard_file_copy(
+    state: State<'_, AppState>,
+    id: String,
+    attachment_id: String,
+) -> Result<ClipboardStateView, String> {
+    state
+        .host
+        .save_clipboard_file_copy(&id, &attachment_id)
         .map_err(|error| error.to_string())?;
     Ok(clipboard_state_view(&state))
 }

@@ -428,6 +428,17 @@ async function richClipboardIndex(page) {
   );
 }
 
+/** 等到结果列表里出现图片（副标题标注「图片」）条目：条数由样例决定，不写死。 */
+async function waitForImageClipboardRow(page) {
+  await page.waitForFunction(
+    (selector) =>
+      [...document.querySelectorAll(selector)].some((row) =>
+        (row.querySelector(".result-subtitle")?.textContent ?? "").includes("图片"),
+      ),
+    ROW,
+  );
+}
+
 /**
  * 图片剪贴板条目在结果列表里的下标（副标题标注「图片」格式）。
  *
@@ -438,6 +449,17 @@ async function imageClipboardIndex(page) {
     nodes.findIndex((node) =>
       (node.querySelector(".result-subtitle")?.textContent ?? "").includes("图片"),
     ),
+  );
+}
+
+/** 等到结果列表里出现富文本（HTML）条目：条数由样例决定，不写死。 */
+async function waitForRichClipboardRow(page) {
+  await page.waitForFunction(
+    (selector) =>
+      [...document.querySelectorAll(selector)].some((row) =>
+        (row.querySelector(".result-subtitle")?.textContent ?? "").includes("HTML"),
+      ),
+    ROW,
   );
 }
 
@@ -471,6 +493,20 @@ async function selectRow(page, index) {
     );
     at = expected;
   }
+}
+
+/**
+ * 结果列表里标题包含 `needle` 的条目下标（键盘选中要按这个次数移动）。
+ *
+ * 与 [`richClipboardIndex`] 同理：鼠标点击会执行条目，选中只能走键盘。
+ */
+async function clipboardRowIndex(page, needle) {
+  return page.$$eval(
+    ROW,
+    (nodes, needle) =>
+      nodes.findIndex((node) => (node.textContent ?? "").includes(needle)),
+    needle,
+  );
 }
 
 async function main() {
@@ -2514,7 +2550,12 @@ async function main() {
       const subtitles = await page.$$eval(ROW, (nodes) =>
         nodes.map((node) => node.querySelector(".result-subtitle")?.textContent ?? ""),
       );
-      assert(zh.length === 3, `模拟历史应有 3 条（含 1 条图片），实际 ${zh.length}`);
+      // 模拟历史里既有文字条目也有文件条目（ticket 12）：这里只要求「范围内都是历史条目」，
+      // 不把条数写死——条数是样例数据，不是这条检查要回答的问题。
+      assert(
+        zh.length >= 2 && zh.every((row) => row.kind === "clipboardEntry"),
+        `「剪贴板」范围应全是历史条目，实际 ${zh.length} 条：${zh.map((r) => r.title).join("/")}`,
+      );
       assert(
         zh[0].title.includes("example.com/report"),
         `置顶条目必须排在最前，实际「${zh[0].title}」`,
@@ -2759,7 +2800,7 @@ async function main() {
         window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
       );
       await page.fill(INPUT, "剪贴板");
-      await waitForRowCount(page, 3);
+      await waitForImageClipboardRow(page);
       const imageIndex = await imageClipboardIndex(page);
       assert(imageIndex >= 0, "模拟历史里必须能找到图片条目");
 
@@ -2819,7 +2860,7 @@ async function main() {
         window.__flashcastMock.lastPaste = null;
       });
       await page.fill(INPUT, "剪贴板");
-      await waitForRowCount(page, 3);
+      await waitForImageClipboardRow(page);
       const imageIndex = await imageClipboardIndex(page);
       assert(imageIndex >= 0, "模拟历史里必须能找到图片条目");
 
@@ -2843,7 +2884,7 @@ async function main() {
         window.__flashcastMock.lastPaste = null;
       });
       await page.fill(INPUT, "剪贴板");
-      await waitForRowCount(page, 3);
+      await waitForImageClipboardRow(page);
       await selectRow(page, imageIndex);
       await page.keyboard.press("Enter");
       const fallback = await page.evaluate(() => ({
@@ -2939,7 +2980,7 @@ async function main() {
         window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
       );
       await page.fill(INPUT, "剪贴板");
-      await waitForRowCount(page, 3);
+      await waitForRichClipboardRow(page);
 
       // 鼠标点击会**执行**条目，选中必须走键盘（与真实键盘操作一致）。
       const richIndex = await richClipboardIndex(page);
@@ -3007,7 +3048,7 @@ async function main() {
         window.__flashcastMock.lastPaste = null;
       });
       await page.fill(INPUT, "剪贴板");
-      await waitForRowCount(page, 3);
+      await waitForRichClipboardRow(page);
       const richIndex = await richClipboardIndex(page);
       assert(richIndex >= 0, "必须能找到富文本条目");
       await page.click(INPUT);
@@ -3030,6 +3071,209 @@ async function main() {
       }
       const file = await shot(page, "77-clipboard-richtext-paste.png");
       return `富文本条目粘贴纯文本到「${pasted.target}」，截图 ${file}`;
+    });
+
+    // 79. 文件列表条目：名称、类型与引用计数在结果里可见（视频按普通文件处理）。
+    await check("文件列表条目在结果里显示名称、类型与引用计数", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+      await page.fill(INPUT, "剪贴板");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some((row) =>
+            (row.textContent ?? "").includes("3 个文件"),
+          ),
+        ROW,
+      );
+      const listed = await page.$$eval(ROW, (nodes) =>
+        nodes.map((node) => ({
+          title: node.querySelector(".result-title")?.textContent ?? "",
+          subtitle: node.querySelector(".result-subtitle")?.textContent ?? "",
+        })),
+      );
+      const multi = listed.find((row) => row.title.includes("3 个文件"));
+      assert(multi !== undefined, `必须有多文件条目：${listed.map((r) => r.title).join(" | ")}`);
+      for (const name of ["报告 草稿.pdf", "照片 一.png", "视频 片段.mp4"]) {
+        assert(multi.title.includes(name), `摘要要带文件名「${name}」：${multi.title}`);
+      }
+      assert(multi.subtitle.includes("文件"), `副标题要标注文件格式：${multi.subtitle}`);
+      assert(multi.subtitle.includes("3 个引用"), `副标题要给出引用数：${multi.subtitle}`);
+      const unrecoverable = listed.find((row) => row.title.includes("已归档 说明.txt"));
+      assert(unrecoverable !== undefined, "样例里应有一个原文件已消失的引用");
+      const file = await shot(page, "79-clipboard-file-list.png");
+      return `「${multi.title}」副标题「${multi.subtitle}」，截图 ${file}`;
+    });
+
+    // 80. 设置页文件行与显式保存副本：只有用户点击才会复制原文件内容。
+    await check("设置页可为一个文件引用显式保存本机副本", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      const entry = '[data-testid="clipboard-item"][data-files="3"]';
+      await page.waitForSelector(entry);
+
+      const names = await page.$$eval(`${entry} [data-testid="clipboard-file"]`, (nodes) =>
+        nodes.map((node) => node.textContent ?? ""),
+      );
+      assert(names.length === 3, `多文件条目应有 3 行文件，实际 ${names.length}`);
+      for (const name of ["报告 草稿.pdf", "照片 一.png", "视频 片段.mp4"]) {
+        assert(
+          names.some((text) => text.includes(name)),
+          `文件行缺少「${name}」：${names.join(" | ")}`,
+        );
+      }
+      const kinds = await page.$$eval(`${entry} [data-testid="clipboard-file-kind"]`, (nodes) =>
+        nodes.map((node) => node.textContent ?? ""),
+      );
+      assert(
+        kinds.length === 3 && kinds.every((kind) => kind === "引用"),
+        `捕获时默认全是引用（副本只由用户显式保存）：${kinds.join("/")}`,
+      );
+      const saveButtons = await page
+        .locator(`${entry} [data-testid="clipboard-save-copy"]`)
+        .count();
+      assert(saveButtons === 3, `每个引用都应该有保存入口，实际 ${saveButtons}`);
+
+      await page.click(
+        `${entry} [data-testid="clipboard-file"][data-kind="fileReference"] [data-testid="clipboard-save-copy"]`,
+      );
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some(
+            (node) => node.dataset.kind === "fileCopy",
+          ),
+        `${entry} [data-testid="clipboard-file"]`,
+      );
+      const after = await page.$eval(`${entry} .theme-name`, (node) => node.textContent ?? "");
+      assert(
+        after.includes("2 个引用") && after.includes("1 个已保存副本"),
+        `保存后引用 / 副本计数必须如实更新：${after}`,
+      );
+      // 副本行不再提供「保存本机副本」，但引用行仍然提供。
+      const remaining = await page
+        .locator(`${entry} [data-testid="clipboard-save-copy"]`)
+        .count();
+      assert(remaining === 2, `已保存副本不得再要求保存一次，实际剩余 ${remaining} 个入口`);
+      const file = await shot(page, "80-settings-clipboard-file-copy.png");
+      return `3 个引用 → 保存 1 个副本后「${after}」，截图 ${file}`;
+    });
+
+    // 81. 原文件失效：引用如实显示不可恢复，已保存副本不受影响。
+    await check("原文件失效后引用显示不可恢复而副本仍可用", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      const entry = '[data-testid="clipboard-item"][data-files="3"]';
+      await page.waitForSelector(entry);
+
+      // 先给「照片 一.png」保存本机副本，再让原文件消失。
+      await page.click(
+        `${entry} [data-testid="clipboard-file"]:has-text("照片 一.png") [data-testid="clipboard-save-copy"]`,
+      );
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some(
+            (node) => node.dataset.kind === "fileCopy",
+          ),
+        `${entry} [data-testid="clipboard-file"]`,
+      );
+      await page.evaluate(() => {
+        window.__flashcastMock.simulateClipboardFileMissing("照片 一.png");
+        window.__flashcastMock.simulateClipboardFileMissing("报告 草稿.pdf");
+      });
+      // 让界面拿到一份新的状态快照（置顶开关会回传完整状态）。
+      await page.click(`${entry} [data-testid="clipboard-pin"]`);
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some(
+            (node) => node.dataset.recoverable === "false",
+          ),
+        `${entry} [data-testid="clipboard-file"]`,
+      );
+
+      const rows = await page.$$eval(`${entry} [data-testid="clipboard-file"]`, (nodes) =>
+        nodes.map((node) => ({
+          name: node.querySelector(".theme-name")?.textContent ?? "",
+          kind: node.dataset.kind,
+          recoverable: node.dataset.recoverable,
+          hasBadge: node.querySelector('[data-testid="clipboard-file-unrecoverable"]') !== null,
+          hasSave: node.querySelector('[data-testid="clipboard-save-copy"]') !== null,
+        })),
+      );
+      const gone = rows.find((row) => row.name.includes("报告 草稿.pdf"));
+      const copy = rows.find((row) => row.name.includes("照片 一.png"));
+      assert(
+        gone?.recoverable === "false" && gone.hasBadge && !gone.hasSave,
+        `原文件消失的引用必须显示不可恢复且不再提供保存入口：${JSON.stringify(gone)}`,
+      );
+      assert(
+        gone.name.includes("不可恢复") && gone.name.includes("原文件已不存在"),
+        `不可恢复的原因要写清楚：${gone.name}`,
+      );
+      assert(
+        copy?.kind === "fileCopy" && copy.recoverable === "true",
+        `副本必须不受原文件消失影响：${JSON.stringify(copy)}`,
+      );
+      const file = await shot(page, "81-settings-clipboard-unrecoverable.png");
+      return `引用不可恢复、副本仍可用（${rows.filter((r) => r.recoverable === "false").length} 个失效），截图 ${file}`;
+    });
+
+    // 82. 恢复文件列表：写进剪贴板的是准确的路径列表，绝不走文字路径。
+    await check("恢复文件列表时写入准确的路径列表", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() => {
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true);
+        window.__flashcastMock.setAutoPasteSupported(true);
+        window.__flashcastMock.lastCopied = null;
+        window.__flashcastMock.lastCopiedFiles = null;
+        window.__flashcastMock.lastPaste = null;
+      });
+      await page.fill(INPUT, "剪贴板");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some((row) =>
+            (row.textContent ?? "").includes("3 个文件"),
+          ),
+        ROW,
+      );
+      const index = await clipboardRowIndex(page, "3 个文件");
+      assert(index >= 0, "必须能找到多文件条目");
+      await page.click(INPUT);
+      for (let step = 0; step < index; step += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => window.__flashcastMock.lastPaste !== null);
+      const pasted = await page.evaluate(() => ({
+        files: window.__flashcastMock.lastCopiedFiles,
+        text: window.__flashcastMock.lastCopied,
+        target: window.__flashcastMock.lastPaste.target,
+        sequence: window.__flashcastMock.lastPaste.sequence.join(" → "),
+      }));
+      assert(
+        JSON.stringify(pasted.files) ===
+          JSON.stringify(["报告 草稿.pdf", "照片 一.png", "视频 片段.mp4"]),
+        `恢复的必须是同一份文件列表（含空格、非 ASCII 与视频）：${JSON.stringify(pasted.files)}`,
+      );
+      assert(pasted.text === null, `文件列表不得被当成文字恢复：${pasted.text}`);
+      assert(
+        pasted.sequence === "copied → windowHidden → restored → pasted",
+        `文件列表复用 ticket 08 的粘贴路径：${pasted.sequence}`,
+      );
+      const file = await shot(page, "82-clipboard-files-paste.png");
+      return `回车把 3 个文件写进剪贴板并粘贴到「${pasted.target}」，截图 ${file}`;
     });
 
     const failed = results.filter((result) => !result.ok).length;

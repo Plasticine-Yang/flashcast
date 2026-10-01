@@ -156,6 +156,8 @@ interface Props {
   onPinClipboardEntry: (id: string, pinned: boolean) => void;
   onDeleteClipboardEntry: (id: string) => void;
   onClearClipboardHistory: () => void;
+  /** 显式为某个文件引用保存本机副本（ticket 12）。 */
+  onSaveClipboardFileCopy: (id: string, attachmentId: string) => void;
 }
 
 /**
@@ -216,6 +218,7 @@ export function SettingsScreen({
   onPinClipboardEntry,
   onDeleteClipboardEntry,
   onClearClipboardHistory,
+  onSaveClipboardFileCopy,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
@@ -751,6 +754,7 @@ export function SettingsScreen({
           onPin={onPinClipboardEntry}
           onDelete={onDeleteClipboardEntry}
           onClear={onClearClipboardHistory}
+          onSaveCopy={onSaveClipboardFileCopy}
         />
 
         <MemoPanel

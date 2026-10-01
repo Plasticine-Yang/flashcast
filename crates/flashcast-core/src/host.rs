@@ -1573,30 +1573,11 @@ impl Host {
             }
         }
         // 剪贴板历史：预览按**当前**存储内容返回，列表快照可能是上一次查询的。
+        // 文件列表的状态还要按**当前文件系统**重算：原文件被删掉之后，引用必须显示
+        // 不可恢复，而不是沿用捕获时的快照。
         if let Some(event_id) = crate::clipboard::event_id_from_item_id(item_id) {
             if let Ok(Some(event)) = self.clipboard.store().find(event_id) {
-                // 图片（ticket 10）：按需展开完整图片。附件文件已经不在时如实说明，
-                // 而不是给 UI 一个必然加载失败的路径。
-                if let Some(attachment) = event.image_attachment() {
-                    if attachment.path.is_file() {
-                        return Some(Preview::Image {
-                            path: attachment.path.clone(),
-                        });
-                    }
-                    return Some(Preview::Text {
-                        title: Some(event.summary.clone()),
-                        body: format!(
-                            "图片附件已不在本机：{}\n它可能已被手动删除；历史条目本身仍然保留。",
-                            attachment.path.display()
-                        ),
-                    });
-                }
-                return Some(Preview::Text {
-                    title: Some(event.summary.clone()),
-                    body: event
-                        .text
-                        .unwrap_or_else(|| "（该条目没有可显示的文字内容）".to_string()),
-                });
+                return Some(crate::plugins::clipboard::clipboard_preview(&event));
             }
         }
         self.item_by_id(item_id).map(|item| item.preview)
@@ -1809,8 +1790,60 @@ impl Host {
     /// 删除一条历史（同时回收不再被引用的附件）。
     pub fn delete_clipboard_entry(&self, id: &str) -> Result<(), ClipboardActionError> {
         match self.clipboard.store().delete(id) {
-            Ok(true) => Ok(()),
+            Ok(true) => {
+                // 删除之后同步回收不再被任何条目引用的附件文件。两份历史共享同一个
+                // 副本文件时，这里不会删掉另一条还在用的那份（按路径判断引用）。
+                let _ = self.clipboard.store().reclaim_orphan_files();
+                Ok(())
+            }
             Ok(false) => Err(ClipboardActionError::NotFound(id.to_string())),
+            Err(error) => Err(ClipboardActionError::Storage(error.to_string())),
+        }
+    }
+
+    /// 用户**显式**为一条历史里的某个文件保存本机副本（spec「用户可以明确保存受容量
+    /// 限制的本机副本」）。
+    ///
+    /// 捕获路径永远不会调用它：不做静默复制。原文件只会被读取，不会被移动或删除。
+    /// 容量上限与失败原因都由 [`crate::clipboard::ClipboardCopyError`] 如实给出。
+    pub fn save_clipboard_file_copy(
+        &self,
+        event_id: &str,
+        attachment_id: &str,
+    ) -> Result<crate::clipboard::ClipboardAttachment, ClipboardActionError> {
+        self.save_clipboard_file_copy_limited(
+            event_id,
+            attachment_id,
+            crate::clipboard::MAX_COPY_BYTES,
+            crate::clipboard::MAX_COPY_TOTAL_BYTES,
+        )
+    }
+
+    /// 同 [`Self::save_clipboard_file_copy`]，但可以指定容量上限。
+    ///
+    /// 生产路径用默认常量；测试用它验证「超限如实拒绝」而不必真的造一个 512 MB 的文件。
+    /// 判据本身完全相同，不存在只在测试里生效的分支。
+    pub fn save_clipboard_file_copy_limited(
+        &self,
+        event_id: &str,
+        attachment_id: &str,
+        per_file_limit: u64,
+        total_limit: u64,
+    ) -> Result<crate::clipboard::ClipboardAttachment, ClipboardActionError> {
+        self.clipboard
+            .store()
+            .save_file_copy(event_id, attachment_id, per_file_limit, total_limit)
+            .map_err(ClipboardActionError::Copy)
+    }
+
+    /// 一条历史当前的文件条目状态（列表与预览共用，按当前文件系统计算）。
+    pub fn clipboard_file_views(
+        &self,
+        event_id: &str,
+    ) -> Result<Vec<crate::clipboard::ClipboardFileView>, ClipboardActionError> {
+        match self.clipboard.store().find(event_id) {
+            Ok(Some(event)) => Ok(event.file_views()),
+            Ok(None) => Err(ClipboardActionError::NotFound(event_id.to_string())),
             Err(error) => Err(ClipboardActionError::Storage(error.to_string())),
         }
     }
@@ -2672,6 +2705,7 @@ impl Host {
             label: label.to_string(),
             epoch,
             text_bytes: payload_bytes,
+            files: 0,
             formats_note: note,
         };
         {
@@ -2812,6 +2846,64 @@ impl Host {
         Ok(report)
     }
 
+    /// 把**文件列表**写进系统剪贴板，并登记「这是 Flashcast 自己的写入」。
+    ///
+    /// 与文本路径完全对称：不登记的写入会被自己的后台捕获重新收成一条新历史，
+    /// 形成「恢复历史 → 又被捕获 → 再恢复」的循环（spec 明确禁止）。
+    fn write_clipboard_files(
+        &self,
+        paths: &[std::path::PathBuf],
+    ) -> Result<(), flashcast_platform::ClipboardError> {
+        self.deps.clipboard.write_files(paths)?;
+        self.clipboard.note_own_write_files(paths);
+        Ok(())
+    }
+
+    /// 文件列表版本的 [`Self::finish_copy_for_paste`]：内容已经在剪贴板里，只是标记这次
+    /// 复制的是文件而不是文字，好让反馈与 `PastePlan` 如实描述。
+    pub fn finish_copy_for_files(
+        &self,
+        label: &str,
+        paths: &[std::path::PathBuf],
+    ) -> ActionOutcome {
+        let capabilities = self.capabilities();
+        let target = { lock(&self.paste).target.clone() };
+        let Some(target) = target else {
+            return ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+                label,
+                capabilities.os,
+                Some("没有记录到唤起前的应用，无法确定粘贴目标"),
+            ));
+        };
+        if let Some(blocker) = auto_paste_blocker(&capabilities) {
+            return ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+                label,
+                capabilities.os,
+                Some(&blocker),
+            ));
+        }
+        let epoch = self.paste_epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let target_name = target.name.clone();
+        let plan = PastePlan {
+            target,
+            label: label.to_string(),
+            epoch,
+            text_bytes: paths.iter().map(|path| path.as_os_str().len()).sum(),
+            files: paths.len(),
+            formats_note: None,
+        };
+        {
+            lock(&self.paste).plan = Some(plan.clone());
+        }
+        ActionOutcome::paste_pending(
+            plan,
+            format!(
+                "已复制 {} 个文件（「{label}」），正在粘贴到「{target_name}」…",
+                paths.len()
+            ),
+        )
+    }
+
     /// 剪贴板历史条目的默认操作：把**当前**内容写进剪贴板，然后尽力粘贴回唤起前的应用。
     ///
     /// 权限校验放在**原生边界**：来源插件必须在清单里、已启用，并且声明了
@@ -2854,6 +2946,18 @@ impl Host {
             }
             Err(error) => return ActionOutcome::failed(error.to_string()),
         };
+        if event.is_file_list() {
+            // 文件列表（ticket 12，视频也是文件）：把**整份**列表写回剪贴板，让接受
+            // 文件的目标应用能粘贴。引用失效时如实失败，绝不把缺了文件的列表放进剪贴板。
+            let paths = match event.restore_paths() {
+                Ok(paths) => paths,
+                Err(error) => return ActionOutcome::failed(error.to_string()),
+            };
+            if let Err(error) = self.write_clipboard_files(&paths) {
+                return ActionOutcome::failed(format!("无法复制「{}」：{error}", event.summary));
+            }
+            return self.finish_copy_for_files(&event.summary, &paths);
+        }
         if let Some(text) = event.text.clone().filter(|text| !text.is_empty()) {
             let content = clipboard_content_for(&event, text.clone());
             let report = match self.write_clipboard_content(&content) {
@@ -2891,10 +2995,10 @@ impl Host {
             }
             return self.finish_copy_for_paste_bytes(&event.summary, image.bytes.len());
         }
-        // 「超出容量、格式不支持或文件失效时看到明确状态」：文件列表历史的恢复在
-        // ticket 12，这里如实说明，而不是假装粘贴成功。
+        // 「超出容量、格式不支持或文件失效时看到明确状态」：到这里说明这条历史没有
+        // 可直接粘贴的文字、图片或文件内容，如实说明而不是假装粘贴成功。
         ActionOutcome::failed(format!(
-            "「{}」没有可直接粘贴的内容：文件历史的恢复将在后续版本提供",
+            "「{}」没有可直接粘贴的文字、图片或文件内容",
             event.summary
         ))
     }

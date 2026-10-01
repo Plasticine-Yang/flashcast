@@ -256,6 +256,9 @@ pub struct PastePlan {
     pub epoch: u64,
     /// 写入剪贴板的字节数，供核对（不重复携带正文）。
     pub text_bytes: usize,
+    /// 本次复制的是**文件列表**时的文件个数；文字为 0（ticket 12）。
+    #[serde(default)]
+    pub files: usize,
     /// 平台未能同时提供的格式说明（ticket 11）。
     ///
     /// `None` 表示这次恢复把该条历史的全部公开格式都放进了剪贴板；`Some` 时里面写清了

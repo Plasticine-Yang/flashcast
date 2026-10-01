@@ -42,10 +42,12 @@ pub use chrome::{
     PathChromeProvider, UserDataCandidate, UserDataOrigin,
 };
 pub use clipboard::{
-    cf_html_bytes, cf_html_fragment, check_image, fingerprint, fingerprint_bytes, image_dimensions,
-    ClipboardAccess, ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFormatKind,
-    ClipboardImage, ClipboardPoll, ClipboardSkippedFormat, ClipboardSourceApp, ClipboardWatcher,
-    ClipboardWriteReport, IMAGE_MIME_PNG, MAX_IMAGE_BYTES,
+    cf_html_bytes, cf_html_fragment, check_image, file_entries, file_entry, fingerprint,
+    fingerprint_bytes, fingerprint_files, format_uri_list, image_dimensions, mime_for_path,
+    parse_uri_list, ClipboardAccess, ClipboardCapture, ClipboardContent, ClipboardError,
+    ClipboardFileEntry, ClipboardFormatKind, ClipboardImage, ClipboardPoll,
+    ClipboardSkippedFormat, ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport,
+    IMAGE_MIME_PNG, MAX_FILES, MAX_IMAGE_BYTES,
 };
 pub use focus::{same_app, FocusError, FocusTracker, FocusedApp};
 pub use hotkey::{HotkeySpec, HotkeySpecError, Key, Modifier, DEFAULT_HOTKEY};

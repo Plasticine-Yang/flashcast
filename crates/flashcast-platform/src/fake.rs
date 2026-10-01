@@ -3,6 +3,7 @@
 //!
 //! 替身通过的检查不能证明平台适配通过：真实平台行为必须由各平台的真实检查覆盖。
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -13,8 +14,9 @@ use crate::chrome::{
     ChromeLaunchRequest, ChromeProvider, UserDataCandidate,
 };
 use crate::clipboard::{
-    ClipboardAccess, ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFormatKind,
-    ClipboardImage, ClipboardPoll, ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport,
+    ClipboardAccess, ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFileEntry,
+    ClipboardFormatKind, ClipboardImage, ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
+    ClipboardWriteReport,
 };
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
@@ -216,6 +218,8 @@ impl FocusTracker for FakeFocusTracker {
 pub struct FakePaster {
     pastes: Mutex<usize>,
     text_at_paste: Mutex<Vec<Option<String>>>,
+    /// 每次注入时剪贴板里的**文件列表**（ticket 12）。
+    files_at_paste: Mutex<Vec<Option<Vec<PathBuf>>>>,
     failures: Mutex<Vec<PasteError>>,
     clipboard: Mutex<Option<Arc<FakeClipboard>>>,
 }
@@ -231,6 +235,7 @@ impl FakePaster {
         Self {
             pastes: Mutex::new(0),
             text_at_paste: Mutex::new(Vec::new()),
+            files_at_paste: Mutex::new(Vec::new()),
             failures: Mutex::new(Vec::new()),
             clipboard: Mutex::new(Some(clipboard)),
         }
@@ -254,6 +259,11 @@ impl FakePaster {
     pub fn text_at_paste(&self) -> Vec<Option<String>> {
         lock(&self.text_at_paste).clone()
     }
+
+    /// 每次注入时剪贴板里的文件列表（`None` 表示当时剪贴板没有文件列表）。
+    pub fn files_at_paste(&self) -> Vec<Option<Vec<PathBuf>>> {
+        lock(&self.files_at_paste).clone()
+    }
 }
 
 impl Paster for FakePaster {
@@ -267,9 +277,21 @@ impl Paster for FakePaster {
         drop(failures);
         // 先取到句柄再释放锁，避免与剪贴板替身形成嵌套锁。
         let clipboard = lock(&self.clipboard).clone();
-        let text = clipboard.and_then(|clipboard| clipboard.last_write());
+        let (text, files) = match clipboard {
+            Some(clipboard) => {
+                let files = clipboard.last_write_files();
+                let text = if files.is_some() {
+                    None
+                } else {
+                    clipboard.last_write()
+                };
+                (text, files)
+            }
+            None => (None, None),
+        };
         *lock(&self.pastes) += 1;
         lock(&self.text_at_paste).push(text);
+        lock(&self.files_at_paste).push(files);
         Ok(())
     }
 }
@@ -289,6 +311,8 @@ pub struct FakeClipboard {
     writes: Mutex<Vec<String>>,
     /// 写入过的图片，按顺序（ticket 10）。
     images: Mutex<Vec<ClipboardImage>>,
+    /// 按顺序记录的**文件列表**写入（ticket 12）。
+    file_writes: Mutex<Vec<Vec<PathBuf>>>,
     contents: Mutex<Vec<ClipboardContent>>,
     reports: Mutex<Vec<ClipboardWriteReport>>,
     failures: Mutex<Vec<ClipboardError>>,
@@ -336,6 +360,11 @@ impl FakeClipboard {
         lock(&self.images).push(image);
     }
 
+    /// 直接设置当前剪贴板里的文件列表，模拟「外部应用复制了文件」。
+    pub fn set_files(&self, paths: &[PathBuf]) {
+        lock(&self.file_writes).push(paths.to_vec());
+    }
+
     /// 已写入的文本，按顺序。
     pub fn writes(&self) -> Vec<String> {
         lock(&self.writes).clone()
@@ -379,6 +408,16 @@ impl FakeClipboard {
     pub fn write_count(&self) -> usize {
         lock(&self.writes).len()
     }
+
+    /// 已写入的文件列表，按顺序。
+    pub fn file_writes(&self) -> Vec<Vec<PathBuf>> {
+        lock(&self.file_writes).clone()
+    }
+
+    /// 最近一次写入的文件列表。
+    pub fn last_write_files(&self) -> Option<Vec<PathBuf>> {
+        lock(&self.file_writes).last().cloned()
+    }
 }
 
 impl ClipboardAccess for FakeClipboard {
@@ -395,6 +434,33 @@ impl ClipboardAccess for FakeClipboard {
         }
         drop(failures);
         Ok(lock(&self.writes).last().cloned())
+    }
+
+    fn write_files(&self, paths: &[PathBuf]) -> Result<(), ClipboardError> {
+        crate::clipboard::check_files(paths)?;
+        // 与文本共用同一份失败队列：宿主对「写入失败」的处理路径只有一条。
+        let failures = lock(&self.failures);
+        if !failures.is_empty() {
+            let index = lock(&self.file_writes)
+                .len()
+                .min(failures.len().saturating_sub(1));
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        lock(&self.file_writes).push(paths.to_vec());
+        Ok(())
+    }
+
+    fn read_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        let failures = lock(&self.read_failures);
+        if !failures.is_empty() {
+            let index = lock(&self.file_writes)
+                .len()
+                .min(failures.len().saturating_sub(1));
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        Ok(lock(&self.file_writes).last().cloned())
     }
 
     fn write_content(
@@ -470,6 +536,8 @@ struct FakeWatcherState {
     image: Option<ClipboardImage>,
     /// 有图片但无法保存的原因（超大、无法识别）。
     image_problem: Option<String>,
+    /// 当前剪贴板里的文件列表（ticket 12）；非空时优先按文件报告。
+    files: Vec<ClipboardFileEntry>,
     /// 同一次复制事件里的 HTML / RTF 载荷（ticket 11）。
     html: Option<String>,
     rtf: Option<String>,
@@ -479,8 +547,10 @@ struct FakeWatcherState {
     sequence: u64,
     /// 已经交付或抑制到的序号。
     delivered: u64,
-    /// 自身写入的内容指纹，`poll` 见到就抑制。
+    /// 自身写入的**文本**内容指纹，`poll` 见到就抑制。
     own: Vec<u64>,
+    /// 自身写入的**文件列表**内容指纹，`poll` 见到就抑制。
+    own_files: Vec<u64>,
     /// 是否在适配层抑制自身写入。置为 `false` 用于验证**宿主自己的兜底抑制**
     /// 独立成立（真实适配层失效时也不能形成自身写入循环）。
     suppress_own: bool,
@@ -494,6 +564,7 @@ impl Default for FakeClipboardWatcher {
                 text: None,
                 image: None,
                 image_problem: None,
+                files: Vec::new(),
                 html: None,
                 rtf: None,
                 formats: Vec::new(),
@@ -501,6 +572,7 @@ impl Default for FakeClipboardWatcher {
                 sequence: 0,
                 delivered: 0,
                 own: Vec::new(),
+                own_files: Vec::new(),
                 suppress_own: true,
                 error: None,
             }),
@@ -537,6 +609,7 @@ impl FakeClipboardWatcher {
         state.text = Some(text.into());
         state.image = None;
         state.image_problem = None;
+        state.files = Vec::new();
         // 纯文本复制没有富文本格式：残留的载荷必须被清掉，否则会把上一次的内容带进来。
         state.html = None;
         state.rtf = None;
@@ -550,6 +623,7 @@ impl FakeClipboardWatcher {
         state.text = None;
         state.image = Some(image);
         state.image_problem = None;
+        state.files = Vec::new();
         state.html = None;
         state.rtf = None;
         state.formats = vec![ClipboardFormatKind::Image];
@@ -564,9 +638,25 @@ impl FakeClipboardWatcher {
         state.text = None;
         state.image = None;
         state.image_problem = Some(reason.into());
+        state.files = Vec::new();
         state.html = None;
         state.rtf = None;
         state.formats = Vec::new();
+        state.sequence += 1;
+    }
+
+    /// 模拟一次外部**文件列表**复制（ticket 12）：序号自增，下一次 `poll` 报告变化。
+    ///
+    /// 模拟真实平台的行为：文件列表在剪贴板里是文件格式，不是一段文字。
+    pub fn set_files(&self, paths: &[PathBuf]) {
+        let mut state = lock(&self.state);
+        state.text = None;
+        state.image = None;
+        state.image_problem = None;
+        state.files = crate::clipboard::file_entries(paths);
+        state.formats = vec![ClipboardFormatKind::Files];
+        state.html = None;
+        state.rtf = None;
         state.sequence += 1;
     }
 
@@ -582,6 +672,7 @@ impl FakeClipboardWatcher {
         state.text = capture.text.clone();
         state.image = None;
         state.image_problem = None;
+        state.files = Vec::new();
         state.html = capture.html.clone();
         state.rtf = capture.rtf.clone();
         state.formats = capture.formats.clone();
@@ -631,6 +722,28 @@ impl ClipboardWatcher for FakeClipboardWatcher {
             return Ok(ClipboardPoll::Unchanged);
         }
         state.delivered = state.sequence;
+        // 文件列表优先（与真实适配层一致）：文件格式存在时就不是一次文字复制。
+        if !state.files.is_empty() {
+            let paths: Vec<PathBuf> = state.files.iter().map(|file| file.path.clone()).collect();
+            let print = crate::clipboard::fingerprint_files(&paths);
+            if state.suppress_own {
+                if let Some(index) = state.own_files.iter().position(|item| *item == print) {
+                    state.own_files.remove(index);
+                    return Ok(ClipboardPoll::Unchanged);
+                }
+            }
+            self.captures.fetch_add(1, Ordering::SeqCst);
+            return Ok(ClipboardPoll::Changed(ClipboardCapture {
+                formats: state.formats.clone(),
+                text: None,
+                image: None,
+                image_problem: None,
+                files: state.files.clone(),
+                html: None,
+                rtf: None,
+                source: state.source.clone(),
+            }));
+        }
         let text = state.text.clone();
         let image = state.image.clone();
         let problem = state.image_problem.clone();
@@ -656,6 +769,7 @@ impl ClipboardWatcher for FakeClipboardWatcher {
             text,
             image,
             image_problem: problem,
+            files: Vec::new(),
             html: state.html.clone(),
             rtf: state.rtf.clone(),
             source: state.source.clone(),
@@ -672,9 +786,26 @@ impl ClipboardWatcher for FakeClipboardWatcher {
         // 宿主写入的是「文本 + 富文本」，适配层的抑制以文本指纹为准（真实适配层同理：
         // 序号或文本指纹），因此自身写入不会形成循环。
         state.text = Some(text.to_string());
+        state.files = Vec::new();
         state.html = None;
         state.rtf = None;
-        state.formats = vec![ClipboardFormatKind::Text];
+        state.sequence += 1;
+    }
+
+    fn note_own_write_files(&self, paths: &[PathBuf]) {
+        self.own_writes.fetch_add(1, Ordering::SeqCst);
+        if paths.is_empty() {
+            return;
+        }
+        let mut state = lock(&self.state);
+        state
+            .own_files
+            .push(crate::clipboard::fingerprint_files(paths));
+        state.text = None;
+        state.files = crate::clipboard::file_entries(paths);
+        state.html = None;
+        state.rtf = None;
+        state.formats = vec![ClipboardFormatKind::Files];
         state.sequence += 1;
     }
 }

@@ -143,7 +143,8 @@ impl PluginScope for ClipboardScope {
         let mut items = Vec::new();
         for event in &events {
             let metadata = metadata_for(event);
-            if let Some(score) = score_match(&query, &event.summary, &metadata) {
+            let metadata_refs: Vec<&str> = metadata.iter().map(String::as_str).collect();
+            if let Some(score) = score_match(&query, &event.summary, &metadata_refs) {
                 items.push(clipboard_item(event, score));
             }
         }
@@ -151,26 +152,35 @@ impl PluginScope for ClipboardScope {
     }
 }
 
-/// 参与匹配的元数据：完整文字、来源应用、格式名与图片尺寸。
+/// 参与匹配的元数据：完整文字、来源应用、格式名、图片尺寸与**文件名称/类型**。
 ///
-/// **不包含** HTML/RTF 载荷原文（ticket 11）：可索引文字是唯一的检索内容，富文本载荷
-/// 绝不能变成搜索键——否则历史里会凭空多出用户在界面上看不到的匹配项。
-fn metadata_for(event: &ClipboardEvent) -> Vec<&str> {
-    let mut metadata: Vec<&str> = Vec::new();
+/// 文件列表没有可索引文字（spec「不承诺 OCR」），因此名称与元数据是唯一的检索入口：
+/// 每个文件的名称、MIME 与路径都参与匹配。
+/// **不包含** HTML/RTF 载荷原文（ticket 11）：可索引文字是唯一的检索内容，
+/// 富文本载荷绝不能变成搜索键——否则历史里会凭空多出用户在界面上看不到的匹配项。
+fn metadata_for(event: &ClipboardEvent) -> Vec<String> {
+    let mut metadata: Vec<String> = Vec::new();
     if let Some(text) = event.text.as_deref() {
-        metadata.push(text);
+        metadata.push(text.to_string());
     }
     if let Some(source) = &event.source {
-        metadata.push(source.app_id.as_str());
+        metadata.push(source.app_id.clone());
         if let Some(title) = source.title.as_deref() {
-            metadata.push(title);
+            metadata.push(title.to_string());
         }
     }
-    metadata.extend(event.format_labels());
+    metadata.extend(event.format_labels().into_iter().map(str::to_string));
     for format in &event.formats {
         if let crate::clipboard::ClipboardFormat::Image { mime, .. } = format {
-            metadata.push(mime.as_str());
+            metadata.push(mime.clone());
         }
+    }
+    for view in event.file_views() {
+        metadata.push(view.name.clone());
+        if let Some(mime) = view.mime.clone() {
+            metadata.push(mime);
+        }
+        metadata.push(view.path.to_string_lossy().into_owned());
     }
     metadata
 }
@@ -200,33 +210,95 @@ pub fn clipboard_item(event: &ClipboardEvent, score: Score) -> SearchItem {
     }
 }
 
-/// 预览：图片给出**完整**附件路径（UI 按需加载），其余给出文字正文。
+/// 预览：图片给出**完整**附件路径（UI 按需加载），文件列表逐条给出「引用 / 已保存副本」
+/// 与当前是否可恢复，其余给出文字正文。
 ///
-/// 附件已经不在本机时如实说明，而不是交出一个必然加载失败的路径：那会让用户以为
-/// 图片存在、只是界面坏了。
-fn clipboard_preview(event: &ClipboardEvent) -> Preview {
+/// 图片附件已经不在本机时如实说明，而不是交出一个必然加载失败的路径：那会让用户以为
+/// 图片存在、只是界面坏了。文件列表的状态则是**按当前文件系统**算出来的，不是捕获时的
+/// 快照：原文件被删除后再次预览必须显示不可恢复（spec「原文件失效时引用显示不可恢复状态」）。
+pub fn clipboard_preview(event: &ClipboardEvent) -> Preview {
     match event.image_attachment() {
-        Some(attachment) if attachment.path.is_file() => Preview::Image {
-            path: attachment.path.clone(),
-        },
-        Some(attachment) => Preview::Text {
+        Some(attachment) if attachment.path.is_file() => {
+            return Preview::Image {
+                path: attachment.path.clone(),
+            };
+        }
+        Some(attachment) => {
+            return Preview::Text {
+                title: Some(event.summary.clone()),
+                body: format!(
+                    "图片附件已不在本机：{}\n它可能已被手动删除；历史条目本身仍然保留。",
+                    attachment.path.display()
+                ),
+            };
+        }
+        None => {}
+    }
+    if event.is_file_list() {
+        return Preview::Text {
             title: Some(event.summary.clone()),
-            body: format!(
-                "图片附件已不在本机：{}\n它可能已被手动删除；历史条目本身仍然保留。",
-                attachment.path.display()
-            ),
-        },
-        None => Preview::Text {
-            title: Some(event.summary.clone()),
-            body: event
-                .text
-                .clone()
-                .unwrap_or_else(|| "（该条目没有可显示的文字内容）".to_string()),
-        },
+            body: file_list_preview_body(event),
+        };
+    }
+    Preview::Text {
+        title: Some(event.summary.clone()),
+        body: event
+            .text
+            .clone()
+            .unwrap_or_else(|| "（该条目没有可显示的文字内容）".to_string()),
     }
 }
 
-/// 结果副标题：置顶标记、格式、图片类型与尺寸、来源应用与相对时间。
+/// 文件列表预览正文：第一行是数量汇总，之后每个文件一行状态。
+pub fn file_list_preview_body(event: &ClipboardEvent) -> String {
+    let views = event.file_views();
+    let (references, copies) = event.file_counts();
+    let mut lines = vec![format!(
+        "{count} 个文件 · {references} 个引用{spec}",
+        count = views.len(),
+        spec = if copies > 0 {
+            format!(" · {copies} 个已保存副本")
+        } else {
+            String::new()
+        }
+    )];
+    for view in &views {
+        let state = if view.recoverable {
+            "可恢复".to_string()
+        } else {
+            format!(
+                "不可恢复：{}",
+                view.problem.as_deref().unwrap_or("原因未知")
+            )
+        };
+        lines.push(format!(
+            "{} — {}（{}）· {}",
+            view.name,
+            view.kind_label_zh(),
+            state,
+            describe_bytes(view.bytes)
+        ));
+    }
+    lines.join("\n")
+}
+
+/// 人类可读的字节数。
+pub fn describe_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+/// 结果副标题：置顶标记、格式、图片类型与尺寸、引用/副本数量、来源应用与相对时间。
 pub fn clipboard_subtitle(event: &ClipboardEvent) -> String {
     let mut parts: Vec<String> = Vec::new();
     if event.pinned {
@@ -239,6 +311,14 @@ pub fn clipboard_subtitle(event: &ClipboardEvent) -> String {
     // 类型与尺寸（ticket 10）：图片没有可检索的文字，这是用户分辨条目的主要依据。
     if let Some(image) = event.image_label() {
         parts.push(image);
+    }
+    if event.is_file_list() {
+        let (references, copies) = event.file_counts();
+        let mut file_part = format!("{references} 个引用");
+        if copies > 0 {
+            file_part.push_str(&format!(" · {copies} 个已保存副本"));
+        }
+        parts.push(file_part);
     }
     if let Some(source) = &event.source {
         let name = source
