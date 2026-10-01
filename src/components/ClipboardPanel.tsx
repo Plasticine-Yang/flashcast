@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ClipboardStateView } from "../types";
+import type { ClipboardEntryView, ClipboardStateView } from "../types";
 
 interface Props {
   /** 剪贴板历史状态；尚未加载时为 null。 */
@@ -10,6 +10,8 @@ interface Props {
   onPin: (id: string, pinned: boolean) => void;
   onDelete: (id: string) => void;
   onClear: () => void;
+  /** 显式为某个原文件保存本机副本（ticket 12）。 */
+  onSaveCopy: (id: string, attachmentId: string) => void;
 }
 
 /** 相对时间：与宿主副标题的粒度一致（刚刚 / 分钟 / 小时 / 天）。 */
@@ -22,10 +24,36 @@ function describeAge(capturedAtMs: number): string {
 }
 
 /**
+ * 人类可读的字节数。与宿主 `flashcast_core::plugins::clipboard::describe_bytes` 同口径：
+ * 界面与预览不能对同一个文件给出不同的数字。
+ */
+function describeBytes(bytes: number): string {
+  const KB = 1024;
+  const MB = 1024 * KB;
+  const GB = 1024 * MB;
+  if (bytes >= GB) return `${(bytes / GB).toFixed(1)} GB`;
+  if (bytes >= MB) return `${(bytes / MB).toFixed(1)} MB`;
+  if (bytes >= KB) return `${(bytes / KB).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+/** 结果副标题里的文件计数，与宿主 `clipboard_subtitle` 口径一致。 */
+function fileCountLabel(entry: ClipboardEntryView): string {
+  const parts = [`${entry.references} 个引用`];
+  if (entry.fileCopies > 0) {
+    parts.push(`${entry.fileCopies} 个已保存副本`);
+  }
+  return parts.join(" · ");
+}
+
+/**
  * 设置页里的剪贴板历史管理：保留范围、暂停开关与条目列表。
  *
  * 状态显示刻意分成几件事分别说明，而不是一句「正常」：存储是否可用、容量是否触顶、
  * 最近一次捕获是否失败、后台是否正在捕获。任何一种失败都必须看得见。
+ *
+ * 文件条目（ticket 12）在紧凑列表里额外给出名称、类型、引用/副本标记与当前是否可恢复；
+ * 只有引用才有「保存本机副本」，且它必须由用户显式点击。
  */
 export function ClipboardPanel({
   clipboard,
@@ -35,6 +63,7 @@ export function ClipboardPanel({
   onPin,
   onDelete,
   onClear,
+  onSaveCopy,
 }: Props) {
   const [retentionDraft, setRetentionDraft] = useState("30");
   const [capacityDraft, setCapacityDraft] = useState("500");
@@ -170,16 +199,18 @@ export function ClipboardPanel({
         <ul className="theme-list" data-testid="clipboard-list">
           {clipboard.items.map((entry) => (
             <li
-              className="theme-item"
+              className={`theme-item${entry.files.length > 0 ? " clipboard-item-files" : ""}`}
               data-testid="clipboard-item"
               data-entry-id={entry.id}
               data-pinned={entry.pinned ? "true" : "false"}
+              data-files={entry.files.length}
               key={entry.id}
             >
               <span className="theme-name">
                 {entry.summary}
                 <span className="theme-meta">
                   {entry.formats.join("/")}
+                  {entry.files.length > 0 ? ` · ${fileCountLabel(entry)}` : ""}
                   {entry.source ? ` · 来自 ${entry.source}` : ""} · {describeAge(entry.capturedAtMs)}
                   {entry.copies > 1 ? ` · 复制过 ${entry.copies} 次` : ""}
                 </span>
@@ -203,6 +234,53 @@ export function ClipboardPanel({
               >
                 删除
               </button>
+
+              {entry.files.length > 0 ? (
+                <ul className="clipboard-files" data-testid="clipboard-file-list">
+                  {entry.files.map((file) => (
+                    <li
+                      className="clipboard-file"
+                      data-testid="clipboard-file"
+                      data-attachment-id={file.attachmentId}
+                      data-kind={file.kind.kind}
+                      data-recoverable={file.recoverable ? "true" : "false"}
+                      key={file.attachmentId}
+                    >
+                      <span className="theme-name">
+                        {file.name}
+                        <span className="theme-meta">
+                          {file.mime ?? "未知类型"} · {describeBytes(file.bytes)}
+                          {file.recoverable
+                            ? ""
+                            : ` · 不可恢复：${file.problem ?? "原因未知"}`}
+                        </span>
+                      </span>
+                      <span className="theme-badge" data-testid="clipboard-file-kind">
+                        {file.kindLabel}
+                      </span>
+                      {!file.recoverable ? (
+                        <span
+                          className="theme-badge theme-badge-error"
+                          data-testid="clipboard-file-unrecoverable"
+                        >
+                          不可恢复
+                        </span>
+                      ) : null}
+                      {file.kind.kind === "fileReference" && file.recoverable ? (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          data-testid="clipboard-save-copy"
+                          disabled={busy}
+                          onClick={() => onSaveCopy(entry.id, file.attachmentId)}
+                        >
+                          保存本机副本
+                        </button>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -213,6 +291,12 @@ export function ClipboardPanel({
         <code>{clipboard.storagePath}</code>
         ），不进入配置工作区；只有「暂停、保留期限、容量」这些可迁移偏好写在
         settings.toml 里。重复内容会自动去重，Flashcast 自己的粘贴写入不会被再次记录。
+      </p>
+
+      <p className="settings-hint">
+        文件条目默认只是对原文件的引用：原文件被移动或删除后就无法恢复。
+        「保存本机副本」会把文件复制到本机数据目录（受单份与总容量限制，本机专用），
+        原文件只会被读取，不会被移动或删除；删除、清空与过期回收只清理不再被引用的副本。
       </p>
     </section>
   );

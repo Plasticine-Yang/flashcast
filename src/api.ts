@@ -16,6 +16,7 @@ import type {
   ChromeProfileView,
   ChromeState,
   ClipboardEntryView,
+  ClipboardFileView,
   ClipboardStateView,
   CloneOutcome,
   CloneProgress,
@@ -132,6 +133,13 @@ export interface HostApi {
   delete_clipboard_entry(id: string): Promise<ClipboardStateView>;
   /** 清空历史（置顶条目也会被清掉）。 */
   clear_clipboard_history(): Promise<ClipboardStateView>;
+  /**
+   * 用户**显式**为一个原文件保存受容量限制的本机副本。
+   *
+   * 失败时 reject，原因由宿主给出（原文件失效、访问失败、超过单份或总容量、
+   * 复制中断、不支持的类型），UI 原样展示。
+   */
+  save_clipboard_file_copy(id: string, attachmentId: string): Promise<ClipboardStateView>;
   /** 当前 Chrome 状态：发现结果、profile 列表、关联状态与书签索引状态。 */
   get_chrome_state(): Promise<ChromeState>;
   /** 关联一个已发现的 Chrome profile（参数是目录名）。失败时 reject，原因为中文。 */
@@ -202,6 +210,8 @@ const tauriApi: HostApi = {
   pin_clipboard_entry: (id, pinned) => tauriInvoke("pin_clipboard_entry", { id, pinned }),
   delete_clipboard_entry: (id) => tauriInvoke("delete_clipboard_entry", { id }),
   clear_clipboard_history: () => tauriInvoke("clear_clipboard_history"),
+  save_clipboard_file_copy: (id, attachmentId) =>
+    tauriInvoke("save_clipboard_file_copy", { id, attachmentId }),
   get_chrome_state: () => tauriInvoke("get_chrome_state"),
   associate_chrome_profile: (profileDir) =>
     tauriInvoke("associate_chrome_profile", { profileDir }),
@@ -326,6 +336,9 @@ const MOCK_CLIPBOARD_ENTRIES: ClipboardEntryView[] = [
     pinned: false,
     copies: 1,
     attachments: 0,
+    files: [],
+    references: 0,
+    fileCopies: 0,
   },
   {
     id: "clip-mock-2",
@@ -337,6 +350,81 @@ const MOCK_CLIPBOARD_ENTRIES: ClipboardEntryView[] = [
     pinned: true,
     copies: 2,
     attachments: 0,
+    files: [],
+    references: 0,
+    fileCopies: 0,
+  },
+  {
+    // 多文件列表：含空格、非 ASCII 与一个视频文件（视频在 v0.1 按文件处理）。
+    id: "clip-mock-3",
+    summary: "3 个文件：报告 草稿.pdf、照片 一.png、视频 片段.mp4",
+    text: null,
+    formats: ["文件"],
+    source: "文件管理器",
+    capturedAtMs: Date.now() - 12 * 60 * 1000,
+    pinned: false,
+    copies: 1,
+    attachments: 3,
+    files: [
+      {
+        attachmentId: "att-mock-pdf",
+        name: "报告 草稿.pdf",
+        kind: { kind: "fileReference" },
+        kindLabel: "引用",
+        mime: "application/pdf",
+        bytes: 18432,
+        recoverable: true,
+        problem: null,
+      },
+      {
+        attachmentId: "att-mock-png",
+        name: "照片 一.png",
+        kind: { kind: "fileReference" },
+        kindLabel: "引用",
+        mime: "image/png",
+        bytes: 65536,
+        recoverable: true,
+        problem: null,
+      },
+      {
+        attachmentId: "att-mock-mp4",
+        name: "视频 片段.mp4",
+        kind: { kind: "fileReference" },
+        kindLabel: "引用",
+        mime: "video/mp4",
+        bytes: 7340032,
+        recoverable: true,
+        problem: null,
+      },
+    ],
+    references: 3,
+    fileCopies: 0,
+  },
+  {
+    // 原文件已经被删除的引用：必须显示「不可恢复」而不是假装还能粘贴。
+    id: "clip-mock-4",
+    summary: "已归档 说明.txt",
+    text: null,
+    formats: ["文件"],
+    source: null,
+    capturedAtMs: Date.now() - 2 * 60 * 60 * 1000,
+    pinned: false,
+    copies: 1,
+    attachments: 1,
+    files: [
+      {
+        attachmentId: "att-mock-gone",
+        name: "已归档 说明.txt",
+        kind: { kind: "fileReference" },
+        kindLabel: "引用",
+        mime: "text/plain",
+        bytes: 96,
+        recoverable: false,
+        problem: "原文件已不存在：/home/user/下载/已归档 说明.txt",
+      },
+    ],
+    references: 1,
+    fileCopies: 0,
   },
 ];
 
@@ -597,6 +685,8 @@ class MockHost implements HostApi {
   lastLaunched: string | null = null;
   /** 最近一次复制进剪贴板的内容（备忘录的默认操作是复制）。 */
   lastCopied: string | null = null;
+  /** 最近一次复制进剪贴板的**文件列表**（ticket 12 的恢复路径）。 */
+  lastCopiedFiles: string[] | null = null;
   /**
    * 最近一次自动粘贴：内容、目标应用与外壳执行的步骤。
    *
@@ -688,11 +778,17 @@ class MockHost implements HostApi {
   private clipboardEntries: ClipboardEntryView[] = MOCK_CLIPBOARD_ENTRIES.map((entry) => ({
     ...entry,
     formats: [...entry.formats],
+    // 文件条目要深拷贝：保存副本会就地改写它，不能污染模块级样例。
+    files: entry.files.map((file) => ({ ...file, kind: { ...file.kind } })),
   }));
   /** 模拟的存储失败原因；非空时如实展示，而不是假装历史为空。 */
   private clipboardStorageError: string | null = null;
   /** 模拟的最近一次捕获失败原因。 */
   private clipboardLastError: string | null = null;
+  /** 模拟的「保存本机副本」失败原因（超限 / 访问失败 / 复制中断）。 */
+  private clipboardCopyError: string | null = null;
+  /** 模拟的原文件已被删除：按名让引用变为不可恢复。 */
+  private clipboardMissingFiles = new Set<string>();
   /** 被自身写入抑制丢弃的次数（诊断用）。 */
   private clipboardSuppressed = 0;
 
@@ -831,6 +927,14 @@ class MockHost implements HostApi {
       parts.push("已置顶");
     }
     parts.push(...entry.formats);
+    if (entry.files.length > 0) {
+      // 与宿主 clipboard_subtitle 同口径：引用数与已保存副本数。
+      let filePart = `${entry.references} 个引用`;
+      if (entry.fileCopies > 0) {
+        filePart += ` · ${entry.fileCopies} 个已保存副本`;
+      }
+      parts.push(filePart);
+    }
     if (entry.source) {
       parts.push(`来自 ${entry.source}`);
     }
@@ -881,6 +985,16 @@ class MockHost implements HostApi {
         }
         if ((entry.source ?? "").toLowerCase().includes(query)) {
           return { entry, tier: "metadataSubstring" as const, relevance: 30 };
+        }
+        // 文件列表没有可索引文字：名称、类型与种类标签是唯一的检索入口
+        // （与宿主 metadata_for 同口径，spec「不承诺 OCR」）。
+        const metadata = entry.files.flatMap((file) => [
+          file.name.toLowerCase(),
+          (file.mime ?? "").toLowerCase(),
+          file.kindLabel.toLowerCase(),
+        ]);
+        if (metadata.some((value) => value.includes(query))) {
+          return { entry, tier: "metadataSubstring" as const, relevance: 35 };
         }
         return null;
       })
@@ -1241,15 +1355,38 @@ class MockHost implements HostApi {
       }
       const id = itemId.slice("clipboard:".length);
       const entry = this.clipboardEntries.find((candidate) => candidate.id === id) ?? null;
-      if (!entry || entry.text === null) {
+      if (!entry) {
         return {
           status: "failed",
           message: `找不到「${itemId}」对应的剪贴板历史，可能已被删除或过期回收，请重新查询`,
         };
       }
-      // 自身写入抑制：这次写入不得再被自己捕获成新条目。
-      this.clipboardSuppressed += 1;
-      this.lastCopied = entry.text;
+      // 文件列表：整份列表要么全部可恢复，要么如实失败（与宿主 restore_paths 一致）。
+      // 视频只是文件，没有特殊分支。
+      if (entry.files.length > 0) {
+        const missing = entry.files.filter((file) => !file.recoverable);
+        if (missing.length > 0) {
+          const names = missing
+            .map((file) => `${file.name}（${file.problem ?? "不可恢复"}）`)
+            .join("、");
+          return {
+            status: "failed",
+            message: `这些文件已不可恢复：${names}（原文件已被移动或删除，且没有保存本机副本）`,
+          };
+        }
+        this.clipboardSuppressed += 1;
+        this.lastCopiedFiles = entry.files.map((file) => file.name);
+        this.lastCopied = null;
+      } else if (entry.text === null) {
+        return {
+          status: "failed",
+          message: `「${entry.summary}」没有可直接粘贴的文字或文件内容：图片历史的恢复将在后续版本提供`,
+        };
+      } else {
+        this.clipboardSuppressed += 1;
+        this.lastCopied = entry.text;
+        this.lastCopiedFiles = null;
+      }
       const target = this.previousApp;
       if (!this.autoPasteSupported || !target) {
         const reason = target
@@ -1261,7 +1398,7 @@ class MockHost implements HostApi {
         };
       }
       this.lastPaste = {
-        content: this.lastCopied,
+        content: this.lastCopied ?? this.lastCopiedFiles?.join("、") ?? "",
         target: target.name,
         sequence: ["copied", "windowHidden", "restored", "pasted"],
       };
@@ -1396,6 +1533,66 @@ class MockHost implements HostApi {
   async clear_clipboard_history(): Promise<ClipboardStateView> {
     this.clipboardEntries = [];
     return this.clipboardStateView();
+  }
+
+  /**
+   * 显式保存本机副本（浏览器模拟）。
+   *
+   * 语义与宿主一致：只对**引用**生效，副本不依赖原文件；失败原因如实抛出。
+   * 真实行为（原子复制、容量判定、附件回收）由
+   * `crates/flashcast-core/tests/clipboard_files.rs` 验证。
+   */
+  async save_clipboard_file_copy(
+    id: string,
+    attachmentId: string,
+  ): Promise<ClipboardStateView> {
+    const entry = this.clipboardEntries.find((candidate) => candidate.id === id);
+    if (!entry) {
+      throw `找不到这条剪贴板历史或它的文件条目：${id}`;
+    }
+    const file = entry.files.find((candidate) => candidate.attachmentId === attachmentId);
+    if (!file) {
+      throw `找不到这条剪贴板历史或它的文件条目：${attachmentId}`;
+    }
+    if (this.clipboardCopyError) {
+      throw this.clipboardCopyError;
+    }
+    if (file.kind.kind === "fileCopy") {
+      throw `「${file.name}」已经是本机副本，不需要再复制一次`;
+    }
+    if (!file.recoverable) {
+      throw `原文件已不存在或被移动：${file.problem ?? file.name}`;
+    }
+    // 副本就地改写引用行（与宿主一致，标识不变），原文件只被读取。
+    file.kind = { kind: "fileCopy" };
+    file.kindLabel = "已保存副本";
+    file.recoverable = true;
+    file.problem = null;
+    entry.references = entry.files.filter(
+      (candidate) => candidate.kind.kind === "fileReference",
+    ).length;
+    entry.fileCopies = entry.files.filter(
+      (candidate) => candidate.kind.kind === "fileCopy",
+    ).length;
+    return this.clipboardStateView();
+  }
+
+  /** 浏览器交互检查用的钩子：让下一次保存副本失败（超限 / 访问失败 / 复制中断）。 */
+  simulateClipboardCopyFailure(reason: string | null): void {
+    this.clipboardCopyError = reason;
+  }
+
+  /** 浏览器交互检查用的钩子：模拟原文件被删除，按文件名把引用标为不可恢复。 */
+  simulateClipboardFileMissing(name: string): void {
+    this.clipboardMissingFiles.add(name);
+    for (const entry of this.clipboardEntries) {
+      for (const file of entry.files) {
+        if (file.name === name && file.kind.kind === "fileReference") {
+          file.recoverable = false;
+          file.problem = `原文件已不存在：/home/user/下载/${name}`;
+        }
+      }
+    }
   }
 
   async get_chrome_state(): Promise<ChromeState> {
