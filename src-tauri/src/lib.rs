@@ -59,6 +59,12 @@ pub fn run() {
             commands::push_workspace,
             commands::sync_progress,
             commands::cancel_sync,
+            commands::memos,
+            commands::memo_problems,
+            commands::create_memo,
+            commands::update_memo,
+            commands::delete_memo,
+            commands::preview,
             commands::hide_window,
         ])
         .setup(|app| {
@@ -87,6 +93,9 @@ pub fn run() {
                 device_dir,
             };
             let host = Arc::new(Host::new(deps, settings));
+            // 随应用提供的官方功能插件（ticket 07 起：备忘录）。实现随应用编译进来，
+            // 「有哪些插件、是否启用」以工作区的 manifest.json 为唯一权威。
+            host.install_official_plugins();
             app.manage(AppState::new(host, platform));
 
             // 托盘是 Linux 上的必需备用入口（Wayland 下快捷键注册会失败）。

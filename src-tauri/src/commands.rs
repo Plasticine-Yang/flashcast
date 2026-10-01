@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use flashcast_core::{
     ActionOutcome, Appearance, BackOutcome, CloneOutcome, CloneProgress, CommitOutcome,
-    DefaultAction, ItemKind, Notice, PluginFailure, PullOutcome, PushOutcome, QueryResponse,
-    QueryScope, Score, SearchItem, Settings, SyncProgress, SyncStatus, ThemeState,
+    DefaultAction, ItemKind, Notice, PluginFailure, Preview, PullOutcome, PushOutcome,
+    QueryResponse, QueryScope, Score, SearchItem, Settings, SyncProgress, SyncStatus, ThemeState,
     WorkspaceChanges, WorkspaceStatus,
 };
 use tauri::{AppHandle, Manager, State};
@@ -420,6 +420,109 @@ pub fn sync_progress(state: State<'_, AppState>) -> SyncProgress {
 #[tauri::command(rename_all = "snake_case")]
 pub fn cancel_sync(state: State<'_, AppState>) {
     state.host.cancel_sync();
+}
+
+// ---------------------------------------------------------------------------
+// 备忘录（ticket 07）
+// ---------------------------------------------------------------------------
+
+/// 展示用的备忘录条目。字段与 `flashcast_core::Memo` 一一对应。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoView {
+    /// 稳定标识，同时是 `memos/<id>.md` 的文件名。
+    pub id: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub body: String,
+}
+
+impl MemoView {
+    fn from_memo(memo: flashcast_core::Memo) -> Self {
+        Self {
+            id: memo.id,
+            title: memo.title,
+            tags: memo.tags,
+            body: memo.body,
+        }
+    }
+}
+
+/// 展示用的「无法读取的备忘录文件」。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoProblemView {
+    pub path: String,
+    /// 面向用户的中文原因。
+    pub reason: String,
+}
+
+/// 当前生效的备忘录（按标识排序，与目录读取顺序无关）。
+#[tauri::command]
+pub fn memos(state: State<'_, AppState>) -> Vec<MemoView> {
+    state
+        .host
+        .memos()
+        .into_iter()
+        .map(MemoView::from_memo)
+        .collect()
+}
+
+/// 无法读取的备忘录文件：宿主保留可用内容，并如实报告原因。
+#[tauri::command(rename_all = "snake_case")]
+pub fn memo_problems(state: State<'_, AppState>) -> Vec<MemoProblemView> {
+    state
+        .host
+        .memo_problems()
+        .into_iter()
+        .map(|problem| MemoProblemView {
+            path: problem.path.to_string_lossy().into_owned(),
+            reason: problem.reason,
+        })
+        .collect()
+}
+
+/// 新建一条备忘录。未关联工作区或插件已停用时返回中文原因。
+#[tauri::command(rename_all = "snake_case")]
+pub fn create_memo(
+    state: State<'_, AppState>,
+    title: String,
+    tags: Vec<String>,
+    body: String,
+) -> Result<MemoView, String> {
+    state
+        .host
+        .create_memo(&title, &tags, &body)
+        .map(MemoView::from_memo)
+        .map_err(|error| error.to_string())
+}
+
+/// 修改一条已存在的备忘录（标识不变）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn update_memo(
+    state: State<'_, AppState>,
+    id: String,
+    title: String,
+    tags: Vec<String>,
+    body: String,
+) -> Result<MemoView, String> {
+    state
+        .host
+        .update_memo(&id, &title, &tags, &body)
+        .map(MemoView::from_memo)
+        .map_err(|error| error.to_string())
+}
+
+/// 删除一条备忘录（同时删除工作区里的文件）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn delete_memo(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.host.delete_memo(&id).map_err(|error| error.to_string())
+}
+
+/// 预览某条结果。备忘录按**当前**内容返回完整正文；未知 id 返回 `null`。
+#[tauri::command(rename_all = "snake_case")]
+pub fn preview(state: State<'_, AppState>, item_id: String) -> Option<Preview> {
+    state.host.preview(&item_id)
 }
 
 #[tauri::command(rename_all = "snake_case")]
