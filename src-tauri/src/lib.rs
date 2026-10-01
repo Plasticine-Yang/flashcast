@@ -76,6 +76,7 @@ pub fn run() {
                 catalog: Arc::clone(&platform.catalog),
                 launcher: Arc::clone(&platform.launcher),
                 capabilities: Arc::clone(&platform.capabilities),
+                clipboard: Arc::clone(&platform.clipboard),
                 plugins,
                 device_dir,
             };
