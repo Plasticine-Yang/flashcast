@@ -35,6 +35,11 @@ export function StatusBanner({ status, response, feedback, workspaceAlert }: Pro
           {feedback.message ?? "已复制，请手动粘贴"}
         </div>
       ) : null}
+      {feedback?.status === "pastePending" ? (
+        <div className="banner banner-info" data-testid="notice" role="status">
+          {feedback.message ?? "已复制，正在粘贴…"}
+        </div>
+      ) : null}
       {notice ? (
         <div
           className={`banner banner-${notice.level}`}

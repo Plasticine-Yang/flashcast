@@ -7,16 +7,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use flashcast_core::{
-    ActionOutcome, Appearance, BackOutcome, CloneOutcome, CloneProgress, CommitOutcome,
-    DefaultAction, ItemKind, Notice, PluginFailure, Preview, PullOutcome, PushOutcome,
-    QueryResponse, QueryScope, Score, SearchItem, Settings, SyncProgress, SyncStatus, ThemeState,
-    WorkspaceChanges, WorkspaceStatus,
+    ActionOutcome, ActionStatus, Appearance, BackOutcome, CloneOutcome, CloneProgress,
+    CommitOutcome, DefaultAction, ItemKind, Notice, PluginFailure, Preview, PullOutcome,
+    PushOutcome, QueryResponse, QueryScope, Score, SearchItem, Settings, SyncProgress, SyncStatus,
+    ThemeState, WorkspaceChanges, WorkspaceStatus,
 };
 use tauri::{AppHandle, Manager, State};
 
 use crate::icon::icon_data_url;
 use crate::state::{lock, AppState};
-use crate::summon;
+use crate::summon::{self, PASTE_SETTLE};
 use crate::watch::WorkspaceEvent;
 
 /// 展示用的结果条目：在宿主模型之上附加可直接显示的图标 data URL。
@@ -131,14 +131,34 @@ pub fn query(state: State<'_, AppState>, input: String) -> QueryView {
 }
 
 /// 命令入口。UI 传条目 id，由宿主从最近一次结果中还原完整条目。
+///
+/// 自动粘贴的固定顺序在这里体现（spec「粘贴是宿主级操作」）：
+///
+/// 1. 宿主准备剪贴板并给出粘贴计划（含唤起前捕获的目标应用）；
+/// 2. 外壳关闭浮窗——必须先关窗，否则 Flashcast 自己还是前台；
+/// 3. 等焦点交还出去（[`PASTE_SETTLE`]）；
+/// 4. 宿主恢复目标应用、回读前台核对，然后注入系统粘贴。
+///
+/// 第 4 步降级为「已复制，请手动粘贴」时，把窗口重新显示出来：这是关窗之后才能发现的
+/// 结果，用户必须看得见，否则内容既没有粘贴、也没有提示。
 #[tauri::command(rename_all = "snake_case")]
-pub fn execute(state: State<'_, AppState>, item_id: String) -> ActionOutcome {
-    match state.host.item_by_id(&item_id) {
-        Some(item) => state.host.execute(&item),
-        None => {
-            ActionOutcome::failed("结果已过期：请重新输入查询后再执行（列表可能已被重新扫描刷新）")
-        }
+pub fn execute(app: AppHandle, state: State<'_, AppState>, item_id: String) -> ActionOutcome {
+    let Some(item) = state.host.item_by_id(&item_id) else {
+        return ActionOutcome::failed(
+            "结果已过期：请重新输入查询后再执行（列表可能已被重新扫描刷新）",
+        );
+    };
+    let outcome = state.host.execute(&item);
+    if outcome.paste.is_none() {
+        return outcome;
     }
+    summon::hide(&app);
+    std::thread::sleep(PASTE_SETTLE);
+    let outcome = state.host.complete_paste();
+    if outcome.status == ActionStatus::CopiedNeedsManualPaste {
+        summon::reshow(&app);
+    }
+    outcome
 }
 
 /// 键盘选择：移动 `delta`。
@@ -551,8 +571,12 @@ pub fn get_status(state: State<'_, AppState>) -> StatusView {
 }
 
 /// 隐藏窗口（Escape 路径由 UI 决定，最终调用这里）。
+///
+/// 这是用户主动关闭浮窗的入口，因此同时作废待完成的粘贴计划：快速关闭之后不会有任何
+/// 迟到的按键注入。
 #[tauri::command(rename_all = "snake_case")]
-pub fn hide_window(app: AppHandle) {
+pub fn hide_window(app: AppHandle, state: State<'_, AppState>) {
+    state.host.cancel_paste();
     summon::hide(&app);
 }
 

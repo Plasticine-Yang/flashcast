@@ -449,6 +449,18 @@ class MockHost implements HostApi {
   lastLaunched: string | null = null;
   /** 最近一次复制进剪贴板的内容（备忘录的默认操作是复制）。 */
   lastCopied: string | null = null;
+  /**
+   * 最近一次自动粘贴：内容、目标应用与外壳执行的步骤。
+   *
+   * 浏览器模拟宿主把「准备剪贴板 → 关闭浮窗 → 恢复目标应用 → 注入粘贴」按真实外壳
+   * （`src-tauri/src/commands.rs::execute`）的顺序记录下来，交互检查据此断言顺序与内容，
+   * 而**不是**断言「命令已发送」。真实桌面上的粘贴需要检查目标应用的内容，这里做不到。
+   */
+  lastPaste: { content: string; target: string; sequence: string[] } | null = null;
+  /** 唤起前的前台应用（真实外壳在唤起时捕获；浏览器里是固定样例）。 */
+  previousApp: { id: string; name: string } | null = { id: "code", name: "Visual Studio Code" };
+  /** 本会话能否自动粘贴。浏览器默认**不能**（没有可注入按键的桌面会话）。 */
+  private autoPasteSupported = false;
   hidden = false;
   /** 模拟的克隆进度与取消请求。 */
   private cloneState: CloneProgress = IDLE_CLONE_PROGRESS;
@@ -580,6 +592,22 @@ class MockHost implements HostApi {
             item: this.memoItem(memo, { tier: "keywordOrTagExact" as const, relevance: 90 }),
           }))
       : [];
+    // 关键词与标签冲突（ADR §4）：同时给出插件入口，且入口排在最前——直接回车的行为
+    // 与「输入关键词进入范围」一致，标签命中的备忘录就在它下面，不会被静默丢弃。
+    const collisionEntry =
+      this.memoPluginEnabled && MOCK_MEMO_KEYWORDS.includes(query) && memoScored.length > 0
+        ? {
+            id: `flashcast.plugin.${MOCK_MEMO_PLUGIN_ID}`,
+            title: "备忘录",
+            subtitle: `插件 · 回车进入「${query}」范围`,
+            iconDataUrl: null,
+            source: "flashcast",
+            kind: "command" as const,
+            defaultAction: "open" as const,
+            defaultActionLabel: "打开",
+            score: { tier: "keywordOrTagExact" as const, relevance: 255 },
+          }
+        : null;
     const ranked = [
       ...memoScored,
       ...scored.map(({ app, tier, relevance }) => ({
@@ -595,7 +623,8 @@ class MockHost implements HostApi {
         b.relevance - a.relevance ||
         a.title.localeCompare(b.title),
     );
-    return ranked.map((entry) => entry.item);
+    const items = ranked.map((entry) => entry.item);
+    return collisionEntry ? [collisionEntry, ...items] : items;
   }
 
   /** 备忘录范围内的一条结果：默认操作是粘贴（ticket 07 先复制并提示手动粘贴）。 */
@@ -684,8 +713,14 @@ class MockHost implements HostApi {
     const normalized = input.trim().toLowerCase();
     const isMemoKeyword =
       this.memoPluginEnabled && MOCK_MEMO_KEYWORDS.includes(normalized);
+    // 关键词与标签冲突（ADR §4）：输入正好是插件关键词、同时又有备忘录带这个标签时，
+    // 留在首屏并同时给出「插件入口 + 标签命中」；已经在范围内则不算冲突。
+    const collides =
+      isMemoKeyword &&
+      this.scope.kind === "home" &&
+      this.memoEntries.some((memo) => memo.tags.some((tag) => tag.toLowerCase() === normalized));
     // 关键词完整匹配即进入插件范围；已在范围内改用另一个别名时更新记下的关键词。
-    if (isMemoKeyword) {
+    if (isMemoKeyword && !collides) {
       if (this.scope.kind === "home") {
         this.history.push({
           input: this.input,
@@ -710,17 +745,46 @@ class MockHost implements HostApi {
   async execute(itemId: string): Promise<ActionOutcome> {
     // 记录本次请求，浏览器交互检查脚本据此判断回车是否真的触发了执行。
     this.lastLaunched = itemId;
-    // 备忘录的默认操作是复制：ticket 07 先复制并如实提示手动粘贴。
+    // 首屏插件入口：等价于用户直接输入该插件的关键词（与宿主一致）。
+    if (itemId === `flashcast.plugin.${MOCK_MEMO_PLUGIN_ID}`) {
+      if (!this.memoPluginEnabled) {
+        return { status: "failed", message: "插件「备忘录」已停用，无法进入" };
+      }
+      this.history.push({
+        input: this.input,
+        selection: this.selection,
+        scope: this.scope,
+      });
+      const keyword = this.input.trim().toLowerCase();
+      this.scope = { kind: "plugin", id: MOCK_MEMO_PLUGIN_ID, keyword };
+      this.items = this.buildItems();
+      return { status: "done", message: `已进入「备忘录」范围（关键词 ${keyword}）` };
+    }
+    // 备忘录的默认操作是粘贴：先准备剪贴板，再按能力决定能否自动粘贴。
     const memo = this.memoFromItemId(itemId);
     if (memo) {
       if (!this.memoPluginEnabled) {
         return { status: "failed", message: "插件「备忘录」已停用，已拒绝执行" };
       }
       this.lastCopied = memo.body;
-      return {
-        status: "copiedNeedsManualPaste",
-        message: `已复制「${memo.title}」到剪贴板；自动粘贴由后续版本提供，请手动粘贴`,
+      const target = this.previousApp;
+      if (!this.autoPasteSupported || !target) {
+        const reason = target
+          ? "浏览器模拟宿主没有可注入按键的桌面会话"
+          : "没有记录到唤起前的应用，无法确定粘贴目标";
+        return {
+          status: "copiedNeedsManualPaste",
+          message: `已复制「${memo.title}」到剪贴板；${reason}；请切换到目标应用后按 Ctrl+V 手动粘贴`,
+        };
+      }
+      // 与真实外壳同一顺序：准备剪贴板 → 关闭浮窗 → 恢复目标应用 → 注入粘贴。
+      this.lastPaste = {
+        content: this.lastCopied,
+        target: target.name,
+        sequence: ["copied", "windowHidden", "restored", "pasted"],
       };
+      this.hidden = true;
+      return { status: "done", message: `已粘贴「${memo.title}」到「${target.name}」` };
     }
     const app = MOCK_APPS.find((candidate) => itemId === `app:${candidate.id}`);
     if (app?.failsToLaunch) {
@@ -850,7 +914,27 @@ class MockHost implements HostApi {
   }
 
   async get_capabilities(): Promise<Capabilities> {
-    return MOCK_CAPABILITIES;
+    // 自动粘贴能力与模拟宿主的执行路径保持一致：浏览器里没有可注入按键的桌面会话，
+    // 因此默认是「不支持」；交互检查可以临时打开它来验证 UI 的粘贴路径。
+    return {
+      ...MOCK_CAPABILITIES,
+      autoPaste: this.autoPasteSupported
+        ? { status: "supported" as const }
+        : {
+            status: "unsupported" as const,
+            reason: "浏览器模拟宿主没有可注入按键的桌面会话",
+          },
+    };
+  }
+
+  /** 交互检查用：模拟「本会话支持自动粘贴」与「记录到了唤起前的应用」。 */
+  setAutoPasteSupported(supported: boolean): void {
+    this.autoPasteSupported = supported;
+  }
+
+  /** 交互检查用：模拟唤起前的前台应用；传 `null` 表示没有记录到目标。 */
+  setPreviousApp(app: { id: string; name: string } | null): void {
+    this.previousApp = app;
   }
 
   async get_settings(): Promise<Settings> {

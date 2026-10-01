@@ -676,7 +676,7 @@ export default function App() {
   const runExecute = async (item: ItemView) => {
     const outcome = await api.execute(item.id);
     if (outcome.status === "failed") {
-      // 启动失败必须给出可理解的中文反馈。
+      // 失败必须给出可理解的中文反馈。
       setFeedback(outcome);
       return;
     }
@@ -684,7 +684,15 @@ export default function App() {
     if (outcome.status === "done" && !outcome.message) {
       // 成功启动真实软件后窗口由外壳隐藏。
       setVisible(false);
+      return;
     }
+    if (item.kind === "command") {
+      // 命令条目会改变宿主的查询状态（重新扫描软件、进入插件范围）：
+      // 必须按当前输入重新读取结果，否则列表与宿主状态不一致。
+      void api.query(input).then(apply);
+    }
+    // `pastePending`：宿主已准备好剪贴板，正在等待外壳关窗并注入粘贴。窗口由外壳关闭，
+    // 这里只显示反馈、不隐藏（真实外壳在关窗后会以最终状态更新同一块反馈区）。
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {

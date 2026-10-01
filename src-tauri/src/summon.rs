@@ -10,6 +10,13 @@ use crate::state::AppState;
 /// 刚唤起后的保护窗口：在此期间忽略失焦事件，避免窗口刚显示就被立刻隐藏。
 pub const SUMMON_GRACE: Duration = Duration::from_millis(250);
 
+/// 关闭浮窗与注入粘贴之间的等待。
+///
+/// 隐藏窗口只是发起请求：窗口管理器把焦点交还给原来的应用需要一点时间（X11 还要一次
+/// 往返，Windows/macOS 的激活也是异步的）。研究笔记给出的经验区间是 50–150 ms；
+/// 这里取上限，随后宿主还会回读前台核对，核对不通过就退回手动粘贴。
+pub const PASTE_SETTLE: Duration = Duration::from_millis(150);
+
 /// 搜索窗口的标签。
 pub const SEARCH_WINDOW: &str = "search";
 
@@ -24,6 +31,9 @@ pub fn summon<R: Runtime>(app: &AppHandle<R>) {
             None
         }
     };
+    // 把唤起前的应用交给宿主作为**本次**粘贴目标：每次都覆盖，并作废上一次未完成的
+    // 粘贴计划。拿不到就交给它 `None`，绝不使用上一次唤起的旧身份。
+    state.host.set_paste_target(previous.clone());
     state.mark_summoned();
 
     if let Some(window) = app.get_webview_window(SEARCH_WINDOW) {
@@ -46,9 +56,32 @@ pub struct SummonedPayload {
 }
 
 /// 隐藏搜索窗口。
+///
+/// 只做窗口操作：自动粘贴流程**必须**用它（不能顺手作废粘贴计划），因为关窗正是粘贴
+/// 流程的一步。用户主动关闭浮窗请用 [`hide_and_cancel`]。
 pub fn hide<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window(SEARCH_WINDOW) {
         let _ = window.hide();
+    }
+}
+
+/// 用户主动关闭浮窗（Escape、托盘、关闭按钮）：隐藏窗口并作废待完成的粘贴计划。
+///
+/// 「快速关闭」之后即使有一次迟到的完成请求，也不会有任何按键被注入。
+pub fn hide_and_cancel<R: Runtime>(app: &AppHandle<R>) {
+    let state = app.state::<AppState>();
+    state.host.cancel_paste();
+    hide(app);
+}
+
+/// 重新显示搜索窗口：只显示并聚焦，**不**重新采集唤起前的应用。
+///
+/// 用在「关窗之后才发现无法自动粘贴」的降级路径：必须让用户看到提示，但绝不能把当前
+/// 前台（很可能正是目标应用）记成新的粘贴目标。
+pub fn reshow<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(SEARCH_WINDOW) {
+        let _ = window.show();
+        let _ = window.set_focus();
     }
 }
 
@@ -56,7 +89,7 @@ pub fn hide<R: Runtime>(app: &AppHandle<R>) {
 pub fn toggle<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window(SEARCH_WINDOW) {
         if window.is_visible().unwrap_or(false) {
-            let _ = window.hide();
+            hide_and_cancel(app);
             let _ = app.emit("flashcast://dismissed", ());
             return;
         }

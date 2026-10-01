@@ -52,9 +52,26 @@ export interface QueryView {
   pluginFailures: PluginFailure[];
 }
 
+/**
+ * 命令入口的返回。
+ *
+ * `pastePending` 是宿主与外壳之间的中间状态（「已复制，等外壳关窗后完成粘贴」）：
+ * 真实外壳（`src-tauri/src/commands.rs`）会先关闭浮窗、恢复目标应用并注入粘贴，
+ * 再把最终状态（`done` / `copiedNeedsManualPaste`）交给 UI，因此界面上通常看不到它。
+ */
 export interface ActionOutcome {
-  status: "done" | "copiedNeedsManualPaste" | "failed";
+  status: "done" | "copiedNeedsManualPaste" | "pastePending" | "failed";
   message: string | null;
+  /** 待完成的粘贴计划（状态为 `pastePending` 时存在）。 */
+  paste?: PastePlan | null;
+}
+
+/** 自动粘贴计划：内容是唤起前捕获的目标应用与本次执行的序号。 */
+export interface PastePlan {
+  target: { id: string; name: string; wmClass: string | null; pid: number | null; window: number | null };
+  label: string;
+  epoch: number;
+  textBytes: number;
 }
 
 export interface BackView {
