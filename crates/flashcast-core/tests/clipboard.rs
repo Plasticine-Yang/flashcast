@@ -446,15 +446,28 @@ fn pause_stops_recording_and_resume_does_not_backfill() {
     assert!(harness.host.clipboard_state().paused);
 
     // 暂停期间复制的两次内容都必须被丢弃（并且轮询仍然推进，不会在恢复后补记）。
+    //
+    // 这里刻意不断言「一定是 Paused」：启用插件后后台捕获线程与本次手动轮询存在竞争，
+    // 这次改动可能已经被后台那一次消费掉，手动这次看到的就是 Unchanged。两种结果都表示
+    // 「没有记录」，真正的契约由下面的 entries()/summaries() 断言守住。
+    // （macOS 与 Windows 的 CI 腿实测过这个竞争，Linux 上恰好总是手动这次先到。）
     harness.copy_only("暂停期间的内容一");
-    assert_eq!(
-        harness.host.capture_clipboard_once(),
-        ClipboardCaptureOutcome::Paused
+    let outcome = harness.host.capture_clipboard_once();
+    assert!(
+        matches!(
+            outcome,
+            ClipboardCaptureOutcome::Paused | ClipboardCaptureOutcome::Unchanged
+        ),
+        "暂停期间不得记录内容：{outcome:?}"
     );
     harness.copy_only("暂停期间的内容二");
-    assert_eq!(
-        harness.host.capture_clipboard_once(),
-        ClipboardCaptureOutcome::Paused
+    let outcome = harness.host.capture_clipboard_once();
+    assert!(
+        matches!(
+            outcome,
+            ClipboardCaptureOutcome::Paused | ClipboardCaptureOutcome::Unchanged
+        ),
+        "暂停期间不得记录内容：{outcome:?}"
     );
     assert_eq!(harness.entries().len(), 1, "暂停期间不记录任何内容");
 
