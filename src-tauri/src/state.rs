@@ -28,6 +28,11 @@ pub struct AppState {
     pub hotkey: Mutex<HotkeyState>,
     /// 图标 data URL 缓存，按文件路径索引。
     pub icons: Mutex<HashMap<PathBuf, Option<String>>>,
+    /// 剪贴板图片缩略图 data URL 缓存，按附件路径索引（ticket 10）。
+    ///
+    /// 缩略图要解码 + 缩放 + 重编码，每次查询都重做一遍会拖慢键入；附件路径在
+    /// 历史里是稳定的（一个附件只属于一条历史），因此可以按路径长期缓存。
+    pub thumbnails: Mutex<HashMap<PathBuf, Option<String>>>,
     /// 最近一次唤起的时间，用于避免刚显示就被失焦事件立刻隐藏。
     pub last_summon: Mutex<Option<Instant>>,
 }
@@ -40,6 +45,7 @@ impl AppState {
             previous_app: Mutex::new(None),
             hotkey: Mutex::new(HotkeyState::default()),
             icons: Mutex::new(HashMap::new()),
+            thumbnails: Mutex::new(HashMap::new()),
             last_summon: Mutex::new(None),
         }
     }

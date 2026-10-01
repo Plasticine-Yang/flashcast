@@ -23,6 +23,8 @@ export interface ItemView {
   title: string;
   subtitle: string | null;
   iconDataUrl: string | null;
+  /** 剪贴板图片历史的缩略图 data URL（ticket 10）；非图片条目为 null。 */
+  thumbnailDataUrl: string | null;
   source: string;
   kind: ItemKind;
   defaultAction: DefaultAction;
@@ -212,6 +214,10 @@ export interface ClipboardEntryView {
   pinned: boolean;
   copies: number;
   attachments: number;
+  /** 图片条目的缩略图 data URL（ticket 10）；非图片条目为 null。 */
+  imageDataUrl: string | null;
+  /** 图片的类型与尺寸，例如 `PNG 4×3`；非图片条目为 null。 */
+  imageSize: string | null;
 }
 
 /**
@@ -515,13 +521,15 @@ export interface MemoProblem {
 }
 
 /**
- * 预览内容（对应 flashcast_core::Preview）。
- * 备忘录给出完整正文；其它条目类型在后续切片里扩展。
+ * 预览内容（对应外壳的 `PreviewView`）。
+ *
+ * 备忘录与剪贴板文字给出完整正文；剪贴板图片给出**完整图片的 data URL**
+ * （外壳读本机附件并编码，webview 里 `file://` 会被 CSP 挡住）。
  */
 export type Preview =
   | { kind: "none" }
   | { kind: "text"; title: string | null; body: string }
-  | { kind: "image"; path: string };
+  | { kind: "image"; dataUrl: string };
 
 // ---------------------------------------------------------------------------
 // Chrome 书签（ticket 13）

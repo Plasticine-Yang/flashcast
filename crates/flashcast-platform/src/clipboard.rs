@@ -302,6 +302,21 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Strin
     crate::windows::icons::encode_png(width, height, rgba)
 }
 
+/// 生成缩略图 PNG（长边不超过 `max_edge`，不放大）。
+///
+/// 结果列表里的每一条图片历史都要有缩略图；把 16 MB 的原图直接编码成 data URL 会让
+/// 一次查询返回几十 MB 的字符串。缩放与编码是纯逻辑，与操作系统无关，因此放在这里
+/// 由本地测试覆盖，而不是留给 UI 或某一个平台。
+pub fn png_thumbnail(png: &[u8], max_edge: u32) -> Result<Vec<u8>, String> {
+    if max_edge == 0 {
+        return Err("缩略图边长必须大于 0".to_string());
+    }
+    let decoded = image::load_from_memory(png).map_err(|error| format!("无法解码图片：{error}"))?;
+    let thumbnail = decoded.thumbnail(max_edge, max_edge).to_rgba8();
+    let (width, height) = thumbnail.dimensions();
+    encode_png(width, height, thumbnail.as_raw())
+}
+
 /// 把 `CF_DIB` 字节（Windows 剪贴板的位图格式，没有 `BITMAPFILEHEADER`）转换为 PNG。
 ///
 /// 支持 `BITMAPINFOHEADER` / `BITMAPV4HEADER` / `BITMAPV5HEADER` 的 24 位与 32 位
@@ -1186,5 +1201,25 @@ mod image_tests {
     fn byte_fingerprint_tracks_content() {
         assert_eq!(fingerprint_bytes(b"abc"), fingerprint_bytes(b"abc"));
         assert_ne!(fingerprint_bytes(b"abc"), fingerprint_bytes(b"abd"));
+    }
+
+    /// 缩略图：长边收到上限、不放大、仍然是可解码的 PNG。
+    #[test]
+    fn thumbnails_shrink_but_never_grow() {
+        let big = png_of(400, 200, &vec![7u8; 400 * 200 * 4]);
+        let thumb = png_thumbnail(&big, 96).expect("生成缩略图");
+        let decoded = image::load_from_memory(&thumb).expect("缩略图必须可解码");
+        assert_eq!(decoded.dimensions(), (96, 48));
+        assert!(thumb.len() < big.len(), "缩略图必须更小");
+
+        // 原图比上限还小：保持原尺寸，不放大。
+        let small = png_of(12, 8, &vec![9u8; 12 * 8 * 4]);
+        let decoded = image::load_from_memory(&png_thumbnail(&small, 96).expect("缩略图"))
+            .expect("可解码");
+        assert_eq!(decoded.dimensions(), (12, 8));
+
+        // 不是 PNG 的字节如实失败，不产出半张图。
+        assert!(png_thumbnail(b"not a png", 96).is_err());
+        assert!(png_thumbnail(&small, 0).is_err());
     }
 }

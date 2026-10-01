@@ -311,6 +311,15 @@ export const MOCK_CHROME_KEYWORDS = ["chrome bookmarks", "chrome 书签"];
  *
  * 「剪贴板」与「剪切板」是**同一个**插件的两个输入别名：模拟宿主里也只有一份历史。
  */
+/**
+ * 浏览器模拟宿主里那一张「图片历史」的缩略图/预览 data URL。
+ *
+ * 真实外壳会读本机附件并编码（PNG）；这里内嵌一张 12×8 的真实 PNG，
+ * 让 UI 走与生产完全相同的 `<img src="data:image/png;base64,…">` 路径。
+ */
+const MOCK_CLIPBOARD_IMAGE_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAICAYAAADN5B7xAAAAjklEQVR4nBXLIQFCMRQAQJKQgQCoZXgZpn6ABUAtw8swRYBJBGoZ1gNu4uTd7s/P70EhqDQ6yWCy2NzuIVAIKo1OMpgsdpxwCRSCSqOTDCaLfZ3wEigElUYnGUwW+3VCChSCSqOTDCaLnSe8BQpBpdFJBpPFfp/wFSgElUYnGUwW+3vCFigElUYnGUwWmz9ywhEQhoZgdAAAAABJRU5ErkJggg==";
+
 export const MOCK_CLIPBOARD_PLUGIN_ID = "clipboard";
 export const MOCK_CLIPBOARD_KEYWORDS = ["剪贴板", "剪切板", "clipboard"];
 
@@ -337,6 +346,19 @@ const MOCK_CLIPBOARD_ENTRIES: ClipboardEntryView[] = [
     pinned: true,
     copies: 2,
     attachments: 0,
+  },
+  {
+    id: "clip-mock-3",
+    summary: "图片 PNG 12×8（0.1 KB）",
+    text: null,
+    formats: ["图片"],
+    source: "GIMP",
+    capturedAtMs: Date.now() - 70 * 60 * 1000,
+    pinned: false,
+    copies: 1,
+    attachments: 1,
+    imageDataUrl: MOCK_CLIPBOARD_IMAGE_DATA_URL,
+    imageSize: "PNG 12×8",
   },
 ];
 
@@ -737,6 +759,7 @@ class MockHost implements HostApi {
         title: "重新扫描软件",
         subtitle: "刷新已安装软件列表",
         iconDataUrl: null,
+      thumbnailDataUrl: null,
         source: "flashcast",
         kind: "command",
         defaultAction: "open",
@@ -748,6 +771,7 @@ class MockHost implements HostApi {
         title: "查看平台能力",
         subtitle: "显示会话类型与各能力的真实支持状态",
         iconDataUrl: null,
+      thumbnailDataUrl: null,
         source: "flashcast",
         kind: "command",
         defaultAction: "open",
@@ -795,6 +819,7 @@ class MockHost implements HostApi {
             title: "备忘录",
             subtitle: `插件 · 回车进入「${query}」范围`,
             iconDataUrl: null,
+      thumbnailDataUrl: null,
             source: "flashcast",
             kind: "command" as const,
             defaultAction: "open" as const,
@@ -831,6 +856,10 @@ class MockHost implements HostApi {
       parts.push("已置顶");
     }
     parts.push(...entry.formats);
+    // 类型与尺寸（ticket 10）：图片没有可检索的文字，这是分辨条目的主要依据。
+    if (entry.imageSize) {
+      parts.push(entry.imageSize);
+    }
     if (entry.source) {
       parts.push(`来自 ${entry.source}`);
     }
@@ -842,6 +871,7 @@ class MockHost implements HostApi {
       title: entry.summary,
       subtitle: parts.join(" · "),
       iconDataUrl: null,
+      thumbnailDataUrl: entry.imageDataUrl ?? null,
       source: MOCK_CLIPBOARD_PLUGIN_ID,
       kind: "clipboardEntry",
       defaultAction: "paste",
@@ -942,6 +972,7 @@ class MockHost implements HostApi {
       title: entry.title,
       subtitle,
       iconDataUrl: null,
+      thumbnailDataUrl: null,
       source: MOCK_CHROME_PLUGIN_ID,
       kind: "bookmark",
       defaultAction: "openInChrome",
@@ -1067,6 +1098,7 @@ class MockHost implements HostApi {
       title: memo.title,
       subtitle: memo.tags.length > 0 ? `标签：${memo.tags.join("、")}` : "无标签",
       iconDataUrl: null,
+      thumbnailDataUrl: null,
       source: MOCK_MEMO_PLUGIN_ID,
       kind: "memo",
       defaultAction: "paste",
@@ -1116,6 +1148,7 @@ class MockHost implements HostApi {
       title: app.title,
       subtitle: app.subtitle,
       iconDataUrl: null,
+      thumbnailDataUrl: null,
       source: "flashcast",
       kind: "application",
       defaultAction: "open",
@@ -1329,9 +1362,19 @@ class MockHost implements HostApi {
     if (itemId.startsWith("clipboard:")) {
       const id = itemId.slice("clipboard:".length);
       const entry = this.clipboardEntries.find((candidate) => candidate.id === id);
-      return entry
-        ? { kind: "text", title: entry.summary, body: entry.text ?? "（没有可显示的文字内容）" }
-        : null;
+      if (!entry) {
+        return null;
+      }
+      // 图片条目给出完整图片的 data URL（真实外壳读本机附件后编码），
+      // 与 `PreviewView` 的字段一一对应。
+      if (entry.imageDataUrl) {
+        return { kind: "image", dataUrl: entry.imageDataUrl };
+      }
+      return {
+        kind: "text",
+        title: entry.summary,
+        body: entry.text ?? "（没有可显示的文字内容）",
+      };
     }
     return null;
   }

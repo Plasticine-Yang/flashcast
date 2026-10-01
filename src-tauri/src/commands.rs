@@ -14,7 +14,7 @@ use flashcast_core::{
 };
 use tauri::{AppHandle, Manager, State};
 
-use crate::icon::icon_data_url;
+use crate::icon::{icon_data_url, image_data_url, thumbnail_data_url};
 use crate::state::{lock, AppState};
 use crate::summon::{self, PASTE_SETTLE};
 use crate::watch::WorkspaceEvent;
@@ -27,6 +27,8 @@ pub struct ItemView {
     pub title: String,
     pub subtitle: Option<String>,
     pub icon_data_url: Option<String>,
+    /// 剪贴板图片历史的缩略图 data URL（ticket 10）。非图片条目为 `null`。
+    pub thumbnail_data_url: Option<String>,
     pub source: String,
     pub kind: ItemKind,
     pub default_action: DefaultAction,
@@ -93,11 +95,24 @@ fn item_view(state: &AppState, item: &SearchItem) -> ItemView {
             .or_insert_with(|| icon_data_url(&path))
             .clone()
     });
+    // 图片历史的缩略图：从结果自带的图片预览路径生成，并按路径缓存
+    // （解码 + 缩放 + 重编码比图标贵得多）。
+    let thumbnail_data_url = match &item.preview {
+        Preview::Image { path } => {
+            let mut cache = lock(&state.thumbnails);
+            cache
+                .entry(path.clone())
+                .or_insert_with(|| thumbnail_data_url(path))
+                .clone()
+        }
+        _ => None,
+    };
     ItemView {
         id: item.id.clone(),
         title: item.title.clone(),
         subtitle: item.subtitle.clone(),
         icon_data_url,
+        thumbnail_data_url,
         source: item.source.clone(),
         kind: item.kind,
         default_action: item.default_action,
@@ -563,6 +578,10 @@ pub struct ClipboardEntryView {
     pub copies: u32,
     /// 附件数量（tickets 10–12 的图片与文件副本）。
     pub attachments: usize,
+    /// 图片条目的缩略图 data URL；非图片条目为 `null`（ticket 10）。
+    pub image_data_url: Option<String>,
+    /// 图片的类型与尺寸，例如 `PNG 1920×1080`；非图片条目为 `null`。
+    pub image_size: Option<String>,
 }
 
 /// 剪贴板历史面板需要的全部状态：宿主状态 + 当前条目列表。
@@ -598,6 +617,10 @@ fn clipboard_state_view(state: &AppState) -> ClipboardStateView {
             pinned: event.pinned,
             copies: event.copies,
             attachments: event.attachments.len(),
+            image_data_url: event
+                .image_attachment()
+                .and_then(|attachment| thumbnail_data_url(&attachment.path)),
+            image_size: event.image_label(),
         })
         .collect();
     ClipboardStateView {
@@ -711,10 +734,47 @@ pub fn refresh_chrome_bookmarks(state: State<'_, AppState>) -> ChromeState {
     state.host.refresh_chrome_bookmarks()
 }
 
+/// 展示用的预览内容。
+///
+/// 与 `flashcast_core::Preview` 一一对应，唯一的区别是图片：宿主返回的是本机附件
+/// **路径**，而 webview 里 `<img src="file://…">` 会被 CSP 挡住（asset 协议还要额外
+/// 配置与 scope），因此外壳把它读成 data URL 再交给 UI。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum PreviewView {
+    None,
+    Text {
+        title: Option<String>,
+        body: String,
+    },
+    Image {
+        data_url: String,
+    },
+}
+
+/// 把宿主的预览转换成 UI 可直接渲染的形式。
+fn preview_view(preview: Option<Preview>) -> Option<PreviewView> {
+    Some(match preview? {
+        Preview::None => PreviewView::None,
+        Preview::Text { title, body } => PreviewView::Text { title, body },
+        Preview::Image { path } => match image_data_url(&path) {
+            Some(data_url) => PreviewView::Image { data_url },
+            // 附件读不出来时如实说明，而不是给 UI 一个必然加载失败的地址。
+            None => PreviewView::Text {
+                title: None,
+                body: format!(
+                    "图片附件无法读取：{}\n它可能已被删除或超出可预览的大小。",
+                    path.display()
+                ),
+            },
+        },
+    })
+}
+
 /// 预览某条结果。备忘录按**当前**内容返回完整正文；未知 id 返回 `null`。
 #[tauri::command(rename_all = "snake_case")]
-pub fn preview(state: State<'_, AppState>, item_id: String) -> Option<Preview> {
-    state.host.preview(&item_id)
+pub fn preview(state: State<'_, AppState>, item_id: String) -> Option<PreviewView> {
+    preview_view(state.host.preview(&item_id))
 }
 
 #[tauri::command(rename_all = "snake_case")]
