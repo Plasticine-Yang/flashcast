@@ -156,7 +156,7 @@ pub fn query(state: State<'_, AppState>, input: String) -> QueryView {
 ///
 /// 第 4 步降级为「已复制，请手动粘贴」时，把窗口重新显示出来：这是关窗之后才能发现的
 /// 结果，用户必须看得见，否则内容既没有粘贴、也没有提示。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn execute(app: AppHandle, state: State<'_, AppState>, item_id: String) -> ActionOutcome {
     let Some(item) = state.host.item_by_id(&item_id) else {
         return ActionOutcome::failed(
@@ -177,14 +177,14 @@ pub fn execute(app: AppHandle, state: State<'_, AppState>, item_id: String) -> A
 }
 
 /// 键盘选择：移动 `delta`。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn move_selection(state: State<'_, AppState>, delta: isize) -> QueryView {
     let response = state.host.move_selection(delta);
     query_view(&state, &response)
 }
 
 /// 键盘选择：直接设置为指定下标。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn set_selection(state: State<'_, AppState>, index: usize) -> QueryView {
     let response = state.host.set_selection(index);
     query_view(&state, &response)
@@ -208,18 +208,18 @@ pub fn rescan(state: State<'_, AppState>) -> QueryView {
 }
 
 /// 当前状态快照（不重新搜索），用于窗口重新显示时同步。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn refresh_state(state: State<'_, AppState>) -> QueryView {
     let response = state.host.snapshot();
     query_view(&state, &response)
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn get_capabilities(state: State<'_, AppState>) -> flashcast_platform::Capabilities {
     state.host.capabilities()
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
     state.host.settings()
 }
@@ -227,7 +227,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 /// 写入设置。快捷键变化时重新注册，注册失败会作为可展示的错误返回。
 ///
 /// 宿主先把设置写进当前工作区文件，写入失败时保留上一次可用状态并返回中文原因。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn set_settings(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -245,13 +245,13 @@ pub fn set_settings(
 }
 
 /// 当前主题状态：选中主题、CSS 自定义属性与可选主题列表。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn get_theme(state: State<'_, AppState>) -> ThemeState {
     state.host.theme_state()
 }
 
 /// 选择主题。失败时返回中文原因，且当前外观不变。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn select_theme(state: State<'_, AppState>, id: String) -> Result<ThemeState, String> {
     state
         .host
@@ -260,7 +260,7 @@ pub fn select_theme(state: State<'_, AppState>, id: String) -> Result<ThemeState
 }
 
 /// 启用或停用插件（功能插件与主题插件共用同一张清单）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn set_plugin_enabled(
     state: State<'_, AppState>,
     id: String,
@@ -273,14 +273,14 @@ pub fn set_plugin_enabled(
 }
 
 /// 上报当前系统外观；「跟随系统」的主题据此在运行时切换。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn set_system_appearance(state: State<'_, AppState>, appearance: Appearance) -> ThemeState {
     state.host.set_system_appearance(appearance)
 }
 
 /// 校验并安装一个本地主题包（目录或 JSON 文件）。失败时返回中文原因，
 /// 已安装内容与当前外观保持不变。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn install_theme(state: State<'_, AppState>, path: String) -> Result<ThemeState, String> {
     state
         .host
@@ -289,7 +289,7 @@ pub fn install_theme(state: State<'_, AppState>, path: String) -> Result<ThemeSt
 }
 
 /// 移除一个已安装的本地主题包。内置主题会被拒绝。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn remove_theme(state: State<'_, AppState>, id: String) -> Result<ThemeState, String> {
     state
         .host
@@ -298,14 +298,14 @@ pub fn remove_theme(state: State<'_, AppState>, id: String) -> Result<ThemeState
 }
 
 /// 当前配置工作区与它的有效性。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn get_workspace(state: State<'_, AppState>) -> WorkspaceStatus {
     state.host.workspace_status()
 }
 
 /// 关联一个已存在的本地仓库 / 目录为配置工作区。失败时返回中文原因，
 /// 并且不改变当前工作区与有效设置。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn select_workspace(
     state: State<'_, AppState>,
     path: String,
@@ -317,7 +317,7 @@ pub fn select_workspace(
 }
 
 /// 在指定目录初始化新的配置工作区及其 Git 仓库。目标目录非空时拒绝。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn init_workspace(state: State<'_, AppState>, path: String) -> Result<WorkspaceStatus, String> {
     state
         .host
@@ -336,7 +336,7 @@ pub struct TokenInput {
 ///
 /// libgit2 是阻塞的 C 库，放到阻塞线程池执行，避免卡住 Tauri 运行时；
 /// UI 通过 `clone_progress` 轮询进度、用 `cancel_clone` 取消。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn clone_workspace(
     state: State<'_, AppState>,
     url: String,
@@ -357,13 +357,13 @@ pub async fn clone_workspace(
 }
 
 /// 最近一次克隆的进度快照。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn clone_progress(state: State<'_, AppState>) -> CloneProgress {
     state.host.clone_progress()
 }
 
 /// 请求取消正在进行的克隆。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn cancel_clone(state: State<'_, AppState>) {
     state.host.cancel_clone();
 }
@@ -372,7 +372,7 @@ pub fn cancel_clone(state: State<'_, AppState>) {
 ///
 /// 只读入口，不修改仓库；工作区不是 Git 仓库或读取失败时，
 /// 结果里的 `error` 给出中文原因（ADR §3 的补充入口）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn get_git_changes(state: State<'_, AppState>) -> WorkspaceChanges {
     state.host.workspace_changes()
 }
@@ -381,7 +381,7 @@ pub fn get_git_changes(state: State<'_, AppState>) -> WorkspaceChanges {
 ///
 /// 失败（空提交说明、没有选择、身份未配置、工作区异常、索引被占用）时返回中文原因；
 /// 宿主保证此时不产生提交，也不改动工作区文件与用户已有的暂存状态。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn commit_changes(
     state: State<'_, AppState>,
     message: String,
@@ -394,7 +394,7 @@ pub fn commit_changes(
 }
 
 /// 重新读取工作区配置（外部修改未触发监听时的兜底入口）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn reload_workspace(state: State<'_, AppState>) -> WorkspaceEvent {
     let reload = state.host.reload_workspace();
     WorkspaceEvent {
@@ -408,13 +408,13 @@ pub fn reload_workspace(state: State<'_, AppState>) -> WorkspaceEvent {
 /// 当前工作区的同步状态（分支、远端、领先 / 落后、阻塞原因与指引）。
 ///
 /// 只读入口：不发网络请求，也不改动仓库。业务判断全在宿主。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn get_sync_status(state: State<'_, AppState>) -> SyncStatus {
     state.host.sync_status()
 }
 
 /// 重新检测同步状态：用户在应用外部处理完阻塞后调用它恢复同步。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn redetect_sync_state(state: State<'_, AppState>) -> SyncStatus {
     state.host.redetect_sync_state()
 }
@@ -424,7 +424,7 @@ pub fn redetect_sync_state(state: State<'_, AppState>) -> SyncStatus {
 /// libgit2 是阻塞的 C 库，放到阻塞线程池执行；UI 用 `sync_progress` 轮询进度、
 /// 用 `cancel_sync` 取消。阻塞状态（未提交修改、分叉、冲突、进行中操作）在
 /// 宿主里先于网络操作返回，工作区与索引保持不变。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn pull_workspace(state: State<'_, AppState>) -> Result<PullOutcome, String> {
     let host = host_of(&state);
     tauri::async_runtime::spawn_blocking(move || {
@@ -435,7 +435,7 @@ pub async fn pull_workspace(state: State<'_, AppState>) -> Result<PullOutcome, S
 }
 
 /// 显式推送当前分支到它的上游（永不 force）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub async fn push_workspace(state: State<'_, AppState>) -> Result<PushOutcome, String> {
     let host = host_of(&state);
     tauri::async_runtime::spawn_blocking(move || {
@@ -446,13 +446,13 @@ pub async fn push_workspace(state: State<'_, AppState>) -> Result<PushOutcome, S
 }
 
 /// 最近一次同步的进度快照。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn sync_progress(state: State<'_, AppState>) -> SyncProgress {
     state.host.sync_progress()
 }
 
 /// 请求取消正在进行的同步。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn cancel_sync(state: State<'_, AppState>) {
     state.host.cancel_sync();
 }
@@ -504,7 +504,7 @@ pub fn memos(state: State<'_, AppState>) -> Vec<MemoView> {
 }
 
 /// 无法读取的备忘录文件：宿主保留可用内容，并如实报告原因。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn memo_problems(state: State<'_, AppState>) -> Vec<MemoProblemView> {
     state
         .host
@@ -518,7 +518,7 @@ pub fn memo_problems(state: State<'_, AppState>) -> Vec<MemoProblemView> {
 }
 
 /// 新建一条备忘录。未关联工作区或插件已停用时返回中文原因。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn create_memo(
     state: State<'_, AppState>,
     title: String,
@@ -533,7 +533,7 @@ pub fn create_memo(
 }
 
 /// 修改一条已存在的备忘录（标识不变）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn update_memo(
     state: State<'_, AppState>,
     id: String,
@@ -549,7 +549,7 @@ pub fn update_memo(
 }
 
 /// 删除一条备忘录（同时删除工作区里的文件）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn delete_memo(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state
         .host
@@ -680,13 +680,13 @@ fn clipboard_state_view(state: &AppState) -> ClipboardStateView {
 
 /// 剪贴板历史状态：是否启用、是否暂停、后台是否在捕获、存储是否可用、
 /// 容量与保留期限，以及容量触顶 / 最近失败的准确原因。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn get_clipboard_state(state: State<'_, AppState>) -> ClipboardStateView {
     clipboard_state_view(&state)
 }
 
 /// 暂停或恢复记录。设置随其它偏好写进配置工作区。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn set_clipboard_paused(
     state: State<'_, AppState>,
     paused: bool,
@@ -699,7 +699,7 @@ pub fn set_clipboard_paused(
 }
 
 /// 设置保留期限（天）与容量（条目数），并立即回收超出的条目。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn set_clipboard_limits(
     state: State<'_, AppState>,
     retention_days: u32,
@@ -713,7 +713,7 @@ pub fn set_clipboard_limits(
 }
 
 /// 置顶 / 取消置顶一条历史。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn pin_clipboard_entry(
     state: State<'_, AppState>,
     id: String,
@@ -727,7 +727,7 @@ pub fn pin_clipboard_entry(
 }
 
 /// 删除一条历史（同时回收不再被引用的附件）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn delete_clipboard_entry(
     state: State<'_, AppState>,
     id: String,
@@ -740,7 +740,7 @@ pub fn delete_clipboard_entry(
 }
 
 /// 清空历史（置顶条目也会被清掉，附件同步回收）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn clear_clipboard_history(state: State<'_, AppState>) -> Result<ClipboardStateView, String> {
     state
         .host
@@ -754,7 +754,7 @@ pub fn clear_clipboard_history(state: State<'_, AppState>) -> Result<ClipboardSt
 /// 这是唯一会复制原文件内容的入口：捕获路径永远不会自动复制。原文件只会被读取，
 /// 不会被移动或删除；失败时把宿主给出的准确原因（原文件失效、访问失败、超过单份或
 /// 总容量、复制中断、不支持的类型）原样带回 UI。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn save_clipboard_file_copy(
     state: State<'_, AppState>,
     id: String,
@@ -776,7 +776,7 @@ pub fn save_clipboard_file_copy(
 /// 每次调用都会按 mtime + size 检查书签文件并在变化时重建索引，因此 UI 轮询它就等于
 /// 「书签变化后刷新」。本机路径只回给本机 webview；关联只能通过
 /// [`associate_chrome_profile`] 传**目录名**完成，宿主不接受调用方给出的任意路径。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn get_chrome_state(state: State<'_, AppState>) -> ChromeState {
     state.host.chrome_state()
 }
@@ -784,7 +784,7 @@ pub fn get_chrome_state(state: State<'_, AppState>) -> ChromeState {
 /// 关联一个已发现的 Chrome profile（参数是 `Local State` 里的**目录名**）。
 ///
 /// 失败时返回中文原因，且不改变原来的关联。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn associate_chrome_profile(
     state: State<'_, AppState>,
     profile_dir: String,
@@ -796,7 +796,7 @@ pub fn associate_chrome_profile(
 }
 
 /// 显式重新读取书签文件（外部改动后的兜底入口）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn refresh_chrome_bookmarks(state: State<'_, AppState>) -> ChromeState {
     state.host.refresh_chrome_bookmarks()
 }
@@ -839,12 +839,12 @@ fn preview_view(preview: Option<Preview>) -> Option<PreviewView> {
 }
 
 /// 预览某条结果。备忘录按**当前**内容返回完整正文；未知 id 返回 `null`。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn preview(state: State<'_, AppState>, item_id: String) -> Option<PreviewView> {
     preview_view(state.host.preview(&item_id))
 }
 
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn get_status(state: State<'_, AppState>) -> StatusView {
     let plugins = state
         .host
@@ -870,7 +870,7 @@ pub fn get_status(state: State<'_, AppState>) -> StatusView {
 ///
 /// 这是用户主动关闭浮窗的入口，因此同时作废待完成的粘贴计划：快速关闭之后不会有任何
 /// 迟到的按键注入。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command]
 pub fn hide_window(app: AppHandle, state: State<'_, AppState>) {
     state.host.cancel_paste();
     summon::hide(&app);
