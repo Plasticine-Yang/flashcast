@@ -27,6 +27,28 @@
 //! 剪贴板历史是本机数据，**绝不进入配置工作区**（spec 用户故事 30）：数据库与附件都在
 //! 设备本地目录（`<应用数据目录>/clipboard/`）下，工作区里只有可迁移的偏好
 //! （保留期限、容量、暂停开关，见 [`crate::settings`]）。
+//!
+//! ## 富文本（ticket 11）
+//!
+//! - **一次复制事件一条历史**：同一次复制的纯文本与受支持的 HTML/RTF 一起落进一行
+//!   `clipboard_events` 加多行 `clipboard_formats` / `clipboard_payloads`，不按格式拆分，
+//!   因此历史里不会出现互相重复的条目。HTML/RTF 属于本机 SQLite（`inline_text`），
+//!   **不需要** schema 迁移（ticket 09 已备好这两张表）。
+//! - **检索只用可索引文本**：`text_content` 是唯一被检索的内容列，HTML/RTF 载荷
+//!   **不参与**匹配（[`ClipboardStore::list`] 与插件的元数据都不带载荷原文）。
+//! - **去重语义不变**：`content_hash` 始终是纯文本指纹（[`content_hash_text`]），
+//!   因此纯文本条目的去重与 ticket 09 完全一致，不会因为多带了富文本就变成另一条。
+//!   去重命中时若已有条目**还没有**任何载荷，后一次复制带来的 HTML/RTF 会被补进这条
+//!   已有条目（先到的富文本版本不会被覆盖），刚捕获到的格式因此不会白丢。
+//! - **恢复走平台公开格式**：宿主把同一次事件的文本 + HTML/RTF 一起写回剪贴板
+//!   （[`crate::Host::execute`] 的剪贴板分支），由目标应用自己挑；平台做不到时如实
+//!   报告哪些格式没有提供（见 `flashcast_platform::clipboard::ClipboardWriteReport`），
+//!   从不声称保留了任意应用私有格式。
+//! - **预览是惰性文本**：预览只取 [`ClipboardEvent::text`]（由用户可读的纯文本构成，
+//!   见 [`crate::plugins::clipboard::clipboard_item`]），HTML/RTF 原文既不进 webview，
+//!   也不渲染成标记。webview 只用 React 文本节点渲染它，因此剪贴板提供的
+//!   `<script>` / `onerror` / 远端资源不会被解析或加载——不需要「先消毒再插入 HTML」
+//!   那种容易被绕过的路径。
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -144,8 +166,13 @@ impl ClipboardFormat {
 /// （[`ClipboardRuntime`]）在入库成功后写进去——先生成条目再发现写不进去，就会留下
 /// 一条「看起来保存了、其实恢复不了」的历史。
 ///
+/// HTML/RTF（ticket 11）作为同一事件里的载荷进入 `payloads`：一次复制只有一条历史。
+///
 /// `capture.image_problem`（有图片但无法保存）不在这里处理：它没有可落库的内容，
 /// 由捕获管线转成一次如实的失败。
+///
+/// 去重键（`content_hash`）在文字与图片之间**不共通**：文字用文本指纹、图片用字节指纹，
+/// 因此两种内容不可能互相误判成同一条。
 pub fn event_from_capture(
     capture: &ClipboardCapture,
     now_ms: i64,
@@ -154,6 +181,8 @@ pub fn event_from_capture(
     // 空字符串不算文字内容：剪贴板里常常同时有「空文本目标」与图片。
     let text = capture.text.clone().filter(|text| !text.is_empty());
     let image = capture.image.as_ref();
+    let html = capture.html.clone().filter(|html| !html.is_empty());
+    let rtf = capture.rtf.clone().filter(|rtf| !rtf.is_empty());
     if text.is_none() && image.is_none() {
         return None;
     }
@@ -191,6 +220,14 @@ pub fn event_from_capture(
         };
         push(format);
     }
+    // 平台没有在 `formats` 里列出、但确实带回了载荷的格式同样要记上（宁可多记，
+    // 不可让「保存了却没有格式标记」的内容在界面上隐身）。
+    if let Some(html) = html.as_deref() {
+        push(ClipboardFormat::Html { bytes: html.len() });
+    }
+    if let Some(rtf) = rtf.as_deref() {
+        push(ClipboardFormat::Rtf { bytes: rtf.len() });
+    }
     if formats.is_empty() {
         let text = text.as_ref()?;
         formats.push(ClipboardFormat::Text { bytes: text.len() });
@@ -212,6 +249,25 @@ pub fn event_from_capture(
         }
     });
 
+    let payloads: Vec<ClipboardPayload> = html
+        .clone()
+        .map(|html| ClipboardPayload {
+            role: PayloadRole::Html,
+            bytes: html.len(),
+            inline: Some(html),
+            attachment_id: None,
+            mime: Some("text/html".to_string()),
+        })
+        .into_iter()
+        .chain(rtf.clone().map(|rtf| ClipboardPayload {
+            role: PayloadRole::Rtf,
+            bytes: rtf.len(),
+            inline: Some(rtf),
+            attachment_id: None,
+            mime: Some("text/rtf".to_string()),
+        }))
+        .collect();
+
     let content_hash = match (&text, image) {
         (Some(text), _) => content_hash_text(text),
         (None, Some(image)) => content_hash_image(&image.bytes),
@@ -221,16 +277,6 @@ pub fn event_from_capture(
         Some(text) => summary_for_text(text),
         None => summary_for_image(image.expect("上面已经排除了两者都为空")),
     };
-
-    Some(ClipboardEvent {
-        id: new_event_id(),
-        captured_at_ms: now_ms,
-        content_hash,
-        summary,
-        text,
-        formats,
-        attachments: attachment.into_iter().collect(),
-        payloads: Vec::new(),
         source: capture.source.clone(),
         pinned: false,
         copies: 1,
@@ -738,6 +784,8 @@ impl ClipboardStore {
                     "UPDATE clipboard_events SET captured_at = ?1, copies = ?2 WHERE id = ?3",
                     params![event.captured_at_ms, i64::from(copies), id],
                 )?;
+                // 后一次复制带来了富文本载荷时补进已有条目（见 `enrich_payloads`）。
+                enrich_payloads(&tx, &id, event)?;
                 tx.commit()?;
                 return Ok(InsertOutcome::Deduplicated { id, copies });
             }
@@ -1251,6 +1299,13 @@ fn insert_event(conn: &Connection, event: &ClipboardEvent) -> rusqlite::Result<(
             i64::from(event.copies.max(1)),
         ],
     )?;
+    insert_formats(conn, event)?;
+    insert_payloads(conn, event)?;
+    insert_attachments(conn, event)?;
+    Ok(())
+}
+
+fn insert_formats(conn: &Connection, event: &ClipboardEvent) -> rusqlite::Result<()> {
     for (ordinal, format) in event.formats.iter().enumerate() {
         let (mime, width, height, item_count, names) = match format {
             ClipboardFormat::Image {
@@ -1291,6 +1346,10 @@ fn insert_event(conn: &Connection, event: &ClipboardEvent) -> rusqlite::Result<(
             ],
         )?;
     }
+    Ok(())
+}
+
+fn insert_payloads(conn: &Connection, event: &ClipboardEvent) -> rusqlite::Result<()> {
     for (ordinal, payload) in event.payloads.iter().enumerate() {
         conn.execute(
             "INSERT INTO clipboard_payloads
@@ -1307,6 +1366,10 @@ fn insert_event(conn: &Connection, event: &ClipboardEvent) -> rusqlite::Result<(
             ],
         )?;
     }
+    Ok(())
+}
+
+fn insert_attachments(conn: &Connection, event: &ClipboardEvent) -> rusqlite::Result<()> {
     for (ordinal, attachment) in event.attachments.iter().enumerate() {
         conn.execute(
             "INSERT INTO clipboard_attachments
@@ -1327,6 +1390,38 @@ fn insert_event(conn: &Connection, event: &ClipboardEvent) -> rusqlite::Result<(
             ],
         )?;
     }
+    Ok(())
+}
+
+/// 去重命中时，把后一次复制带来的富文本载荷补进已有条目。
+///
+/// 场景：用户先复制了纯文本版本，之后又从富文本应用复制了**同一段文字**。去重把它们
+/// 合成一条（同一条历史，不出现重复记录），但如果什么都不做，刚捕获到的 HTML/RTF 就
+/// 白丢了。这里只在已有条目**还没有任何载荷**、而新事件有时才补写，因此：
+///
+/// - 不会用后一次的载荷覆盖已有载荷（先到的富文本版本保留）；
+/// - 不会改变去重键（仍是纯文本指纹），纯文本条目的去重语义完全不变。
+fn enrich_payloads(conn: &Connection, id: &str, event: &ClipboardEvent) -> rusqlite::Result<()> {
+    if event.payloads.is_empty() {
+        return Ok(());
+    }
+    let existing: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM clipboard_payloads WHERE event_id = ?1",
+        params![id],
+        |row| row.get(0),
+    )?;
+    if existing > 0 {
+        return Ok(());
+    }
+    // 从表用已有条目的 id 重建，格式集合与载荷因此一起更新（副标题也要显示 HTML/RTF）。
+    conn.execute(
+        "DELETE FROM clipboard_formats WHERE event_id = ?1",
+        params![id],
+    )?;
+    let mut stored = event.clone();
+    stored.id = id.to_string();
+    insert_formats(conn, &stored)?;
+    insert_payloads(conn, &stored)?;
     Ok(())
 }
 

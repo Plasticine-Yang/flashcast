@@ -16,7 +16,9 @@ use flashcast_platform::catalog::{AppCatalog, AppEntry};
 use flashcast_platform::chrome::{
     build_open_args, validate_open_url, ChromeLaunchRequest, ChromeProvider,
 };
-use flashcast_platform::clipboard::{ClipboardAccess, ClipboardWatcher};
+use flashcast_platform::clipboard::{
+    ClipboardAccess, ClipboardContent, ClipboardWatcher, ClipboardWriteReport,
+};
 use flashcast_platform::focus::{same_app, FocusTracker, FocusedApp};
 use flashcast_platform::launch::AppLauncher;
 use flashcast_platform::launch_request::LaunchRequest;
@@ -229,6 +231,29 @@ fn auto_paste_blocker(capabilities: &Capabilities) -> Option<String> {
 
 /// [`Host::wait_for_workspace_change`] 的轮询间隔。
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// 把一条剪贴板历史还原成要写回系统剪贴板的内容。
+///
+/// 恢复的是**同一次复制的全部公开格式**：可索引的纯文本加上历史里保存的 HTML/RTF
+/// 载荷（`clipboard_payloads`）。目标应用自己挑要哪一种——富文本目标取格式化版本，
+/// 纯文本目标取文本。载荷只取本版本认识的 `html` / `rtf` 角色；未知角色的载荷不会被
+/// 当作 HTML 塞进剪贴板（宁可不提供，也不猜）。
+pub fn clipboard_content_for(
+    event: &crate::clipboard::ClipboardEvent,
+    text: String,
+) -> ClipboardContent {
+    let inline = |role: &str| {
+        event
+            .payloads
+            .iter()
+            .find(|payload| payload.role.tag() == role)
+            .and_then(|payload| payload.inline.clone())
+            .filter(|value| !value.is_empty())
+    };
+    ClipboardContent::text(text)
+        .with_html(inline("html"))
+        .with_rtf(inline("rtf"))
+}
 
 /// 剪贴板后台捕获的轮询间隔。
 ///
@@ -2588,7 +2613,21 @@ impl Host {
     /// 决策只依据两件事：平台能力报告（Wayland / 缺权限 / 未覆盖都算不能）与
     /// 唤起时捕获到的目标应用。任何一项不成立都**不**尝试注入。
     pub fn finish_copy_for_paste(&self, label: &str, text: &str) -> ActionOutcome {
-        self.finish_paste_after_copy(label, text.len())
+        self.finish_copy_for_paste_with_note(label, text, None)
+    }
+
+    /// 同 [`Host::finish_copy_for_paste`]，但把一段**格式说明**带进反馈。
+    ///
+    /// ticket 11 用它如实报告降级：剪贴板里实际提供了哪些格式、哪些没有以及为什么。
+    /// 富文本没能同时提供时（Linux 的 `wl-copy`、macOS 的 `pbcopy`），用户必须在反馈里
+    /// 看到这一点，而不是以为样式也一起过去了。
+    pub fn finish_copy_for_paste_with_note(
+        &self,
+        label: &str,
+        text: &str,
+        note: Option<String>,
+    ) -> ActionOutcome {
+        self.finish_paste_after_copy(label, text.len(), note)
     }
 
     /// 与 [`Self::finish_copy_for_paste`] 相同，只是这次写进剪贴板的不是文字
@@ -2597,25 +2636,34 @@ impl Host {
     /// 恢复顺序、目标核对与降级路径与文字完全一致——「先写剪贴板，再关窗、恢复目标、
     /// 核对前台、注入粘贴」是宿主级流程，与内容类型无关。
     pub fn finish_copy_for_paste_bytes(&self, label: &str, payload_bytes: usize) -> ActionOutcome {
-        self.finish_paste_after_copy(label, payload_bytes)
+        self.finish_paste_after_copy(label, payload_bytes, None)
     }
 
-    fn finish_paste_after_copy(&self, label: &str, payload_bytes: usize) -> ActionOutcome {
+    fn finish_paste_after_copy(
+        &self,
+        label: &str,
+        payload_bytes: usize,
+        note: Option<String>,
+    ) -> ActionOutcome {
         let capabilities = self.capabilities();
+        let with_note = |message: String| match note.as_deref() {
+            Some(note) if !note.is_empty() => format!("{message}；{note}"),
+            _ => message,
+        };
         let target = { lock(&self.paste).target.clone() };
         let Some(target) = target else {
-            return ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+            return ActionOutcome::copied_needs_manual_paste(with_note(manual_paste_message(
                 label,
                 capabilities.os,
                 Some("没有记录到唤起前的应用，无法确定粘贴目标"),
-            ));
+            )));
         };
         if let Some(blocker) = auto_paste_blocker(&capabilities) {
-            return ActionOutcome::copied_needs_manual_paste(manual_paste_message(
+            return ActionOutcome::copied_needs_manual_paste(with_note(manual_paste_message(
                 label,
                 capabilities.os,
                 Some(&blocker),
-            ));
+            )));
         }
         let epoch = self.paste_epoch.fetch_add(1, Ordering::SeqCst) + 1;
         let target_name = target.name.clone();
@@ -2624,6 +2672,7 @@ impl Host {
             label: label.to_string(),
             epoch,
             text_bytes: payload_bytes,
+            formats_note: note,
         };
         {
             // 覆盖旧计划：只有最新一次执行会被粘贴。
@@ -2660,11 +2709,11 @@ impl Host {
             ));
         }
         let manual = |blocker: String| {
-            ActionOutcome::copied_needs_manual_paste(manual_paste_message(
-                &plan.label,
-                capabilities.os,
-                Some(&blocker),
-            ))
+            let message = manual_paste_message(&plan.label, capabilities.os, Some(&blocker));
+            ActionOutcome::copied_needs_manual_paste(match plan.formats_note.as_deref() {
+                Some(note) if !note.is_empty() => format!("{message}；{note}"),
+                _ => message,
+            })
         };
         if let Err(error) = self.deps.focus.restore(&plan.target) {
             return manual(format!("无法把焦点还给「{}」：{error}", plan.target.name));
@@ -2686,10 +2735,12 @@ impl Host {
             }
         }
         match self.deps.paster.paste() {
-            Ok(()) => ActionOutcome::done(Some(format!(
-                "已粘贴「{}」到「{}」",
-                plan.label, plan.target.name
-            ))),
+            Ok(()) => ActionOutcome::done(Some(match plan.formats_note.as_deref() {
+                Some(note) if !note.is_empty() => {
+                    format!("已粘贴「{}」到「{}」；{note}", plan.label, plan.target.name)
+                }
+                _ => format!("已粘贴「{}」到「{}」", plan.label, plan.target.name),
+            })),
             Err(error) => manual(format!("自动粘贴没有成功：{error}")),
         }
     }
@@ -2742,9 +2793,23 @@ impl Host {
     /// 所有宿主写剪贴板的路径都必须经过这里：没有登记的写入会被自己的后台捕获重新收成
     /// 一条新历史，而「粘贴历史条目 → 又被捕获 → 再粘贴」正是 spec 明确禁止的循环。
     fn write_clipboard_text(&self, text: &str) -> Result<(), flashcast_platform::ClipboardError> {
-        self.deps.clipboard.write_text(text)?;
-        self.clipboard.note_own_write(text);
-        Ok(())
+        self.write_clipboard_content(&ClipboardContent::text(text))
+            .map(|_| ())
+    }
+
+    /// 按平台公开格式把同一次复制的内容写进系统剪贴板（文本 + HTML/RTF）。
+    ///
+    /// 与 [`Host::write_clipboard_text`] 一样要登记自身写入（按纯文本指纹，两层抑制各自
+    /// 成立）。返回的 [`ClipboardWriteReport`] 如实说明**实际提供了哪些格式**：平台做
+    /// 不到一次提供多种格式时（Linux 的 `wl-copy`、macOS 的 `pbcopy`），调用方据此给用户
+    /// 准确的中文反馈，而不是声称富文本样式已经保留。
+    fn write_clipboard_content(
+        &self,
+        content: &ClipboardContent,
+    ) -> Result<ClipboardWriteReport, flashcast_platform::ClipboardError> {
+        let report = self.deps.clipboard.write_content(content)?;
+        self.clipboard.note_own_write(&content.text);
+        Ok(report)
     }
 
     /// 剪贴板历史条目的默认操作：把**当前**内容写进剪贴板，然后尽力粘贴回唤起前的应用。
@@ -2752,6 +2817,10 @@ impl Host {
     /// 权限校验放在**原生边界**：来源插件必须在清单里、已启用，并且声明了
     /// `clipboard.write`；随后才调用平台剪贴板适配层。恢复与复制回退全部复用
     /// ticket 08 的 [`Host::finish_copy_for_paste`]。
+    ///
+    /// ticket 11：写回的是**同一次复制的全部公开格式**——纯文本加上历史里保存的
+    /// HTML/RTF 载荷。目标应用自己挑：富文本目标取格式化版本，纯文本目标取文本。
+    /// 平台没能提供某些格式时，结果反馈里如实写明提供了哪些、哪些没有以及原因。
     fn execute_clipboard_entry(&self, item: &SearchItem) -> ActionOutcome {
         let Some(event_id) = crate::clipboard::event_id_from_item_id(&item.id) else {
             return ActionOutcome::failed(format!("无法识别的剪贴板条目：{}", item.id));
@@ -2786,10 +2855,16 @@ impl Host {
             Err(error) => return ActionOutcome::failed(error.to_string()),
         };
         if let Some(text) = event.text.clone().filter(|text| !text.is_empty()) {
-            if let Err(error) = self.write_clipboard_text(&text) {
-                return ActionOutcome::failed(format!("无法复制「{}」：{error}", event.summary));
-            }
-            return self.finish_copy_for_paste(&event.summary, &text);
+            let content = clipboard_content_for(&event, text.clone());
+            let report = match self.write_clipboard_content(&content) {
+                Ok(report) => report,
+                Err(error) => {
+                    return ActionOutcome::failed(format!("无法复制「{}」：{error}", event.summary))
+                }
+            };
+            // 只有真的降级时才带上说明：全部格式都写进去了就不必打扰用户。
+            let note = report.degraded().then(|| report.describe_zh());
+            return self.finish_copy_for_paste_with_note(&event.summary, &text, note);
         }
         // 图片（ticket 10）：把本机附件的内容写回剪贴板，再走同一套恢复 + 注入路径。
         if let Some(attachment) = event.image_attachment() {

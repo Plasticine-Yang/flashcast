@@ -361,6 +361,9 @@ fn main() {
         ));
         // 5b. 剪贴板变化监听（ticket 09）：只读，所以不需要 --allow-clipboard-write。
         checks.push(clipboard_watch_check(&capabilities));
+        // 5c. 富文本格式（ticket 11）：只读探测；加 --allow-clipboard-write 时实测写回
+        //     与降级结论（Linux 只能提供纯文本）。
+        checks.push(clipboard_rich_check(options.allow_clipboard_write));
 
         // 6b. 自动粘贴：能力结论 + 注入前置条件（真实查询 XTEST / 会话类型）。
         checks.push(CheckResult {
@@ -477,6 +480,13 @@ fn run_bounded(program: &str, args: &[&str], timeout: Duration) -> Result<(bool,
             }
         }
     }
+}
+
+/// 剪贴板工具「没有返回 / 拿不到选区」这类失败是**环境**问题（自动化会话没有可用的
+/// 选区持有者），应当报「未覆盖」而不是「实测失败」；其它错误才算实现失败。
+#[cfg(target_os = "linux")]
+fn selection_unavailable(reason: &str) -> bool {
+    reason.contains("没有返回") || reason.contains("无法取得剪贴板选区")
 }
 
 /// 在有限时间内运行一段可能阻塞的操作（真实剪贴板写入）。
@@ -692,6 +702,211 @@ fn clipboard_watch_check(capabilities: &Capabilities) -> CheckResult {
             title: "剪贴板变化监听（只读）",
             status: Status::NotCovered,
             detail: format!("{reason}；自动化会话缺少可用的选区持有者时会这样"),
+            command: command.to_string(),
+        },
+    }
+}
+
+/// Linux 富文本格式（HTML/RTF）的真实读写能力（ticket 11）。
+///
+/// 两种模式，各自只回答它能回答的问题：
+///
+/// - 只读（默认）：按 MIME 类型读当前选区的 `text/html` / `text/rtf`。读到了就是**实测
+///   通过**（按类型读取这条真实路径可用）；没有这种格式、或拿不到选区，都是**未覆盖**并
+///   写明原因——自动化会话没有选区持有者时必然如此，这不代表真实桌面上的富文本复制失败。
+/// - `--allow-clipboard-write`：用 `LinuxClipboard::write_content` 一次写入文本 + HTML +
+///   RTF，再按类型读回。这里如实核对**平台实际提供了哪些格式**：本平台（`wl-copy` 2.2.1）
+///   一次只能提供一种 MIME 类型，因此预期报告就是「只提供纯文本、HTML/RTF 未提供」——
+///   匹配预期算**实测通过**（降级结论得到实测确认），报告与实际读回不一致才算**实测失败**。
+#[cfg(target_os = "linux")]
+fn clipboard_rich_check(options_allow_write: bool) -> CheckResult {
+    use flashcast_platform::clipboard::{ClipboardAccess, ClipboardContent, ClipboardFormatKind};
+
+    let command = "cargo run -p flashcast-platform --bin flashcast-platform-check \
+                   -- --allow-clipboard-write";
+    let title = "富文本格式（HTML/RTF）的真实读写";
+    if !options_allow_write {
+        // 只读：探测当前选区提供了哪种富文本格式。
+        let result = run_bounded_blocking(
+            move || {
+                let clipboard = flashcast_platform::linux::LinuxClipboard::new();
+                let html = clipboard
+                    .read_typed("text/html")
+                    .map_err(|e| e.to_string())?;
+                let rtf = clipboard
+                    .read_typed("text/rtf")
+                    .or_else(|_| clipboard.read_typed("application/rtf"))
+                    .map_err(|e| e.to_string())?;
+                Ok::<_, String>((html, rtf))
+            },
+            Duration::from_secs(8),
+        );
+        return match result {
+            Ok(Ok((Some(html), rtf))) => CheckResult {
+                id: "clipboard.rich",
+                title,
+                status: Status::MeasuredPass,
+                detail: format!(
+                    "当前选区提供了 text/html（{} 字节）：按 MIME 类型读取这条真实路径可用{}",
+                    html.len(),
+                    match rtf {
+                        Some(rtf) => format!("，同时提供了 RTF（{} 字节）", rtf.len()),
+                        None => String::new(),
+                    }
+                ),
+                command: command.to_string(),
+            },
+            Ok(Ok((None, Some(rtf)))) => CheckResult {
+                id: "clipboard.rich",
+                title,
+                status: Status::MeasuredPass,
+                detail: format!(
+                    "当前选区提供了 RTF（{} 字节）但没有 HTML：按类型读取可用",
+                    rtf.len()
+                ),
+                command: command.to_string(),
+            },
+            Ok(Ok((None, None))) => CheckResult {
+                id: "clipboard.rich",
+                title,
+                status: Status::NotCovered,
+                detail: "当前剪贴板没有提供 text/html 或 text/rtf（可能此刻没有复制富文本；\
+                         自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write \
+                         可以实测本平台的写回行为与降级结论"
+                    .to_string(),
+                command: command.to_string(),
+            },
+            Ok(Err(reason)) => CheckResult {
+                id: "clipboard.rich",
+                title,
+                status: Status::NotCovered,
+                detail: format!("读取没有完成：{reason}；这不代表真实桌面上的富文本复制失败"),
+                command: command.to_string(),
+            },
+            Err(reason) => CheckResult {
+                id: "clipboard.rich",
+                title,
+                status: Status::NotCovered,
+                detail: format!("{reason}；自动化会话缺少可用的选区持有者时会这样"),
+                command: command.to_string(),
+            },
+        };
+    }
+    // 写 + 读回：一次写入文本 + HTML + RTF，然后按类型读回。
+    let result = run_bounded_blocking(
+        move || {
+            let clipboard = flashcast_platform::linux::LinuxClipboard::new();
+            let marker = format!(
+                "flashcast-rich-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0)
+            );
+            let html = format!("<b>{marker}</b>");
+            let rtf = format!(r"{{\rtf1\ansi {marker}}}");
+            let content = ClipboardContent::text(marker.clone())
+                .with_html(Some(html.clone()))
+                .with_rtf(Some(rtf.clone()));
+            let report = clipboard
+                .write_content(&content)
+                .map_err(|error| error.to_string())?;
+            let read_html = clipboard.read_typed("text/html").ok().flatten();
+            let read_rtf = clipboard.read_typed("text/rtf").ok().flatten();
+            Ok::<_, String>((report, read_html, read_rtf))
+        },
+        Duration::from_secs(10),
+    );
+    match result {
+        Ok(Ok((report, read_html, read_rtf))) => {
+            let provided: Vec<&str> = report.formats.iter().map(|kind| kind.label_zh()).collect();
+            let skipped: Vec<String> = report
+                .skipped
+                .iter()
+                .map(|item| format!("{}（{}）", item.kind.label_zh(), item.reason))
+                .collect();
+            let text_only = report.formats == vec![ClipboardFormatKind::Text];
+            // 预期：Linux 只能提供纯文本，且如实报告 HTML/RTF 未提供。
+            let expected = text_only
+                && report
+                    .skipped
+                    .iter()
+                    .any(|item| item.kind == ClipboardFormatKind::Html)
+                && report
+                    .skipped
+                    .iter()
+                    .any(|item| item.kind == ClipboardFormatKind::Rtf);
+            let read_note = format!(
+                "；读回：HTML={}，RTF={}",
+                if read_html.is_some() {
+                    "可读"
+                } else {
+                    "不可读"
+                },
+                if read_rtf.is_some() {
+                    "可读"
+                } else {
+                    "不可读"
+                },
+            );
+            CheckResult {
+                id: "clipboard.rich",
+                title,
+                status: if expected {
+                    Status::MeasuredPass
+                } else if !text_only
+                    && report.formats.contains(&ClipboardFormatKind::Html)
+                    && read_html.is_none()
+                {
+                    // 报告说提供了 HTML，但按 text/html 读不回来：适配层自相矛盾。
+                    Status::MeasuredFail
+                } else if !text_only {
+                    Status::MeasuredPass
+                } else {
+                    Status::MeasuredFail
+                },
+                detail: format!(
+                    "写入成功。实际提供：{}；未提供：{}。Linux 上 wl-copy 一次只能提供一种 \
+                     MIME 类型，因此恢复时只提供纯文本是**已知降级**：富文本载荷仍完整保存在 \
+                     本机历史（clipboard_payloads）里{read_note}",
+                    if provided.is_empty() {
+                        "（无）".to_string()
+                    } else {
+                        provided.join("、")
+                    },
+                    if skipped.is_empty() {
+                        "（无）".to_string()
+                    } else {
+                        skipped.join("、")
+                    },
+                ),
+                command: command.to_string(),
+            }
+        }
+        Ok(Err(reason)) => CheckResult {
+            id: "clipboard.rich",
+            title,
+            // 「工具没有返回」说明这个会话拿不到选区（自动化会话的常态），属于未覆盖；
+            // 其它写入错误才是实现失败。与 `clipboard.write_text` 的判定保持一致。
+            status: if selection_unavailable(&reason) {
+                Status::NotCovered
+            } else {
+                Status::MeasuredFail
+            },
+            detail: format!(
+                "写入没有完成：{reason}。当前会话里剪贴板工具（wl-copy / xclip）可能无法取得\
+                 选区；这不代表真实桌面上的写入会失败"
+            ),
+            command: command.to_string(),
+        },
+        Err(reason) => CheckResult {
+            id: "clipboard.rich",
+            title,
+            status: Status::NotCovered,
+            detail: format!(
+                "写入没有完成：{reason}。当前会话里剪贴板工具（wl-copy / xclip）无法取得选区；\
+                 自动化会话缺少可用的输入序列时就是这样，这不代表真实桌面上的复制会失败"
+            ),
             command: command.to_string(),
         },
     }
@@ -1019,6 +1234,20 @@ fn windows_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
             command: command.clone(),
         });
     }
+    // 7b. 富文本格式（ticket 11）：Windows 适配层在**一次**剪贴板打开里提供
+    //     CF_UNICODETEXT + HTML Format（CF_HTML）+ Rich Text Format。本检查不在 runner 上
+    //     写入剪贴板（服务会话可能没有交互剪贴板），因此如实报「未覆盖」，并写明实现位置
+    //     与真机复核方式，而不是声称通过。
+    checks.push(CheckResult {
+        id: "clipboard.rich",
+        title: "富文本格式（HTML/RTF）的真实读写",
+        status: Status::NotCovered,
+        detail: "实现：一次剪贴板打开里写 CF_UNICODETEXT + HTML Format + Rich Text Format，\
+                 读取时同样一次读出三种格式（HF-11）。本 runner 不执行写入（可能没有交互剪贴板），\
+                 真机复核见 ticket 17"
+            .to_string(),
+        command: command.clone(),
+    });
 
     // 8. Windows shell 环境：真实检查 explorer.exe 与 PowerShell 是否可用
     //    （打包应用枚举依赖后者）。
@@ -1548,6 +1777,18 @@ fn macos_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
             command: plain(),
         });
     }
+    // 8b. 富文本格式（ticket 11）：macOS 适配层只处理纯文本。`pbcopy` 没有富文本写入口，
+    //     `pbpaste -Prefer rtf` 在没有该风味时会退回别的内容、无法区分真伪，因此这里如实
+    //     报「平台不支持」，而不是声称保存/恢复了 HTML/RTF。
+    checks.push(CheckResult {
+        id: "clipboard.rich",
+        title: "富文本格式（HTML/RTF）的真实读写",
+        status: Status::MeasuredFail,
+        detail: "macOS 的 pbcopy / pbpaste 只支持纯文本：HTML/RTF 既不被保存也不被恢复，\
+                 恢复时只提供文本（历史里的富文本载荷若来自其它平台仍原样保存在本机）"
+            .to_string(),
+        command: plain(),
+    });
 
     checks
 }
@@ -1597,6 +1838,11 @@ fn uncovered_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
             "clipboard.watch",
             "剪贴板变化监听（只读）",
             "该平台的剪贴板变化监听由后续 ticket 提供",
+        ),
+        unchecked(
+            "clipboard.rich",
+            "富文本格式（HTML/RTF）的真实读写",
+            "该平台的富文本格式读写由后续 ticket 提供（本版本只在 Windows 上同时提供文本 + HTML + RTF）",
         ),
         unchecked(
             "paste.auto",

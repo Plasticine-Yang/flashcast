@@ -324,12 +324,29 @@ export const MOCK_CLIPBOARD_PLUGIN_ID = "clipboard";
 export const MOCK_CLIPBOARD_KEYWORDS = ["剪贴板", "剪切板", "clipboard"];
 
 /** 模拟历史里的初始条目（真实行为由 crates/flashcast-core/tests/clipboard.rs 验证）。 */
-const MOCK_CLIPBOARD_ENTRIES: ClipboardEntryView[] = [
+/**
+ * 模拟历史里的初始条目（真实行为由 crates/flashcast-core/tests/clipboard.rs 验证）。
+ *
+ * `html` 是**本机历史里保存的富文本载荷**（对应真实存储的 `clipboard_payloads`）。
+ * 真实宿主的 `ClipboardEntryView` **不**把它下发给界面（见 src-tauri 的视图构造），
+ * 模拟宿主同样在 `clipboardStateView` 里剥掉它：界面只拿到可索引的纯文本，因此剪贴板
+ * 提供的标记没有机会进入 DOM。`clipboard-rich-preview` 这条检查依赖这个事实。
+ */
+type MockClipboardEntry = ClipboardEntryView & {
+  /** 仅用于模拟「本机保存了 HTML 载荷」；不下发给界面。 */
+  html?: string | null;
+};
+
+const MOCK_CLIPBOARD_RICH_HTML =
+  '<p><strong>会议纪要草稿</strong></p><script>alert("clipboard-xss")</script><img src="https://example.invalid/track.png" onerror="steal()">';
+
+const MOCK_CLIPBOARD_ENTRIES: MockClipboardEntry[] = [
   {
     id: "clip-mock-1",
     summary: "会议纪要草稿 上午十点在三楼会议室",
     text: "会议纪要草稿\n上午十点在三楼会议室\n确认一下参加人",
-    formats: ["文字"],
+    formats: ["文字", "HTML", "RTF"],
+    html: MOCK_CLIPBOARD_RICH_HTML,
     source: "Firefox",
     capturedAtMs: Date.now() - 3 * 60 * 1000,
     pinned: false,
@@ -707,7 +724,7 @@ class MockHost implements HostApi {
    * 后台捕获用户复制的内容是隐私敏感行为，必须由用户显式启用。
    */
   private clipboardPluginEnabled = false;
-  private clipboardEntries: ClipboardEntryView[] = MOCK_CLIPBOARD_ENTRIES.map((entry) => ({
+  private clipboardEntries: MockClipboardEntry[] = MOCK_CLIPBOARD_ENTRIES.map((entry) => ({
     ...entry,
     formats: [...entry.formats],
   }));
@@ -945,7 +962,8 @@ class MockHost implements HostApi {
       suppressed: this.clipboardSuppressed,
       items: [...this.clipboardEntries]
         .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.capturedAtMs - a.capturedAtMs)
-        .map((entry) => ({ ...entry, formats: [...entry.formats] })),
+        // 与本机真实宿主一致：**不**把 HTML/RTF 载荷下发给界面，只给可索引纯文本与格式名。
+        .map(({ html: _payload, ...entry }) => ({ ...entry, formats: [...entry.formats] })),
     };
   }
 

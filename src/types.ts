@@ -74,6 +74,11 @@ export interface PastePlan {
   label: string;
   epoch: number;
   textBytes: number;
+  /**
+   * 平台未能同时提供的格式说明（ticket 11）：里面写清实际提供了哪些格式、哪些没有以及
+   * 原因。为 `null` / 缺省表示这次恢复把该条历史的公开格式都放进了剪贴板。
+   */
+  formatsNote?: string | null;
 }
 
 export interface BackView {
