@@ -361,6 +361,34 @@ pub fn cleanup(path: &Path) {
     let _ = std::fs::remove_dir_all(path);
 }
 
+/// 构造一张真实可解码的 PNG（ticket 10）。
+///
+/// 用平台层真实的 PNG 编码器：测试里的图片字节与真实捕获路径上的字节同源，
+/// 因此「尺寸解析、缩略图、恢复」都走真实数据，而不是手写的假字节。
+pub fn png_image(
+    width: u32,
+    height: u32,
+    seed: u8,
+) -> flashcast_platform::clipboard::ClipboardImage {
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    for row in 0..height {
+        for column in 0..width {
+            rgba.extend_from_slice(&[
+                (u32::from(seed) + column) as u8,
+                (u32::from(seed) + row) as u8,
+                seed,
+                255,
+            ]);
+        }
+    }
+    let bytes = flashcast_platform::clipboard::encode_png(width, height, &rgba)
+        .expect("测试图片必须能编码为 PNG");
+    flashcast_platform::clipboard::ClipboardImage::new(
+        flashcast_platform::clipboard::IMAGE_MIME_PNG,
+        bytes,
+    )
+}
+
 /// 递归收集目录下的所有文件（含隐藏文件与 `.git`）。
 pub fn files_under(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
@@ -1212,6 +1240,33 @@ impl ClipboardHarness {
     pub fn copy(&self, text: &str) -> ClipboardCaptureOutcome {
         self.copy_only(text);
         self.host.capture_clipboard_once()
+    }
+
+    /// 模拟一次外部的**图片**复制并同步捕获一次（ticket 10）。
+    pub fn copy_image(
+        &self,
+        image: flashcast_platform::clipboard::ClipboardImage,
+    ) -> ClipboardCaptureOutcome {
+        self.watcher.set_image(image);
+        self.host.capture_clipboard_once()
+    }
+
+    /// 模拟一次「剪贴板里有图片但无法保存」的复制并捕获一次。
+    pub fn copy_image_problem(&self, reason: &str) -> ClipboardCaptureOutcome {
+        self.watcher.set_image_problem(reason);
+        self.host.capture_clipboard_once()
+    }
+
+    /// 本机附件目录。
+    pub fn attachments_dir(&self) -> PathBuf {
+        self.device_dir.join("clipboard").join("attachments")
+    }
+
+    /// 本机附件目录里当前存在的文件（按路径排序，便于断言）。
+    pub fn attachment_files(&self) -> Vec<PathBuf> {
+        let mut files = files_under(&self.attachments_dir());
+        files.sort();
+        files
     }
 
     /// 当前历史（置顶在前，然后按时间倒序）。

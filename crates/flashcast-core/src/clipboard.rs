@@ -860,12 +860,19 @@ impl ClipboardStore {
     }
 
     /// 删除一条（含它的格式、载荷与附件行）。
+    ///
+    /// 条目消失之后它的附件文件不再被任何行引用，因此同步回收
+    /// （spec「历史删除与过期清理同步回收不再引用的附件」）。
     pub fn delete(&self, id: &str) -> Result<bool, ClipboardStoreError> {
-        self.with_conn(|conn| {
+        let changed = self.with_conn(|conn| {
             let changed =
                 conn.execute("DELETE FROM clipboard_events WHERE id = ?1", params![id])?;
-            Ok(changed > 0)
-        })
+            Ok(changed)
+        })?;
+        if changed > 0 {
+            let _ = self.reclaim_attachment_files();
+        }
+        Ok(changed > 0)
     }
 
     /// 清空历史（用户在设置里的显式操作，置顶条目也会被清掉）。

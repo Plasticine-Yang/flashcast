@@ -18,7 +18,7 @@ use flashcast_platform::fake::FakeClipboardWatcher;
 
 use support::{
     clipboard_host, clipboard_host_with_broken_storage, clipboard_host_with_device,
-    clipboard_host_with_watcher, fast_settings, files_under, focused_app, unique_dir,
+    clipboard_host_with_watcher, fast_settings, files_under, focused_app, png_image, unique_dir,
 };
 
 /// 默认的剪贴板设置（保留 30 天、容量 500）。
@@ -894,4 +894,429 @@ fn history_and_index_stay_out_of_the_config_workspace() {
     // 关闭时也留一份说明：重启（同一设备目录）后历史仍然在。
     let restarted = clipboard_host_with_device(&device_dir, fast_settings());
     assert_eq!(restarted.host.clipboard_entries(None).len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// 图片剪贴板历史（ticket 10）
+// ---------------------------------------------------------------------------
+
+/// 图片捕获 → 重启 → 列表 / 预览 / 恢复：附件真的落在本机磁盘上，条目指向它。
+#[test]
+fn image_capture_restart_list_preview_and_restore() {
+    let device_dir = unique_dir("clipboard-image-restart");
+    let workspace = unique_dir("clipboard-image-restart-ws");
+    let harness = clipboard_host_with_device(&device_dir, fast_settings());
+    // 启用状态记在配置工作区的插件清单里，重启后才会生效（与 ticket 09 同一条路径）。
+    harness
+        .host
+        .select_workspace(&workspace)
+        .expect("关联工作区");
+    harness.enable();
+
+    let image = png_image(4, 3, 10);
+    let bytes = image.bytes.clone();
+    assert!(
+        matches!(
+            harness.copy_image(image),
+            ClipboardCaptureOutcome::Captured { .. }
+        ),
+        "图片必须能被捕获"
+    );
+
+    // 附件文件真的写出来了，而且条目指向它。
+    let files = harness.attachment_files();
+    assert_eq!(files.len(), 1, "一张图片对应一个附件文件：{files:?}");
+    let event = harness
+        .entries()
+        .into_iter()
+        .next()
+        .expect("历史里应有一条");
+    let attachment = event.image_attachment().expect("必须有图片附件");
+    assert_eq!(
+        attachment.path, files[0],
+        "数据库里的路径必须是真的那个文件"
+    );
+    assert_eq!(std::fs::read(&attachment.path).expect("读附件"), bytes);
+    assert!(
+        !attachment.depends_on_source,
+        "图片是本机副本，不依赖原来源"
+    );
+    assert_eq!(attachment.bytes, bytes.len() as u64);
+
+    // 重启（同一个设备目录 = 同一台机器）后仍然可列出、可预览、可恢复。
+    let restarted = clipboard_host_with_device(&device_dir, fast_settings());
+    let listed = restarted.host.query("剪贴板");
+    assert_eq!(listed.items.len(), 1, "重启后图片历史必须仍然在");
+    let item = listed.items[0].clone();
+    assert_eq!(item.kind, ItemKind::ClipboardEntry);
+    assert!(
+        item.title.contains("PNG") && item.title.contains("4×3"),
+        "摘要要有类型与尺寸：{}",
+        item.title
+    );
+    let subtitle = item.subtitle.clone().unwrap_or_default();
+    assert!(subtitle.contains("图片"), "副标题要有格式：{subtitle}");
+    assert!(
+        subtitle.contains("PNG 4×3"),
+        "副标题要有类型与尺寸：{subtitle}"
+    );
+
+    match restarted.host.preview(&item.id).expect("预览必须可用") {
+        flashcast_core::Preview::Image { path } => {
+            assert!(path.is_file(), "预览必须指向真实附件：{}", path.display());
+        }
+        other => panic!("图片的预览应是 Image：{other:?}"),
+    }
+
+    // 恢复复用 ticket 08 的粘贴路径：先把图片写回剪贴板，再关窗、恢复目标、注入。
+    restarted.summon(focused_app("editor"));
+    let outcome = restarted.host.execute(&item);
+    assert_eq!(outcome.status, ActionStatus::PastePending);
+    let plan = outcome.paste.clone().expect("应有粘贴计划");
+    assert_eq!(plan.label, item.title);
+    assert_eq!(plan.text_bytes, bytes.len(), "计划里记的是写入的载荷字节数");
+    let recovered = restarted
+        .clipboard
+        .last_image()
+        .expect("宿主必须把图片写进剪贴板");
+    assert_eq!(recovered.bytes, bytes, "写回剪贴板的必须与附件一致");
+    assert_eq!(recovered.mime, "image/png");
+
+    let done = restarted.host.complete_paste();
+    assert_eq!(done.status, ActionStatus::Done);
+    assert_eq!(restarted.paster.paste_count(), 1);
+}
+
+/// 图片是**本机副本**：原来源消失后仍然可以列出、预览与恢复。
+#[test]
+fn image_survives_its_source_disappearing() {
+    let device_dir = unique_dir("clipboard-image-source-gone");
+    let workspace = unique_dir("clipboard-image-source-gone-ws");
+    let harness = clipboard_host_with_device(&device_dir, fast_settings());
+    harness
+        .host
+        .select_workspace(&workspace)
+        .expect("关联工作区");
+    harness.enable();
+    let image = png_image(6, 2, 40);
+    let bytes = image.bytes.clone();
+    assert!(matches!(
+        harness.copy_image(image),
+        ClipboardCaptureOutcome::Captured { .. }
+    ));
+    let attachment = harness
+        .entries()
+        .into_iter()
+        .next()
+        .and_then(|event| event.image_attachment().cloned())
+        .expect("图片附件");
+    assert!(
+        attachment.path.starts_with(&device_dir),
+        "附件必须复制到本机数据目录，而不是引用原文件：{}",
+        attachment.path.display()
+    );
+
+    // 来源消失：重新起一个宿主（新进程、剪贴板里已经什么都没有），历史与附件都还在。
+    let restarted = clipboard_host_with_watcher(
+        &device_dir,
+        fast_settings(),
+        Arc::new(FakeClipboardWatcher::new()),
+    );
+    let listed = restarted.host.query("剪贴板");
+    assert_eq!(listed.items.len(), 1, "来源消失不影响本机历史");
+    let item = listed.items[0].clone();
+    assert!(attachment.path.is_file(), "本机附件必须仍然存在");
+    assert!(matches!(
+        restarted.host.preview(&item.id),
+        Some(flashcast_core::Preview::Image { .. })
+    ));
+
+    restarted.summon(focused_app("editor"));
+    let outcome = restarted.host.execute(&item);
+    assert_eq!(outcome.status, ActionStatus::PastePending);
+    assert_eq!(
+        restarted
+            .clipboard
+            .last_image()
+            .expect("来源消失后仍必须能恢复")
+            .bytes,
+        bytes
+    );
+}
+
+/// 图片去重按内容指纹；文字与图片不会互相误判（前缀不同）。
+#[test]
+fn identical_images_dedupe_and_never_collide_with_text() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+
+    let image = png_image(3, 3, 7);
+    assert!(matches!(
+        harness.copy_image(image),
+        ClipboardCaptureOutcome::Captured { .. }
+    ));
+    // 同样的尺寸与像素 ⇒ 同样的 PNG 字节 ⇒ 同一条历史。
+    assert_eq!(
+        harness.copy_image(png_image(3, 3, 7)),
+        ClipboardCaptureOutcome::Deduplicated {
+            id: harness.entries()[0].id.clone(),
+            copies: 2
+        }
+    );
+    assert_eq!(harness.entries().len(), 1, "同一张图片只留一条");
+    assert_eq!(
+        harness.attachment_files().len(),
+        1,
+        "去重不得写出第二个附件文件"
+    );
+
+    // 不同内容的图片是两条。
+    assert!(matches!(
+        harness.copy_image(png_image(3, 3, 8)),
+        ClipboardCaptureOutcome::Captured { .. }
+    ));
+    assert_eq!(harness.entries().len(), 2);
+    assert_eq!(harness.attachment_files().len(), 2);
+
+    // 文字内容的指纹与图片不同命名空间：同一段文字仍然是一条独立的历史。
+    assert!(matches!(
+        harness.copy("图片之外的文字"),
+        ClipboardCaptureOutcome::Captured { .. }
+    ));
+    assert_eq!(harness.entries().len(), 3);
+    let events = harness.entries();
+    let hashes: Vec<&str> = events
+        .iter()
+        .map(|event| event.content_hash.as_str())
+        .collect();
+    assert_eq!(
+        hashes
+            .iter()
+            .filter(|hash| hash.starts_with("image:"))
+            .count(),
+        2,
+        "图片指纹必须带 image: 前缀：{hashes:?}"
+    );
+    assert_eq!(
+        hashes
+            .iter()
+            .filter(|hash| hash.starts_with("text:"))
+            .count(),
+        1
+    );
+}
+
+/// 容量限制对图片生效：超出时淘汰最旧的未置顶条目，并回收它的附件文件。
+#[test]
+fn capacity_evicts_images_and_reclaims_their_attachments() {
+    let harness = clipboard_host(clipboard_settings(30, 2));
+    harness.enable();
+    let oldest = png_image(2, 2, 1);
+    let oldest_bytes = oldest.bytes.len();
+    harness.copy_image(oldest);
+    let first_path = harness
+        .entries()
+        .into_iter()
+        .next()
+        .and_then(|event| event.image_attachment().map(|a| a.path.clone()))
+        .expect("第一条的附件");
+    harness.copy_image(png_image(2, 2, 2));
+    harness.copy_image(png_image(2, 2, 3));
+
+    assert_eq!(harness.entries().len(), 2, "容量 2");
+    assert_eq!(
+        harness.attachment_files().len(),
+        2,
+        "被淘汰条目的附件文件必须一起回收"
+    );
+    assert!(
+        !first_path.exists(),
+        "最旧一条的附件应被回收：{}",
+        first_path.display()
+    );
+    assert!(oldest_bytes > 0);
+    assert_eq!(harness.host.clipboard_state().entries, 2);
+}
+
+/// 容量已满且剩下的都是置顶图片：如实拒绝，不假装保存，也不留下附件孤儿。
+#[test]
+fn capacity_reached_for_images_is_reported_honestly() {
+    let harness = clipboard_host(clipboard_settings(30, 1));
+    harness.enable();
+    harness.copy_image(png_image(2, 2, 5));
+    let entry = harness.entries().into_iter().next().expect("一条");
+    harness
+        .host
+        .pin_clipboard_entry(&entry.id, true)
+        .expect("置顶");
+
+    assert_eq!(
+        harness.copy_image(png_image(2, 2, 6)),
+        ClipboardCaptureOutcome::CapacityReached {
+            entries: 1,
+            capacity: 1
+        }
+    );
+    assert_eq!(harness.entries().len(), 1);
+    let state = harness.host.clipboard_state();
+    assert!(state.capacity_reached.is_some(), "容量触顶必须有准确状态");
+    assert_eq!(
+        harness.attachment_files().len(),
+        1,
+        "被拒绝的图片不得留下已保存的附件"
+    );
+}
+
+/// 删除、清空与过期都必须回收不再被引用的附件。
+#[test]
+fn delete_clear_and_expiry_reclaim_image_attachments() {
+    // 删除：删掉一条，它的附件文件立即回收。
+    let harness = clipboard_host(clipboard_settings(30, 500));
+    harness.enable();
+    harness.copy_image(png_image(2, 2, 11));
+    harness.copy_image(png_image(2, 2, 12));
+    let entries = harness.entries();
+    assert_eq!(entries.len(), 2);
+    // 列表是「最新的在前」，因此 entries[1] 是较早的那条。
+    let kept_path = entries[0].image_attachment().expect("附件").path.clone();
+    let doomed = entries[1].clone();
+    let doomed_path = doomed.image_attachment().expect("附件").path.clone();
+    harness
+        .host
+        .delete_clipboard_entry(&doomed.id)
+        .expect("删除");
+    assert!(!doomed_path.exists(), "删除条目必须回收它的附件");
+    assert!(kept_path.exists(), "其它条目的附件不受影响");
+    assert_eq!(harness.attachment_files().len(), 1);
+
+    // 清空：剩下的附件也回收。
+    harness.host.clear_clipboard_history().expect("清空");
+    assert!(!kept_path.exists(), "清空历史必须回收全部附件");
+    assert!(harness.attachment_files().is_empty());
+
+    // 过期：把「现在」推到保留期限之外。
+    harness.copy_image(png_image(2, 2, 13));
+    let expired_path = harness
+        .entries()
+        .into_iter()
+        .next()
+        .and_then(|event| event.image_attachment().map(|a| a.path.clone()))
+        .expect("附件");
+    let now = flashcast_core::now_ms();
+    harness
+        .host
+        .clipboard_store()
+        .reclaim(1, 500, now + 2 * 86_400_000)
+        .expect("回收");
+    assert!(harness.entries().is_empty(), "过期条目必须消失");
+    assert!(!expired_path.exists(), "过期条目必须回收它的附件");
+}
+
+/// 超大图片与无法识别的图片：如实报告失败，绝不生成一条「看起来保存成功」的历史。
+#[test]
+fn oversize_and_undecodable_images_report_honest_failures() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+
+    let outcome = harness.copy_image_problem("图片 20.0 MB 超过上限 16 MB，这次复制没有被保存");
+    match outcome {
+        ClipboardCaptureOutcome::Failed { message } => {
+            assert!(message.contains("超过上限"), "原因要写清楚：{message}");
+        }
+        other => panic!("超大图片必须如实失败：{other:?}"),
+    }
+    assert!(harness.entries().is_empty(), "失败不得留下历史条目");
+    assert!(harness.attachment_files().is_empty(), "失败不得留下附件");
+    let state = harness.host.clipboard_state();
+    assert!(
+        state
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("超过上限"),
+        "状态里必须能看到原因：{:?}",
+        state.last_error
+    );
+
+    let outcome =
+        harness.copy_image_problem("剪贴板里的图片头部不完整或已损坏，这次复制没有被保存");
+    assert!(matches!(outcome, ClipboardCaptureOutcome::Failed { .. }));
+    assert!(harness.entries().is_empty());
+
+    // 有文字时仍然照常保存（图片失败不能连累同一次复制里的文字）。
+    let text_event = flashcast_core::event_from_capture(
+        &flashcast_platform::clipboard::ClipboardCapture {
+            formats: vec![ClipboardFormatKind::Text],
+            text: Some("图片之外还有文字".to_string()),
+            image: None,
+            image_problem: Some("图片超过上限".to_string()),
+            source: None,
+        },
+        1_700_000_000_000,
+        &unique_dir("clipboard-image-problem-attachments"),
+    )
+    .expect("有文字时仍然要生成条目");
+    assert_eq!(text_event.summary, "图片之外还有文字");
+}
+
+/// 一次图片事件自身的格式集合、时间、摘要字段必须被填好（tickets 11–12 的扩展基线）。
+#[test]
+fn image_only_event_populates_format_time_and_summary() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+    let before = flashcast_core::now_ms();
+    harness.copy_image(png_image(8, 5, 21));
+    let after = flashcast_core::now_ms();
+
+    let event = harness.entries().into_iter().next().expect("一条");
+    assert_eq!(
+        event.formats.len(),
+        1,
+        "图片事件只有图片格式：{:?}",
+        event.formats
+    );
+    match &event.formats[0] {
+        flashcast_core::ClipboardFormat::Image {
+            mime,
+            width,
+            height,
+            bytes,
+        } => {
+            assert_eq!(mime, "image/png");
+            assert_eq!((*width, *height), (8, 5), "尺寸必须来自真实文件头");
+            assert!(*bytes > 0);
+        }
+        other => panic!("格式应是图片：{other:?}"),
+    }
+    assert!(event.text.is_none(), "图片条目没有可索引文字");
+    assert!(
+        event.captured_at_ms >= before && event.captured_at_ms <= after,
+        "捕获时间必须在这次复制的时间窗内"
+    );
+    assert!(event.summary.contains("8×5"), "摘要：{}", event.summary);
+    assert_eq!(event.copies, 1);
+    assert!(!event.pinned);
+    assert_eq!(event.attachments.len(), 1);
+    assert!(event.payloads.is_empty());
+    assert_eq!(harness.host.clipboard_state().attachments, 1);
+}
+
+/// 图片也不在首屏被检索：历史必须经关键词进入（与 ticket 09 同一条界线）。
+#[test]
+fn image_history_is_not_searched_from_the_home_screen() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+    harness.copy_image(png_image(9, 9, 31));
+
+    let home = harness.host.query("图片");
+    assert!(home.scope.is_home(), "普通输入仍在首屏");
+    assert!(
+        !home
+            .items
+            .iter()
+            .any(|item| item.kind == ItemKind::ClipboardEntry),
+        "首屏不得出现图片历史"
+    );
+    let scoped = harness.host.query("剪贴板");
+    assert_eq!(scoped.items.len(), 1);
 }
