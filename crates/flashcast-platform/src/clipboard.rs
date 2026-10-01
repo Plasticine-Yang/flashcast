@@ -50,6 +50,24 @@ pub trait ClipboardAccess: Send + Sync {
     /// 读取失败与「没有文本」是两回事：前者返回 `Err`，宿主据此给出准确的失败状态，
     /// 而不是把它当成「这次没有内容」而静默跳过。
     fn read_text(&self) -> Result<Option<String>, ClipboardError>;
+
+    /// 把**文件列表**写进系统剪贴板，使用各平台的公开文件列表格式（ticket 12）：
+    /// Linux 是 `text/uri-list`，Windows 是 `CF_HDROP`，macOS 是文件 URL 列表。
+    ///
+    /// 默认实现如实报告「当前平台没有实现」而不是静默成功：宿主据此给用户准确状态，
+    /// 不会把「没写进去」说成「已复制」。
+    fn write_files(&self, _paths: &[PathBuf]) -> Result<(), ClipboardError> {
+        Err(ClipboardError::Unsupported {
+            reason: "当前平台没有实现文件列表写入".to_string(),
+        })
+    }
+
+    /// 读取当前剪贴板里的文件列表；剪贴板里没有文件列表时返回 `Ok(None)`。
+    ///
+    /// 读取失败与「没有文件列表」同样必须分开（与 [`Self::read_text`] 一致）。
+    fn read_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        Ok(None)
+    }
 }
 
 /// 一次复制事件里存在的格式。v0.1.0 只捕获文本，其余取值是 ticket 10–12 的扩展点：
@@ -87,14 +105,91 @@ pub struct ClipboardSourceApp {
     pub title: Option<String>,
 }
 
+/// 剪贴板里的一个文件条目（ticket 12）。
+///
+/// v0.1.0 **把视频也按文件处理**：视频文件与其它文件走完全相同的捕获、引用与副本路径，
+/// 没有录屏，也没有从任意应用提取视频片段。
+///
+/// `bytes` 是**观察值**：原文件可能已经被移动或删除，因此读不到时是 `None`，由宿主的
+/// 存储层记为 0，并在界面里如实显示「不可恢复」而不是猜一个大小。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardFileEntry {
+    /// 原文件路径（引用类附件指向它）。
+    pub path: PathBuf,
+    /// 展示用名称：文件名；路径没有文件名时用末段。
+    pub name: String,
+    /// 观察到的字节数；读不到时为 `None`。
+    pub bytes: Option<u64>,
+    /// 按扩展名推断的 MIME（尽力而为）；未知时 `None`。
+    pub mime: Option<String>,
+}
+
+/// 一次复制事件里最多保存多少个文件。超过上限的列表如实拒绝，而不是截断。
+pub const MAX_FILES: usize = 1024;
+
+/// 由文件路径构造一个文件条目：名称、大小与 MIME 都是**尽力而为**的观察值。
+pub fn file_entry(path: impl Into<PathBuf>) -> ClipboardFileEntry {
+    let path = path.into();
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let bytes = std::fs::metadata(&path).ok().map(|meta| meta.len());
+    let mime = mime_for_path(&path);
+    ClipboardFileEntry {
+        path,
+        name,
+        bytes,
+        mime,
+    }
+}
+
+/// 一组路径的文件条目。
+pub fn file_entries(paths: &[PathBuf]) -> Vec<ClipboardFileEntry> {
+    paths.iter().cloned().map(file_entry).collect()
+}
+
+/// 按扩展名推断 MIME。只为展示与检索服务，拿不准时如实返回 `None`。
+pub fn mime_for_path(path: &Path) -> Option<String> {
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())?;
+    let mime = match extension.as_str() {
+        "txt" | "log" | "md" => "text/plain",
+        "html" | "htm" => "text/html",
+        "rtf" => "application/rtf",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "tar" => "application/x-tar",
+        _ => return None,
+    };
+    Some(mime.to_string())
+}
+
 /// 轮询到的一次新复制事件。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardCapture {
     /// 本次事件里存在的格式集合。
     pub formats: Vec<ClipboardFormatKind>,
-    /// 文本内容（ticket 09 的唯一载荷）。ticket 10–12 会在同一结构体上增加
-    /// HTML/RTF/图片/文件字段。
+    /// 文本内容（ticket 09）。文件列表事件通常没有它。
     pub text: Option<String>,
+    /// 文件列表（ticket 12）。空表示这次复制事件里没有文件。
+    pub files: Vec<ClipboardFileEntry>,
     /// 来源应用（平台可提供时）。
     pub source: Option<ClipboardSourceApp>,
 }
@@ -105,8 +200,24 @@ impl ClipboardCapture {
         Self {
             formats: vec![ClipboardFormatKind::Text],
             text: Some(text.into()),
+            files: Vec::new(),
             source: None,
         }
+    }
+
+    /// 只有文件列表的一次复制事件（视频文件也是文件）。
+    pub fn files(paths: &[PathBuf]) -> Self {
+        Self {
+            formats: vec![ClipboardFormatKind::Files],
+            text: None,
+            files: file_entries(paths),
+            source: None,
+        }
+    }
+
+    /// 这次事件是否带有文件列表。
+    pub fn has_files(&self) -> bool {
+        !self.files.is_empty()
     }
 }
 
@@ -132,6 +243,12 @@ pub trait ClipboardWatcher: Send + Sync {
 
     /// 登记一次由 Flashcast 自己发起的剪贴板写入（自身写入抑制）。
     fn note_own_write(&self, text: &str);
+
+    /// 登记一次由 Flashcast 自己发起的**文件列表**写入（自身写入抑制，ticket 12）。
+    ///
+    /// 默认是空操作，具体平台按自己的文件列表指纹抑制；宿主另有一层基于内容指纹的兜底
+    /// （见 `flashcast-core` 的捕获管线），两层各自成立。
+    fn note_own_write_files(&self, _paths: &[PathBuf]) {}
 }
 
 /// 内容指纹：没有平台序号可读时用它判断剪贴板是否变化。
@@ -143,6 +260,153 @@ pub fn fingerprint(text: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+/// 文件列表的内容指纹：用于适配层判断「还是不是同一份文件列表」。
+///
+/// 只看路径本身（保序）：文件被复制两次时大小可能不同（原文件在改），而用户看到的是
+/// 「同一份列表」；这与宿主的 `content_hash_files` 保持同一判据。
+pub fn fingerprint_files(paths: &[PathBuf]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    paths.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 校验待写入的文件列表。
+pub fn check_files(paths: &[PathBuf]) -> Result<(), ClipboardError> {
+    if paths.is_empty() {
+        return Err(ClipboardError::Failed(
+            "文件列表为空，没有可复制的东西".to_string(),
+        ));
+    }
+    if paths.len() > MAX_FILES {
+        return Err(ClipboardError::Failed(format!(
+            "文件列表有 {} 个文件，超过上限 {MAX_FILES}",
+            paths.len()
+        )));
+    }
+    if paths.iter().any(|path| path.as_os_str().is_empty()) {
+        return Err(ClipboardError::Failed(
+            "文件列表里有空路径，已拒绝写入剪贴板".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// 解析 Linux 的 `text/uri-list`（RFC 2483）与 GNOME 的 `x-special/gnome-copied-files`。
+///
+/// 处理了实际会遇到的三件事：
+///
+/// - 行分隔是 `\r\n`，`#` 开头是注释，空行忽略；
+/// - GNOME 的私有种格式第一行是 `copy` / `cut`，要跳过；
+/// - 路径里含**空格**或**非 ASCII** 时是百分号编码的 UTF-8（`%20`、`%E6%8A%A5`），
+///   也见得到未编码的原始 UTF-8——两种都要还原成同一份路径。
+///
+/// 非 `file://` 的行（例如 `http://`）会被忽略：剪贴板历史只保存本机文件引用。
+pub fn parse_uri_list(text: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim_end_matches('\r').trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // GNOME 私有种格式的首行标记。
+        if index == 0 && (line == "copy" || line == "cut") {
+            continue;
+        }
+        if let Some(path) = parse_file_uri(line) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+/// 把一行 `file://` URI 还原成本机路径；不是本机文件 URI 时返回 `None`。
+fn parse_file_uri(line: &str) -> Option<PathBuf> {
+    let rest = line.strip_prefix("file://")?;
+    // `file://host/path`：只有空 authority 或 localhost 才算本机文件。
+    // 路径**包含** authority 之后的那个 `/`（`file:///home/a` 的路径是 `/home/a`）。
+    let path = match rest.find('/') {
+        Some(0) => rest,
+        Some(slash) => {
+            let authority = &rest[..slash];
+            if !authority.is_empty() && !authority.eq_ignore_ascii_case("localhost") {
+                return None;
+            }
+            &rest[slash..]
+        }
+        None => return None,
+    };
+    if path.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(percent_decode(path)))
+}
+
+/// 百分号解码（按字节解码再按 UTF-8 解释，因此非 ASCII 路径能正确还原）。
+fn percent_decode(input: &str) -> String {
+    fn hex(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) {
+                out.push(high * 16 + low);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 把本机路径编码成一行 `file://` URI（供 `text/uri-list` 使用）。
+///
+/// 只做必要的百分号编码：非 ASCII、空格、`%`、`#`、`?` 与控制字符。`/` 与 ASCII 可见
+/// 字符原样保留，因此 `parse_uri_list(format_uri_list(p))` 一定回到同一个路径。
+pub fn encode_file_uri(path: &Path) -> String {
+    let mut uri = String::from("file://");
+    let text = path.to_string_lossy();
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        let keep = byte >= 0x21
+            && byte < 0x7f
+            && byte != b'%'
+            && byte != b'#'
+            && byte != b'?'
+            && byte != b'"';
+        if keep {
+            uri.push(byte as char);
+        } else {
+            uri.push('%');
+            uri.push_str(&format!("{byte:02X}"));
+        }
+        index += 1;
+    }
+    uri
+}
+
+/// 把文件列表编码成 `text/uri-list` 内容（每行一个 URI，CRLF 结尾）。
+pub fn format_uri_list(paths: &[PathBuf]) -> String {
+    let mut out = String::new();
+    for path in paths {
+        out.push_str(&encode_file_uri(path));
+        out.push_str("\r\n");
+    }
+    out
 }
 
 /// 剪贴板操作的失败原因。全部为面向用户的中文描述。
@@ -404,5 +668,76 @@ mod tests {
         let missing =
             read_with_tool(Path::new("/bin/sh"), &["-c", "exit 1"]).expect("非 0 退出不应失败");
         assert_eq!(missing, None);
+    }
+
+    /// 文件列表往返：**含空格**与**非 ASCII** 的路径必须回到同一个路径（ticket 12）。
+    #[test]
+    fn uri_list_round_trips_spaces_and_non_ascii_paths() {
+        let paths = vec![
+            PathBuf::from("/home/user/报告 草稿.pdf"),
+            PathBuf::from("/home/user/带#井号 与%百分号.txt"),
+            PathBuf::from("/home/user/普通.txt"),
+        ];
+        let encoded = format_uri_list(&paths);
+        // 空格与非 ASCII 都必须被编码，否则 URI 会在第一个空格处被截断。
+        assert!(encoded.contains("%20"), "空格必须编码：{encoded}");
+        assert!(!encoded.contains(' '), "URI 里不应出现裸空格：{encoded}");
+        assert_eq!(
+            encoded.lines().count(),
+            paths.len(),
+            "每个文件一行：{encoded}"
+        );
+        assert_eq!(parse_uri_list(&encoded), paths, "往返必须回到同一份路径");
+    }
+
+    /// 实际格式里会遇到的东西：CRLF、注释、`copy` 首行、非本机 URI、localhost。
+    #[test]
+    fn uri_list_parsing_handles_real_world_shapes() {
+        let raw = "# 这是注释\r\n\
+                   file:///home/user/一.txt\r\n\
+                   \r\n\
+                   https://example.com/not-a-file\r\n\
+                   file://localhost/home/user/two.txt\r\n\
+                   file://remote-host/home/user/three.txt\r\n";
+        assert_eq!(
+            parse_uri_list(raw),
+            vec![
+                PathBuf::from("/home/user/一.txt"),
+                PathBuf::from("/home/user/two.txt"),
+            ],
+            "只保留本机 file:// 路径"
+        );
+        // GNOME 私有种格式（x-special/gnome-copied-files）：首行是 copy / cut。
+        let gnome = "copy\r\nfile:///home/user/a%20b.txt\r\n";
+        assert_eq!(
+            parse_uri_list(gnome),
+            vec![PathBuf::from("/home/user/a b.txt")]
+        );
+        // 未编码的原始 UTF-8 与百分号编码的 UTF-8 必须还原成同一个路径。
+        assert_eq!(
+            parse_uri_list("file:///home/user/报告.txt"),
+            parse_uri_list("file:///home/user/%E6%8A%A5%E5%91%8A.txt")
+        );
+    }
+
+    /// 文件列表的内容指纹只看路径，且空列表与有内容可区分。
+    #[test]
+    fn file_fingerprint_follows_paths() {
+        let a = vec![PathBuf::from("/home/user/a.txt")];
+        let b = vec![PathBuf::from("/home/user/b.txt")];
+        assert_eq!(fingerprint_files(&a), fingerprint_files(&a));
+        assert_ne!(fingerprint_files(&a), fingerprint_files(&b));
+        assert_ne!(fingerprint_files(&[]), fingerprint_files(&a));
+    }
+
+    /// 写文件列表前的校验：空列表与超上限如实拒绝，而不是写入半份列表。
+    #[test]
+    fn check_files_rejects_empty_and_oversized_lists() {
+        assert!(check_files(&[]).is_err());
+        let over: Vec<PathBuf> = (0..=MAX_FILES)
+            .map(|index| PathBuf::from(format!("/tmp/f{index}")))
+            .collect();
+        assert!(check_files(&over).is_err());
+        assert!(check_files(&[PathBuf::from("/tmp/ok.txt")]).is_ok());
     }
 }

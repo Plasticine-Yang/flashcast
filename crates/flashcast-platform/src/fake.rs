@@ -3,6 +3,7 @@
 //!
 //! 替身通过的检查不能证明平台适配通过：真实平台行为必须由各平台的真实检查覆盖。
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -13,8 +14,8 @@ use crate::chrome::{
     ChromeLaunchRequest, ChromeProvider, UserDataCandidate,
 };
 use crate::clipboard::{
-    ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFormatKind, ClipboardPoll,
-    ClipboardSourceApp, ClipboardWatcher,
+    ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFileEntry, ClipboardFormatKind,
+    ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
 };
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
@@ -282,6 +283,8 @@ impl Paster for FakePaster {
 #[derive(Default)]
 pub struct FakeClipboard {
     writes: Mutex<Vec<String>>,
+    /// 按顺序记录的**文件列表**写入（ticket 12）。
+    file_writes: Mutex<Vec<Vec<PathBuf>>>,
     failures: Mutex<Vec<ClipboardError>>,
     read_failures: Mutex<Vec<ClipboardError>>,
 }
@@ -313,6 +316,11 @@ impl FakeClipboard {
         lock(&self.writes).push(text.into());
     }
 
+    /// 直接设置当前剪贴板里的文件列表，模拟「外部应用复制了文件」。
+    pub fn set_files(&self, paths: &[PathBuf]) {
+        lock(&self.file_writes).push(paths.to_vec());
+    }
+
     /// 已写入的文本，按顺序。
     pub fn writes(&self) -> Vec<String> {
         lock(&self.writes).clone()
@@ -325,6 +333,16 @@ impl FakeClipboard {
 
     pub fn write_count(&self) -> usize {
         lock(&self.writes).len()
+    }
+
+    /// 已写入的文件列表，按顺序。
+    pub fn file_writes(&self) -> Vec<Vec<PathBuf>> {
+        lock(&self.file_writes).clone()
+    }
+
+    /// 最近一次写入的文件列表。
+    pub fn last_write_files(&self) -> Option<Vec<PathBuf>> {
+        lock(&self.file_writes).last().cloned()
     }
 }
 
@@ -350,6 +368,33 @@ impl ClipboardAccess for FakeClipboard {
         drop(failures);
         Ok(lock(&self.writes).last().cloned())
     }
+
+    fn write_files(&self, paths: &[PathBuf]) -> Result<(), ClipboardError> {
+        crate::clipboard::check_files(paths)?;
+        // 与文本共用同一份失败队列：宿主对「写入失败」的处理路径只有一条。
+        let failures = lock(&self.failures);
+        if !failures.is_empty() {
+            let index = lock(&self.file_writes)
+                .len()
+                .min(failures.len().saturating_sub(1));
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        lock(&self.file_writes).push(paths.to_vec());
+        Ok(())
+    }
+
+    fn read_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        let failures = lock(&self.read_failures);
+        if !failures.is_empty() {
+            let index = lock(&self.file_writes)
+                .len()
+                .min(failures.len().saturating_sub(1));
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        Ok(lock(&self.file_writes).last().cloned())
+    }
 }
 
 /// 可控的剪贴板变化监听替身（ticket 09）。
@@ -369,14 +414,18 @@ pub struct FakeClipboardWatcher {
 
 struct FakeWatcherState {
     text: Option<String>,
+    /// 当前剪贴板里的文件列表（ticket 12）；非空时优先按文件报告。
+    files: Vec<ClipboardFileEntry>,
     formats: Vec<ClipboardFormatKind>,
     source: Option<ClipboardSourceApp>,
     /// 外部写入序号：每次写入（含自身写入）自增。
     sequence: u64,
     /// 已经交付或抑制到的序号。
     delivered: u64,
-    /// 自身写入的内容指纹，`poll` 见到就抑制。
+    /// 自身写入的**文本**内容指纹，`poll` 见到就抑制。
     own: Vec<u64>,
+    /// 自身写入的**文件列表**内容指纹，`poll` 见到就抑制。
+    own_files: Vec<u64>,
     /// 是否在适配层抑制自身写入。置为 `false` 用于验证**宿主自己的兜底抑制**
     /// 独立成立（真实适配层失效时也不能形成自身写入循环）。
     suppress_own: bool,
@@ -388,11 +437,13 @@ impl Default for FakeClipboardWatcher {
         Self {
             state: Mutex::new(FakeWatcherState {
                 text: None,
+                files: Vec::new(),
                 formats: Vec::new(),
                 source: None,
                 sequence: 0,
                 delivered: 0,
                 own: Vec::new(),
+                own_files: Vec::new(),
                 suppress_own: true,
                 error: None,
             }),
@@ -427,7 +478,19 @@ impl FakeClipboardWatcher {
     pub fn set_text(&self, text: impl Into<String>) {
         let mut state = lock(&self.state);
         state.text = Some(text.into());
+        state.files = Vec::new();
         state.formats = vec![ClipboardFormatKind::Text];
+        state.sequence += 1;
+    }
+
+    /// 模拟一次外部**文件列表**复制（ticket 12）：序号自增，下一次 `poll` 报告变化。
+    ///
+    /// 模拟真实平台的行为：文件列表在剪贴板里是文件格式，不是一段文字。
+    pub fn set_files(&self, paths: &[PathBuf]) {
+        let mut state = lock(&self.state);
+        state.text = None;
+        state.files = crate::clipboard::file_entries(paths);
+        state.formats = vec![ClipboardFormatKind::Files];
         state.sequence += 1;
     }
 
@@ -474,6 +537,24 @@ impl ClipboardWatcher for FakeClipboardWatcher {
             return Ok(ClipboardPoll::Unchanged);
         }
         state.delivered = state.sequence;
+        // 文件列表优先（与真实适配层一致）：文件格式存在时就不是一次文字复制。
+        if !state.files.is_empty() {
+            let paths: Vec<PathBuf> = state.files.iter().map(|file| file.path.clone()).collect();
+            let print = crate::clipboard::fingerprint_files(&paths);
+            if state.suppress_own {
+                if let Some(index) = state.own_files.iter().position(|item| *item == print) {
+                    state.own_files.remove(index);
+                    return Ok(ClipboardPoll::Unchanged);
+                }
+            }
+            self.captures.fetch_add(1, Ordering::SeqCst);
+            return Ok(ClipboardPoll::Changed(ClipboardCapture {
+                formats: state.formats.clone(),
+                text: None,
+                files: state.files.clone(),
+                source: state.source.clone(),
+            }));
+        }
         let text = state.text.clone();
         let Some(text) = text else {
             return Ok(ClipboardPoll::Unchanged);
@@ -489,6 +570,7 @@ impl ClipboardWatcher for FakeClipboardWatcher {
         Ok(ClipboardPoll::Changed(ClipboardCapture {
             formats: state.formats.clone(),
             text: Some(text),
+            files: Vec::new(),
             source: state.source.clone(),
         }))
     }
@@ -501,6 +583,22 @@ impl ClipboardWatcher for FakeClipboardWatcher {
         }
         // 自身写入同样改变剪贴板（序号自增），只是不会被报告成复制事件。
         state.text = Some(text.to_string());
+        state.files = Vec::new();
+        state.sequence += 1;
+    }
+
+    fn note_own_write_files(&self, paths: &[PathBuf]) {
+        self.own_writes.fetch_add(1, Ordering::SeqCst);
+        if paths.is_empty() {
+            return;
+        }
+        let mut state = lock(&self.state);
+        state
+            .own_files
+            .push(crate::clipboard::fingerprint_files(paths));
+        state.text = None;
+        state.files = crate::clipboard::file_entries(paths);
+        state.formats = vec![ClipboardFormatKind::Files];
         state.sequence += 1;
     }
 }

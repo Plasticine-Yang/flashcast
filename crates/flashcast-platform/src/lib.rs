@@ -42,8 +42,9 @@ pub use chrome::{
     PathChromeProvider, UserDataCandidate, UserDataOrigin,
 };
 pub use clipboard::{
-    fingerprint, ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFormatKind,
-    ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
+    file_entries, file_entry, fingerprint, fingerprint_files, format_uri_list, mime_for_path,
+    parse_uri_list, ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFileEntry,
+    ClipboardFormatKind, ClipboardPoll, ClipboardSourceApp, ClipboardWatcher, MAX_FILES,
 };
 pub use focus::{same_app, FocusError, FocusTracker, FocusedApp};
 pub use hotkey::{HotkeySpec, HotkeySpecError, Key, Modifier, DEFAULT_HOTKEY};

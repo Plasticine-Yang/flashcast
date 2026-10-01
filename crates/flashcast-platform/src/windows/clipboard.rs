@@ -11,20 +11,22 @@
 //! 这个模块只在 `cfg(target_os = "windows")` 下编译；本地 Linux 开发机无法执行它，
 //! 由 Windows runner 上的真实检查覆盖（见 `flashcast-platform-check`）。
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
-use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND};
+use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND, POINT};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardOwner,
     GetClipboardSequenceNumber, OpenClipboard, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-use windows::Win32::System::Ole::CF_UNICODETEXT;
+use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
+use windows::Win32::UI::Shell::{DragQueryFileW, DROPFILES, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
 use crate::clipboard::{
-    check_text, ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFormatKind,
-    ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
+    check_files, check_text, file_entries, fingerprint_files, ClipboardAccess, ClipboardCapture,
+    ClipboardError, ClipboardFormatKind, ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
 };
 
 /// Windows 的文本剪贴板后端。
@@ -60,6 +62,27 @@ impl ClipboardAccess for WindowsClipboard {
             OpenClipboard(None)
                 .map_err(|error| ClipboardError::Failed(format!("无法打开剪贴板：{error}")))?;
             let result = read_locked();
+            let _ = CloseClipboard();
+            result
+        }
+    }
+
+    fn write_files(&self, paths: &[PathBuf]) -> Result<(), ClipboardError> {
+        check_files(paths)?;
+        unsafe {
+            OpenClipboard(None)
+                .map_err(|error| ClipboardError::Failed(format!("无法打开剪贴板：{error}")))?;
+            let result = write_files_locked(paths);
+            let _ = CloseClipboard();
+            result
+        }
+    }
+
+    fn read_files(&self) -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+        unsafe {
+            OpenClipboard(None)
+                .map_err(|error| ClipboardError::Failed(format!("无法打开剪贴板：{error}")))?;
+            let result = read_files_locked();
             let _ = CloseClipboard();
             result
         }
@@ -121,6 +144,93 @@ unsafe fn read_locked() -> Result<Option<String>, ClipboardError> {
         return Ok(None);
     }
     Ok(Some(text))
+}
+
+/// 剪贴板已打开：写入 `CF_HDROP`（资源管理器与文件对话框粘贴文件列表的公开格式）。
+///
+/// 结构是「`DROPFILES` 头部 + 双 NUL 结尾的 UTF-16 路径列表」，`fWide = TRUE` 表示
+/// 宽字符。视频文件与普通文件走同一条路径（v0.1.0 不区分视频语义）。
+unsafe fn write_files_locked(paths: &[PathBuf]) -> Result<(), ClipboardError> {
+    EmptyClipboard().map_err(|error| ClipboardError::Failed(format!("无法清空剪贴板：{error}")))?;
+
+    let mut wide: Vec<u16> = Vec::new();
+    for path in paths {
+        wide.extend(path.to_string_lossy().encode_utf16());
+        wide.push(0);
+    }
+    // 列表以**双 NUL** 结尾：最后一个条目之后再补一个 0。
+    wide.push(0);
+
+    let header = std::mem::size_of::<DROPFILES>();
+    let bytes = header + wide.len() * std::mem::size_of::<u16>();
+    let handle: HGLOBAL = GlobalAlloc(GMEM_MOVEABLE, bytes)
+        .map_err(|error| ClipboardError::Failed(format!("无法分配剪贴板内存：{error}")))?;
+    let pointer = GlobalLock(handle);
+    if pointer.is_null() {
+        let _ = windows::Win32::Foundation::GlobalFree(Some(handle));
+        return Err(ClipboardError::Failed("无法锁定剪贴板内存".to_string()));
+    }
+    let dropfiles = DROPFILES {
+        pFiles: header as u32,
+        pt: POINT { x: 0, y: 0 },
+        fNC: false.into(),
+        fWide: true.into(),
+    };
+    std::ptr::copy_nonoverlapping(
+        &dropfiles as *const DROPFILES as *const u8,
+        pointer as *mut u8,
+        header,
+    );
+    std::ptr::copy_nonoverlapping(
+        wide.as_ptr() as *const u8,
+        (pointer as *mut u8).add(header),
+        wide.len() * std::mem::size_of::<u16>(),
+    );
+    let _ = GlobalUnlock(handle);
+
+    match SetClipboardData(CF_HDROP.0 as u32, Some(HANDLE(handle.0))) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let _ = windows::Win32::Foundation::GlobalFree(Some(handle));
+            Err(ClipboardError::Failed(format!("无法写入剪贴板：{error}")))
+        }
+    }
+}
+
+/// 剪贴板已打开：读取 `CF_HDROP` 的文件列表。没有文件格式时返回 `Ok(None)`。
+unsafe fn read_files_locked() -> Result<Option<Vec<PathBuf>>, ClipboardError> {
+    let handle = match GetClipboardData(CF_HDROP.0 as u32) {
+        Ok(handle) => handle,
+        // 剪贴板里没有文件列表（例如只复制了一段文字）：这不是错误。
+        Err(_) => return Ok(None),
+    };
+    if handle.is_invalid() {
+        return Ok(None);
+    }
+    let drop = HDROP(handle.0);
+    // `ifile == 0xFFFF_FFFF` 时返回条目数（不是长度）。
+    let count = DragQueryFileW(drop, u32::MAX, None);
+    if count == 0 {
+        return Ok(None);
+    }
+    let mut paths = Vec::new();
+    for index in 0..count {
+        let length = DragQueryFileW(drop, index, None) as usize;
+        if length == 0 {
+            continue;
+        }
+        let mut buffer = vec![0u16; length + 1];
+        let written = DragQueryFileW(drop, index, Some(&mut buffer)) as usize;
+        if written == 0 {
+            continue;
+        }
+        buffer.truncate(written);
+        paths.push(PathBuf::from(String::from_utf16_lossy(&buffer)));
+    }
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(paths))
 }
 
 /// 剪贴板持有者窗口对应的来源应用。
@@ -196,13 +306,24 @@ impl ClipboardWatcher for WindowsClipboardWatcher {
             }
             *last = sequence;
         }
+        let source = unsafe { source_app() };
+        // 文件列表优先：资源管理器复制文件时剪贴板里同时有 `CF_HDROP` 与文本
+        // （路径本身）。先按文件捕获，才能把「复制文件」与「复制这段文字」分开。
+        if let Some(files) = WindowsClipboard::new().read_files()? {
+            return Ok(ClipboardPoll::Changed(ClipboardCapture {
+                formats: vec![ClipboardFormatKind::Files],
+                text: None,
+                files: file_entries(&files),
+                source,
+            }));
+        }
         let Some(text) = WindowsClipboard::new().read_text()? else {
             return Ok(ClipboardPoll::Unchanged);
         };
-        let source = unsafe { source_app() };
         Ok(ClipboardPoll::Changed(ClipboardCapture {
             formats: vec![ClipboardFormatKind::Text],
             text: Some(text),
+            files: Vec::new(),
             source,
         }))
     }
@@ -216,5 +337,11 @@ impl ClipboardWatcher for WindowsClipboardWatcher {
         if !own.contains(&sequence) {
             own.push(sequence);
         }
+    }
+
+    fn note_own_write_files(&self, _paths: &[PathBuf]) {
+        // 与文本共用同一份「自身写入序号」登记：Windows 的序号不区分格式，
+        // 因此这里不需要另存一份文件指纹。
+        self.note_own_write("");
     }
 }
