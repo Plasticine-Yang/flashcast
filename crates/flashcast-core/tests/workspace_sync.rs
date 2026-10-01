@@ -712,8 +712,24 @@ impl Unauthorized {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
                             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                            let mut buffer = [0_u8; 4096];
-                            let _ = stream.read(&mut buffer);
+                            // 必须先把请求头读完再回包：Windows 上 libgit2 走 WinHTTP，
+                            // 只做一次 read 就应答会被它判成
+                            // "The server returned an invalid or unrecognized response"
+                            // （CI Windows 腿实测），而不是我们期望的 401。
+                            let mut request = Vec::new();
+                            let mut chunk = [0_u8; 1024];
+                            loop {
+                                match stream.read(&mut chunk) {
+                                    Ok(0) => break,
+                                    Ok(read) => {
+                                        request.extend_from_slice(&chunk[..read]);
+                                        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                                            break;
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
                             let body = "unauthorized";
                             let response = format!(
                                 "HTTP/1.1 401 Unauthorized\r\n\
