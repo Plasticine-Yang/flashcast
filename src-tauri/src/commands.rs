@@ -516,7 +516,10 @@ pub fn update_memo(
 /// 删除一条备忘录（同时删除工作区里的文件）。
 #[tauri::command(rename_all = "snake_case")]
 pub fn delete_memo(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    state.host.delete_memo(&id).map_err(|error| error.to_string())
+    state
+        .host
+        .delete_memo(&id)
+        .map_err(|error| error.to_string())
 }
 
 /// 预览某条结果。备忘录按**当前**内容返回完整正文；未知 id 返回 `null`。
