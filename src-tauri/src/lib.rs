@@ -65,6 +65,9 @@ pub fn run() {
             commands::update_memo,
             commands::delete_memo,
             commands::preview,
+            commands::get_chrome_state,
+            commands::associate_chrome_profile,
+            commands::refresh_chrome_bookmarks,
             commands::hide_window,
         ])
         .setup(|app| {

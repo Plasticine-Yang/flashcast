@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
+  ChromeState,
   ClonePhase,
   CloneProgress,
   Memo,
@@ -14,6 +15,7 @@ import type {
   WorkspaceStatus,
 } from "../types";
 import { ChangesPanel } from "./ChangesPanel";
+import { ChromePanel } from "./ChromePanel";
 import { FeaturePluginsPanel } from "./FeaturePluginsPanel";
 import { MemoPanel } from "./MemoPanel";
 
@@ -113,6 +115,8 @@ interface Props {
   memoProblems: MemoProblem[];
   /** 备忘录插件是否启用（决定能否创建 / 修改）。 */
   memoEnabled: boolean;
+  /** 当前 Chrome 状态：发现结果、profile 关联与书签索引。 */
+  chrome: ChromeState | null;
   onBack: () => void;
   onSelectWorkspace: (path: string) => void;
   onInitWorkspace: (path: string) => void;
@@ -138,6 +142,8 @@ interface Props {
   onRedetectSync: () => void;
   onCancelSync: () => void;
   onToggleFeaturePlugin: (id: string, enabled: boolean) => void;
+  onAssociateChromeProfile: (profileDir: string) => void;
+  onRefreshChromeBookmarks: () => void;
   onCreateMemo: (title: string, tags: string[], body: string) => Promise<void>;
   onUpdateMemo: (id: string, title: string, tags: string[], body: string) => Promise<void>;
   onDeleteMemo: (id: string) => Promise<void>;
@@ -168,6 +174,7 @@ export function SettingsScreen({
   memos,
   memoProblems,
   memoEnabled,
+  chrome,
   onBack,
   onSelectWorkspace,
   onInitWorkspace,
@@ -189,6 +196,8 @@ export function SettingsScreen({
   onRedetectSync,
   onCancelSync,
   onToggleFeaturePlugin,
+  onAssociateChromeProfile,
+  onRefreshChromeBookmarks,
   onCreateMemo,
   onUpdateMemo,
   onDeleteMemo,
@@ -710,6 +719,13 @@ export function SettingsScreen({
           plugins={plugins}
           busy={busy}
           onToggle={onToggleFeaturePlugin}
+        />
+
+        <ChromePanel
+          chrome={chrome}
+          busy={busy}
+          onAssociate={onAssociateChromeProfile}
+          onRefresh={onRefreshChromeBookmarks}
         />
 
         <MemoPanel

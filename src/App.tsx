@@ -3,6 +3,7 @@ import { api } from "./api";
 import type {
   ActionOutcome,
   Appearance,
+  ChromeState,
   CloneProgress,
   ItemView,
   Memo,
@@ -93,6 +94,7 @@ export default function App() {
   const [plugins, setPlugins] = useState<PluginView[]>([]);
   const [memos, setMemos] = useState<Memo[]>([]);
   const [memoProblems, setMemoProblems] = useState<MemoProblem[]>([]);
+  const [chrome, setChrome] = useState<ChromeState | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(true);
 
@@ -229,6 +231,7 @@ export default function App() {
     void loadSync();
     void loadPlugins();
     void loadMemos();
+    void loadChrome();
   };
 
   /** 读取随应用提供的功能插件与启用状态（备忘录的启停入口用）。 */
@@ -252,6 +255,43 @@ export default function App() {
     }
   };
 
+  /** 读取 Chrome 状态：发现结果、profile 关联与书签索引（含变化后重建）。 */
+  const loadChrome = async () => {
+    try {
+      setChrome(await api.get_chrome_state());
+    } catch (error) {
+      setSettingsMessage({ level: "error", text: String(error) });
+    }
+  };
+
+  /** 关联一个已发现的 profile；失败时给出中文原因且不改变原关联。 */
+  const handleAssociateChromeProfile = (profileDir: string) => {
+    void runSettingsAction(
+      () => api.associate_chrome_profile(profileDir),
+      (next) => {
+        setChrome(next);
+        setSettingsMessage({
+          level: "info",
+          text: `已关联 Chrome profile：${next.associatedName ?? profileDir}`,
+        });
+        // 换关联后当前查询需要重算（书签集合变了）。
+        void api.query(input).then(apply);
+      },
+    );
+  };
+
+  /** 显式重新读取书签文件（外部改动后的兜底入口）。 */
+  const handleRefreshChromeBookmarks = () => {
+    void runSettingsAction(
+      () => api.refresh_chrome_bookmarks(),
+      (next) => {
+        setChrome(next);
+        setSettingsMessage({ level: "info", text: next.bookmarksLabel });
+        void api.query(input).then(apply);
+      },
+    );
+  };
+
   const memoPlugin = plugins.find((plugin) => plugin.id === "memo") ?? null;
 
   /** 启用 / 停用功能插件：状态写在清单里，列表与搜索随之刷新。 */
@@ -268,6 +308,7 @@ export default function App() {
         });
         // 停用后工作区内容不变，但管理入口与搜索结果都要按新状态重算。
         void loadMemos();
+        void loadChrome();
         void api.query(input).then(apply);
       },
     );
@@ -850,6 +891,7 @@ export default function App() {
           memos={memos}
           memoProblems={memoProblems}
           memoEnabled={memoPlugin?.enabled ?? false}
+          chrome={chrome}
           onSelectWorkspace={handleSelectWorkspace}
           onInitWorkspace={handleInitWorkspace}
           onSaveHotkey={handleSaveHotkey}
@@ -870,6 +912,8 @@ export default function App() {
           onRedetectSync={handleRedetectSync}
           onCancelSync={handleCancelSync}
           onToggleFeaturePlugin={handleToggleFeaturePlugin}
+          onAssociateChromeProfile={handleAssociateChromeProfile}
+          onRefreshChromeBookmarks={handleRefreshChromeBookmarks}
           onCreateMemo={handleCreateMemo}
           onUpdateMemo={handleUpdateMemo}
           onDeleteMemo={handleDeleteMemo}

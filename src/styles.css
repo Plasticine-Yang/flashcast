@@ -473,6 +473,15 @@ body {
   font-weight: 600;
 }
 
+/* 书签结果的浏览器图标：内联 SVG + 主题文字色，不引入图片或图标字体。 */
+.icon-browser {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--fc-icon-fallback-bg);
+  color: var(--fc-text);
+}
+
 .result-text {
   display: flex;
   flex-direction: column;
