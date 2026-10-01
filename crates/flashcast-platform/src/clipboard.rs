@@ -154,6 +154,10 @@ pub enum ClipboardError {
     ToolMissing { reason: String },
     #[error("写入剪贴板失败：{0}")]
     Failed(String),
+    /// 读取失败与写入失败是两件事：面向用户的说明必须说清是哪一半失败了，
+    /// 否则「拿不到剪贴板选区」会被误读成「写入坏了」。
+    #[error("读取剪贴板失败：{0}")]
+    ReadFailed(String),
 }
 
 /// 文本写入的最大长度。剪贴板工具对超长文本没有明确上限，这里只做防呆。
@@ -302,7 +306,7 @@ pub(crate) fn read_with_tool(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| {
-            ClipboardError::Failed(format!("无法启动 {}：{error}", program.display()))
+            ClipboardError::ReadFailed(format!("无法启动 {}：{error}", program.display()))
         })?;
     let stdout = child.stdout.take();
     let reader = std::thread::spawn(move || {
@@ -322,7 +326,7 @@ pub(crate) fn read_with_tool(
                 let _ = child.kill();
                 let _ = child.wait();
                 // 不 join 读取线程：它的管道可能永远不关闭；进程退出时线程自然消失。
-                return Err(ClipboardError::Failed(format!(
+                return Err(ClipboardError::ReadFailed(format!(
                     "剪贴板工具 {} 超过 {} 秒没有返回，已中止（当前会话可能无法取得剪贴板选区）",
                     program.display(),
                     READ_TIMEOUT.as_secs()
@@ -330,7 +334,7 @@ pub(crate) fn read_with_tool(
             }
             Err(error) => {
                 let _ = child.kill();
-                return Err(ClipboardError::Failed(format!(
+                return Err(ClipboardError::ReadFailed(format!(
                     "等待剪贴板工具失败：{error}"
                 )));
             }
