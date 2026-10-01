@@ -444,6 +444,29 @@ pub fn parse_local_state(text: &str) -> Result<BTreeMap<String, ProfileInfo>, Ch
         #[serde(default)]
         info_cache: BTreeMap<String, RawProfileInfo>,
     }
+    /// Chrome 写这些标记的类型**不固定**：本机实测 Chrome 153 的
+    /// `is_managed` 是整数 `0`，而 `force_signin_profile_locked` 是布尔。
+    /// 因此这里接受布尔、整数与字符串，绝不因为类型差异丢掉整个 `info_cache`。
+    #[derive(Deserialize, Default)]
+    #[serde(transparent)]
+    struct LenientFlag(Option<serde_json::Value>);
+
+    impl LenientFlag {
+        fn get(&self) -> bool {
+            match self.0.as_ref() {
+                Some(serde_json::Value::Bool(value)) => *value,
+                Some(serde_json::Value::Number(number)) => {
+                    number.as_i64().map(|value| value != 0).unwrap_or(false)
+                }
+                Some(serde_json::Value::String(text)) => matches!(
+                    text.trim().to_ascii_lowercase().as_str(),
+                    "true" | "1" | "yes"
+                ),
+                _ => false,
+            }
+        }
+    }
+
     #[derive(Deserialize, Default)]
     struct RawProfileInfo {
         #[serde(default)]
@@ -451,11 +474,11 @@ pub fn parse_local_state(text: &str) -> Result<BTreeMap<String, ProfileInfo>, Ch
         #[serde(default)]
         user_name: Option<String>,
         #[serde(default)]
-        is_managed: Option<bool>,
+        is_managed: LenientFlag,
         #[serde(default)]
         hosted_domain: Option<String>,
         #[serde(default)]
-        force_signin_profile_locked: Option<bool>,
+        force_signin_profile_locked: LenientFlag,
     }
 
     let state: LocalState = serde_json::from_str(text).map_err(|error| {
@@ -468,24 +491,34 @@ pub fn parse_local_state(text: &str) -> Result<BTreeMap<String, ProfileInfo>, Ch
         .info_cache
         .into_iter()
         .map(|(dir, raw)| {
-            let managed = raw.is_managed.unwrap_or(false)
-                || raw.force_signin_profile_locked.unwrap_or(false)
-                || raw
-                    .hosted_domain
-                    .as_deref()
-                    .map(|domain| !domain.trim().is_empty())
-                    .unwrap_or(false);
+            // `"NO_HOSTED_DOMAIN"` 是 Chrome 在**未**受管理时的固定写法（本机实测），
+            // 不能当成「有 hosted_domain 就是受管理」。
+            let hosted_domain = raw
+                .hosted_domain
+                .filter(|domain| !is_absent_hosted_domain(domain));
+            let managed = raw.is_managed.get()
+                || raw.force_signin_profile_locked.get()
+                || hosted_domain.is_some();
             (
                 dir,
                 ProfileInfo {
                     name: raw.name,
                     user_name: raw.user_name,
                     managed,
-                    hosted_domain: raw.hosted_domain,
+                    hosted_domain,
                 },
             )
         })
         .collect())
+}
+
+/// Chrome 用来表示「没有 hosted_domain」的字面量。
+pub const NO_HOSTED_DOMAIN: &str = "NO_HOSTED_DOMAIN";
+
+/// 该 `hosted_domain` 取值是否表示「没有企业域」。
+fn is_absent_hosted_domain(value: &str) -> bool {
+    let value = value.trim();
+    value.is_empty() || value.eq_ignore_ascii_case(NO_HOSTED_DOMAIN)
 }
 
 /// 启动时传给 Chrome 的参数。
@@ -705,6 +738,40 @@ mod tests {
         );
         assert!(!cache["Default"].managed);
         assert!(cache["Profile 1"].managed);
+    }
+
+    #[test]
+    fn real_world_flag_types_do_not_break_the_parser() {
+        // 本机实测的 Chrome 153 形状：is_managed 是整数 0，hosted_domain 是
+        // "NO_HOSTED_DOMAIN"，force_signin_profile_locked 是布尔。
+        let cache = parse_local_state(
+            r#"{
+              "profile": { "info_cache": {
+                "Default": {
+                  "name": "文锋",
+                  "user_name": "me@example.com",
+                  "is_managed": 0,
+                  "hosted_domain": "NO_HOSTED_DOMAIN",
+                  "force_signin_profile_locked": false
+                },
+                "Profile 1": {
+                  "name": "工作",
+                  "is_managed": 1,
+                  "force_signin_profile_locked": 1
+                },
+                "Profile 2": { "name": "托管域", "hosted_domain": "corp.example" }
+              } }
+            }"#,
+        )
+        .expect("真实形状的 Local State 必须能解析");
+        assert_eq!(cache["Default"].name.as_deref(), Some("文锋"));
+        assert!(
+            !cache["Default"].managed,
+            "整数 0 + NO_HOSTED_DOMAIN 不是受管理"
+        );
+        assert_eq!(cache["Default"].hosted_domain, None);
+        assert!(cache["Profile 1"].managed, "整数 1 就是受管理");
+        assert!(cache["Profile 2"].managed, "有企业域就是受管理");
     }
 
     #[test]

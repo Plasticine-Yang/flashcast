@@ -41,10 +41,16 @@ const LOCAL_STATE: &str = r#"{
    "os_crypt": { "encrypted_key": "本测试不会读取它" },
    "profile": {
       "info_cache": {
-         "Default": { "name": "个人", "user_name": "me@example.com" },
+         "Default": {
+            "name": "个人",
+            "user_name": "me@example.com",
+            "is_managed": 0,
+            "hosted_domain": "NO_HOSTED_DOMAIN",
+            "force_signin_profile_locked": false
+         },
          "Profile 1": {
             "name": "工作",
-            "is_managed": true,
+            "is_managed": 1,
             "hosted_domain": "corp.example"
          }
       }
@@ -117,12 +123,15 @@ fn discovery_finds_binary_profiles_and_display_names() {
     let default = environment.profile("Default").expect("Default profile");
     assert_eq!(default.name, "个人");
     assert_eq!(default.user_name.as_deref(), Some("me@example.com"));
-    assert!(!default.managed);
+    assert!(
+        !default.managed,
+        "整数 0 + NO_HOSTED_DOMAIN 不能判成受管理（真实 Chrome 的形状）"
+    );
     assert!(default.has_bookmarks && default.bookmarks_readable);
 
     let work = environment.profile("Profile 1").expect("Profile 1");
     assert_eq!(work.name, "工作", "显示名来自 profile.info_cache");
-    assert!(work.managed, "hosted_domain 必须视为企业管理");
+    assert!(work.managed, "整数 1 / 企业域必须视为企业管理");
     assert!(
         !work.has_bookmarks,
         "只有 Preferences 的 profile 还没有 Bookmarks，这是正常空状态"
@@ -234,4 +243,106 @@ fn custom_user_data_dir_requires_the_switch() {
         "默认位置之外的目录必须显式传 --user-data-dir"
     );
     std::fs::remove_dir_all(&root).ok();
+}
+
+/// 真实机器上的发现检查（**默认忽略**）。
+///
+/// 只在 Linux 开发机上手动运行：它读取当前用户真实的 Chrome 用户数据目录与
+/// `Local State`，但只取 `profile.info_cache`（显示名 / 账号 / 是否受管理），
+/// **绝不读取** `os_crypt.encrypted_key`，也绝不写入任何 Chrome 文件。
+/// 因此它不进 CI（runner 上没有真实 Chrome profile），也不会在普通 `cargo test` 里跑。
+///
+/// 运行方式：
+///   cargo test -p flashcast-platform --test chrome_fixture real_machine_discovery -- --ignored --nocapture
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "需要开发机上的真实 Chrome profile；只读 profile.info_cache"]
+fn real_machine_discovery() {
+    use flashcast_platform::chrome::ChromeProvider;
+    use flashcast_platform::linux::LinuxChromeProvider;
+
+    let provider = LinuxChromeProvider::new();
+    match provider.discover() {
+        Ok(environment) => {
+            println!("品牌: {:?}", environment.brand);
+            println!("可执行文件: {}", environment.binary.display());
+            println!(
+                "用户数据目录: {}（来源 {:?}，需要 --user-data-dir: {}）",
+                environment.user_data_dir.display(),
+                environment.user_data_origin,
+                environment.pass_user_data_dir
+            );
+            println!("profile 数: {}", environment.profiles.len());
+            for profile in &environment.profiles {
+                println!(
+                    "  - 目录「{}」显示名「{}」账号 {:?} 管理 {} 有 Bookmarks {} 可读 {}",
+                    profile.dir,
+                    profile.name,
+                    profile.user_name,
+                    profile.managed,
+                    profile.has_bookmarks,
+                    profile.bookmarks_readable
+                );
+            }
+            for warning in &environment.warnings {
+                println!("警告: {warning}");
+            }
+        }
+        Err(error) => println!("发现失败: {error}"),
+    }
+}
+
+/// 真实 Chrome 的**启动**检查（默认忽略，Linux 开发机手动运行）。
+///
+/// 它调用的是产品代码路径 `chrome::spawn_chrome`（spawn 后立即返回、不等待、不看退出码），
+/// 只证明「Chrome 进程被真实启动了」，**不**证明页面打开。为了不在桌面上弹出窗口，
+/// 这里额外加了 `--headless=new`；`--dump-dom` 的页面加载证据见 ticket 13 的 Comments
+/// 里单独记录的 CLI 检查。
+///
+/// 运行方式：
+///   cargo test -p flashcast-platform --test chrome_fixture real_chrome_spawn -- --ignored --nocapture
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "会在真实机器上启动一次 headless Chrome（使用 /tmp 下的一次性 user-data-dir）"]
+fn real_chrome_spawn_starts_a_process() {
+    use flashcast_platform::chrome::{build_open_args, spawn_chrome, ChromeLaunchRequest};
+
+    let binary = Path::new("/usr/bin/google-chrome");
+    if !binary.is_file() {
+        println!("跳过：本机没有 /usr/bin/google-chrome");
+        return;
+    }
+    let root = unique_dir("real-spawn");
+    let udd = root.join("udd");
+    std::fs::create_dir_all(udd.join("Default")).expect("创建一次性 user-data-dir");
+
+    // **必须**显式传 `--user-data-dir` 指向一次性目录：本检查绝不可以使用用户真实的
+    // Chrome profile（第一次写这个用例时漏了它，Chrome 于是用了 ~/.config/google-chrome）。
+    // 产品代码里「默认位置不传该开关」是对的（用户就是要用自己的 profile），但测试不是。
+    let mut args = build_open_args("Default", Some(&udd), "about:blank");
+    let url = args.pop().expect("URL 是最后一个元素");
+    args.push("--headless=new".to_string());
+    args.push("--disable-gpu".to_string());
+    args.push(url);
+    let request = ChromeLaunchRequest::new(binary, args);
+
+    let launch = spawn_chrome(&request).expect("真实 Chrome 必须能被启动");
+    println!("argv = {:?}", launch.argv);
+    assert!(launch.pid.is_some(), "启动成功后应给出 pid");
+
+    // 真实进程确实验证：给它时间写出用户数据目录里的文件。
+    let marker = udd.join("Local State");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline && !marker.is_file() {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    println!(
+        "一次性 user-data-dir 里是否出现 Local State: {}",
+        marker.is_file()
+    );
+    assert!(
+        marker.is_file(),
+        "被启动的 Chrome 必须真的使用了这个 --user-data-dir"
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }
