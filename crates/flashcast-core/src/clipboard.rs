@@ -178,7 +178,7 @@ pub fn event_from_capture(capture: &ClipboardCapture, now_ms: i64) -> Option<Cli
     // 只记录**真的有内容**的格式：格式集合与载荷必须一致，否则会出现「声称有 RTF、
     // 点开却没有」的条目。
     let mut formats: Vec<ClipboardFormat> = vec![ClipboardFormat::Text { bytes: text.len() }];
-    let mut push_format = |format: ClipboardFormat, formats: &mut Vec<ClipboardFormat>| {
+    let push_format = |format: ClipboardFormat, formats: &mut Vec<ClipboardFormat>| {
         if !formats
             .iter()
             .any(|existing| existing.tag() == format.tag())
