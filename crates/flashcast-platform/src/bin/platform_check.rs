@@ -551,7 +551,7 @@ fn clipboard_write_check(capabilities: &Capabilities, allowed: bool) -> CheckRes
                 title: "真实写入系统剪贴板并回读",
                 status: Status::NotCovered,
                 detail: format!(
-                    "写入没有完成：{reason}。当前会话里剪贴板工具（wl-copy / xclip）无法取得选区                     ——自动化会话缺少可用的输入序列时就是这样；这不代表真实桌面上的复制会失败"
+                    "写入没有完成：{reason}。当前会话里剪贴板工具（wl-copy / xclip）无法取得选区；自动化会话缺少可用的输入序列时就是这样，这不代表真实桌面上的复制会失败"
                 ),
                 command: command.to_string(),
             }
