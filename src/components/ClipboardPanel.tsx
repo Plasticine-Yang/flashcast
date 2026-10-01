@@ -176,10 +176,21 @@ export function ClipboardPanel({
               data-pinned={entry.pinned ? "true" : "false"}
               key={entry.id}
             >
+              {entry.imageDataUrl ? (
+                /* 图片条目在管理列表里也要能看到缩略图与类型尺寸（ticket 10）。 */
+                <img
+                  className="icon thumbnail"
+                  data-testid="clipboard-thumbnail"
+                  src={entry.imageDataUrl}
+                  alt=""
+                  aria-hidden="true"
+                />
+              ) : null}
               <span className="theme-name">
                 {entry.summary}
                 <span className="theme-meta">
                   {entry.formats.join("/")}
+                  {entry.imageSize ? ` · ${entry.imageSize}` : ""}
                   {entry.source ? ` · 来自 ${entry.source}` : ""} · {describeAge(entry.capturedAtMs)}
                   {entry.copies > 1 ? ` · 复制过 ${entry.copies} 次` : ""}
                 </span>

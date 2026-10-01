@@ -323,7 +323,6 @@ const MOCK_CLIPBOARD_IMAGE_DATA_URL =
 export const MOCK_CLIPBOARD_PLUGIN_ID = "clipboard";
 export const MOCK_CLIPBOARD_KEYWORDS = ["剪贴板", "剪切板", "clipboard"];
 
-/** 模拟历史里的初始条目（真实行为由 crates/flashcast-core/tests/clipboard.rs 验证）。 */
 /**
  * 模拟历史里的初始条目（真实行为由 crates/flashcast-core/tests/clipboard.rs 验证）。
  *
@@ -352,6 +351,8 @@ const MOCK_CLIPBOARD_ENTRIES: MockClipboardEntry[] = [
     pinned: false,
     copies: 1,
     attachments: 0,
+    imageDataUrl: null,
+    imageSize: null,
   },
   {
     id: "clip-mock-2",
@@ -363,6 +364,8 @@ const MOCK_CLIPBOARD_ENTRIES: MockClipboardEntry[] = [
     pinned: true,
     copies: 2,
     attachments: 0,
+    imageDataUrl: null,
+    imageSize: null,
   },
   {
     id: "clip-mock-3",
@@ -1292,15 +1295,24 @@ class MockHost implements HostApi {
       }
       const id = itemId.slice("clipboard:".length);
       const entry = this.clipboardEntries.find((candidate) => candidate.id === id) ?? null;
-      if (!entry || entry.text === null) {
+      if (!entry) {
         return {
           status: "failed",
           message: `找不到「${itemId}」对应的剪贴板历史，可能已被删除或过期回收，请重新查询`,
         };
       }
+      // 图片条目没有可索引的文字，但仍然是可恢复的内容：真实宿主读本机附件后把图片
+      // 写回剪贴板。附件读不出来（data URL 为空）时如实失败，不假装粘贴成功。
+      const payload = entry.text ?? (entry.imageDataUrl ? entry.summary : null);
+      if (payload === null) {
+        return {
+          status: "failed",
+          message: `「${entry.summary}」没有可直接粘贴的内容：文件历史的恢复将在后续版本提供`,
+        };
+      }
       // 自身写入抑制：这次写入不得再被自己捕获成新条目。
       this.clipboardSuppressed += 1;
-      this.lastCopied = entry.text;
+      this.lastCopied = payload;
       const target = this.previousApp;
       if (!this.autoPasteSupported || !target) {
         const reason = target

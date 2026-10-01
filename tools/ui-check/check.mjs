@@ -428,6 +428,51 @@ async function richClipboardIndex(page) {
   );
 }
 
+/**
+ * 图片剪贴板条目在结果列表里的下标（副标题标注「图片」格式）。
+ *
+ * 与富文本同理：鼠标点击会**执行**条目，选中必须用键盘移动。
+ */
+async function imageClipboardIndex(page) {
+  return page.$$eval(ROW, (nodes) =>
+    nodes.findIndex((node) =>
+      (node.querySelector(".result-subtitle")?.textContent ?? "").includes("图片"),
+    ),
+  );
+}
+
+/**
+ * 把键盘选择移到指定下标的条目上。
+ *
+ * 每次按键后必须等选择真的移动：`move_selection` 是异步命令，连按会读到同一个
+ * 起始下标而只前进一格。目标在当前选择上方时按 ArrowUp（下标 0 表示不动）。
+ */
+async function selectRow(page, index) {
+  const currentIndex = () =>
+    page.evaluate(
+      (selector) =>
+        [...document.querySelectorAll(selector)].findIndex(
+          (row) => row.dataset.selected === "true",
+        ),
+      ROW,
+    );
+  await page.click(INPUT);
+  let at = await currentIndex();
+  while (at !== index) {
+    const down = at < index;
+    const expected = down ? at + 1 : at - 1;
+    await page.keyboard.press(down ? "ArrowDown" : "ArrowUp");
+    await page.waitForFunction(
+      ({ selector, expected }) =>
+        [...document.querySelectorAll(selector)].findIndex(
+          (row) => row.dataset.selected === "true",
+        ) === expected,
+      { selector: ROW, expected },
+    );
+    at = expected;
+  }
+}
+
 async function main() {
   mkdirSync(ARTIFACTS, { recursive: true });
   const url = process.env.FLASHCAST_UI_URL || DEFAULT_URL;
@@ -2469,7 +2514,7 @@ async function main() {
       const subtitles = await page.$$eval(ROW, (nodes) =>
         nodes.map((node) => node.querySelector(".result-subtitle")?.textContent ?? ""),
       );
-      assert(zh.length === 2, `模拟历史应有 2 条，实际 ${zh.length}`);
+      assert(zh.length === 3, `模拟历史应有 3 条（含 1 条图片），实际 ${zh.length}`);
       assert(
         zh[0].title.includes("example.com/report"),
         `置顶条目必须排在最前，实际「${zh[0].title}」`,
@@ -2654,6 +2699,204 @@ async function main() {
       return `停用时关键词不返回条目、状态显示未启用，截图 ${file}`;
     });
 
+    // 71. 图片剪贴板条目：结果列表里给出缩略图与类型尺寸。
+    await check("图片剪贴板条目在结果里显示缩略图与类型尺寸", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+
+      await page.fill(INPUT, "剪贴板");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some(
+            (row) => row.dataset.kind === "clipboardEntry",
+          ),
+        ROW,
+      );
+      const imageIndex = await imageClipboardIndex(page);
+      assert(imageIndex >= 0, "模拟历史里必须能找到图片条目");
+
+      const subtitles = await page.$$eval(ROW, (nodes) =>
+        nodes.map((node) => node.querySelector(".result-subtitle")?.textContent ?? ""),
+      );
+      assert(
+        subtitles[imageIndex].includes("图片"),
+        `图片条目的副标题必须标注格式「图片」，实际「${subtitles[imageIndex]}」`,
+      );
+      assert(
+        subtitles[imageIndex].includes("PNG 12×8"),
+        `图片条目的副标题必须标注类型与尺寸，实际「${subtitles[imageIndex]}」`,
+      );
+
+      // 缩略图必须是内嵌 data URL：不发起网络请求，也不引用剪贴板提供的外部地址。
+      const thumbnails = await page.$$eval('[data-testid="result-thumbnail"]', (nodes) =>
+        nodes.map((node) => ({
+          src: node.getAttribute("src") ?? "",
+          naturalWidth: node.naturalWidth,
+          naturalHeight: node.naturalHeight,
+        })),
+      );
+      assert(thumbnails.length === 1, `缩略图只能有一张，实际 ${thumbnails.length}`);
+      assert(
+        thumbnails[0].src.startsWith("data:image/png;base64,"),
+        `缩略图必须是内嵌 PNG data URL，实际「${thumbnails[0].src.slice(0, 32)}…」`,
+      );
+      assert(
+        thumbnails[0].naturalWidth === 12 && thumbnails[0].naturalHeight === 8,
+        `缩略图必须真的解码出 12×8 像素，实际 ${thumbnails[0].naturalWidth}×${thumbnails[0].naturalHeight}`,
+      );
+      const file = await shot(page, "71-clipboard-image-thumbnail.png");
+      return `图片条目在第 ${imageIndex} 行，副标题「${subtitles[imageIndex]}」，缩略图 ${thumbnails[0].naturalWidth}×${thumbnails[0].naturalHeight}，截图 ${file}`;
+    });
+
+    // 72. 图片预览按需展开：完整图片来自宿主，文字结果照常可用。
+    await check("图片条目按需预览完整图片且不阻塞文字结果", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+      await page.fill(INPUT, "剪贴板");
+      await waitForRowCount(page, 3);
+      const imageIndex = await imageClipboardIndex(page);
+      assert(imageIndex >= 0, "模拟历史里必须能找到图片条目");
+
+      await selectRow(page, imageIndex);
+      await page.waitForSelector('[data-testid="image-preview-body"]');
+      const preview = await page.evaluate(() => {
+        const section = document.querySelector('[data-testid="memo-preview"]');
+        const image = document.querySelector('[data-testid="image-preview-body"]');
+        return {
+          kind: section?.dataset.kind ?? "",
+          title: document.querySelector('[data-testid="memo-preview-title"]')?.textContent ?? "",
+          src: image?.getAttribute("src") ?? "",
+          width: image?.naturalWidth ?? 0,
+          height: image?.naturalHeight ?? 0,
+        };
+      });
+      assert(preview.kind === "image", `预览必须是图片预览，实际「${preview.kind}」`);
+      assert(
+        preview.src.startsWith("data:image/png;base64,"),
+        "完整图片同样必须是内嵌 data URL（按需读取本机附件）",
+      );
+      assert(
+        preview.width === 12 && preview.height === 8,
+        `完整预览必须解码出真实像素，实际 ${preview.width}×${preview.height}`,
+      );
+      const file = await shot(page, "72-clipboard-image-preview.png");
+
+      // 文字结果不受影响：选中一条文字历史后预览回到惰性文本。
+      const textIndex = await page.$$eval(ROW, (nodes) =>
+        nodes.findIndex((node) =>
+          (node.querySelector(".result-subtitle")?.textContent ?? "").includes("HTML"),
+        ),
+      );
+      assert(textIndex >= 0, "文字条目必须仍然在结果里");
+      await selectRow(page, textIndex);
+      await page.waitForSelector(MEMO_PREVIEW_BODY);
+      const body = await page.textContent(MEMO_PREVIEW_BODY);
+      assert(
+        body.includes("确认一下参加人"),
+        `文字条目的预览必须仍然可用，实际「${body.slice(0, 24)}…」`,
+      );
+      const imageGone = await page.evaluate(
+        () => document.querySelectorAll('[data-testid="image-preview-body"]').length,
+      );
+      assert(imageGone === 0, "切回文字条目后不得残留图片预览");
+      return `图片预览 ${preview.width}×${preview.height}（第 ${imageIndex} 行），文字条目预览仍可用，截图 ${file}`;
+    });
+
+    // 73. 图片条目的恢复：自动粘贴与「已复制，请手动粘贴」两种反馈。
+    await check("图片条目恢复时走同一条粘贴路径并如实反馈", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() => {
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true);
+        window.__flashcastMock.setAutoPasteSupported(true);
+        window.__flashcastMock.lastCopied = null;
+        window.__flashcastMock.lastPaste = null;
+      });
+      await page.fill(INPUT, "剪贴板");
+      await waitForRowCount(page, 3);
+      const imageIndex = await imageClipboardIndex(page);
+      assert(imageIndex >= 0, "模拟历史里必须能找到图片条目");
+
+      await selectRow(page, imageIndex);
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => window.__flashcastMock.lastPaste !== null);
+      const pasted = await page.evaluate(() => window.__flashcastMock.lastPaste);
+      assert(
+        pasted.sequence.join(" → ") === "copied → windowHidden → restored → pasted",
+        `图片恢复必须复用同一条外壳顺序：${pasted.sequence.join(" → ")}`,
+      );
+      assert(
+        pasted.content.includes("图片"),
+        `写进剪贴板的必须是这条图片历史，实际「${pasted.content}」`,
+      );
+      const file = await shot(page, "73-clipboard-image-paste.png");
+
+      // 降级路径：没有可注入按键的会话时必须给出手动粘贴反馈，而不是静默失败。
+      await page.evaluate(() => {
+        window.__flashcastMock.setAutoPasteSupported(false);
+        window.__flashcastMock.lastPaste = null;
+      });
+      await page.fill(INPUT, "剪贴板");
+      await waitForRowCount(page, 3);
+      await selectRow(page, imageIndex);
+      await page.keyboard.press("Enter");
+      const fallback = await page.evaluate(() => ({
+        pasted: window.__flashcastMock.lastPaste,
+        notice: document.querySelector('[data-testid="notice"]')?.textContent ?? "",
+      }));
+      assert(
+        fallback.pasted === null,
+        "不能自动粘贴时不得声称已经粘贴",
+      );
+      assert(
+        fallback.notice.includes("手动粘贴"),
+        `降级反馈必须说明请手动粘贴，实际「${fallback.notice}」`,
+      );
+      return `图片恢复自动粘贴到「${pasted.target}」，降级反馈「${fallback.notice.trim().slice(0, 20)}…」，截图 ${file}`;
+    });
+
+    // 74. 设置页的图片历史：缩略图、类型尺寸与条目状态。
+    await check("设置页的剪贴板历史显示图片缩略图与尺寸", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await page.waitForSelector('[data-testid="clipboard-item"]');
+
+      const thumbnails = await page.$$eval('[data-testid="clipboard-thumbnail"]', (nodes) =>
+        nodes.map((node) => ({
+          src: node.getAttribute("src") ?? "",
+          width: node.naturalWidth,
+          height: node.naturalHeight,
+        })),
+      );
+      assert(thumbnails.length === 1, `设置页里的图片缩略图只能有一张，实际 ${thumbnails.length}`);
+      assert(
+        thumbnails[0].src.startsWith("data:image/png;base64,"),
+        "设置页缩略图同样必须是内嵌 data URL",
+      );
+      assert(
+        thumbnails[0].width === 12 && thumbnails[0].height === 8,
+        `设置页缩略图必须解码出 12×8，实际 ${thumbnails[0].width}×${thumbnails[0].height}`,
+      );
+      const itemText = await page.textContent('[data-testid="clipboard-list"]');
+      assert(
+        itemText.includes("PNG 12×8"),
+        `设置页必须显示图片的类型与尺寸，实际「${itemText.slice(0, 60)}…」`,
+      );
+      const file = await shot(page, "74-settings-clipboard-image.png");
+      return `设置页显示 1 张 ${thumbnails[0].width}×${thumbnails[0].height} 缩略图与尺寸「PNG 12×8」，截图 ${file}`;
+    });
+
     // 75. 富文本剪贴板条目：格式集合可见（同一次复制的文字 + HTML/RTF）。
     await check("富文本剪贴板条目在结果里显示完整格式集合", async () => {
       await page.goto(url, { waitUntil: "load" });
@@ -2696,7 +2939,7 @@ async function main() {
         window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
       );
       await page.fill(INPUT, "剪贴板");
-      await waitForRowCount(page, 2);
+      await waitForRowCount(page, 3);
 
       // 鼠标点击会**执行**条目，选中必须走键盘（与真实键盘操作一致）。
       const richIndex = await richClipboardIndex(page);
@@ -2725,9 +2968,18 @@ async function main() {
         const list = document.querySelector('[data-testid="result-list"]')?.outerHTML ?? "";
         return preview + list;
       });
-      for (const needle of ["clipboard-xss", "example.invalid", "onerror", "<script", "<img"]) {
+      for (const needle of ["clipboard-xss", "example.invalid", "onerror", "<script"]) {
         assert(!dom.includes(needle), `剪贴板提供的内容「${needle}」不得进入 DOM`);
       }
+      // 结果列表里的 `<img>` 只允许是宿主下发的缩略图（data URL）；剪贴板提供的
+      // `<img src="https://…">` 一旦被当标记渲染就会带着远端地址出现。
+      const remoteImages = await page.evaluate(
+        () =>
+          [...document.querySelectorAll('[data-testid="result-list"] img')].filter(
+            (node) => !(node.getAttribute("src") ?? "").startsWith("data:image/"),
+          ).length,
+      );
+      assert(remoteImages === 0, `结果列表里不得出现非 data URL 的图片，实际 ${remoteImages} 个`);
       const wholeBody = await page.evaluate(() => document.body.innerHTML);
       for (const needle of ["clipboard-xss", "example.invalid", "onerror"]) {
         assert(!wholeBody.includes(needle), `剪贴板提供的内容「${needle}」不得出现在页面上`);
@@ -2755,7 +3007,7 @@ async function main() {
         window.__flashcastMock.lastPaste = null;
       });
       await page.fill(INPUT, "剪贴板");
-      await waitForRowCount(page, 2);
+      await waitForRowCount(page, 3);
       const richIndex = await richClipboardIndex(page);
       assert(richIndex >= 0, "必须能找到富文本条目");
       await page.click(INPUT);

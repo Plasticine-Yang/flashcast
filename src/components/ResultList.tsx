@@ -69,7 +69,16 @@ export function ResultList({ items, selection, onActivate }: Props) {
             /* 鼠标悬停只改样式，不改变宿主持有的键盘选择。 */
             onClick={() => onActivate(item)}
           >
-            {item.iconDataUrl ? (
+            {item.thumbnailDataUrl ? (
+              /* 图片剪贴板历史：缩略图是用户分辨条目的主要依据（ticket 10）。 */
+              <img
+                className="icon thumbnail"
+                data-testid="result-thumbnail"
+                src={item.thumbnailDataUrl}
+                alt=""
+                aria-hidden="true"
+              />
+            ) : item.iconDataUrl ? (
               <img className="icon" src={item.iconDataUrl} alt="" aria-hidden="true" />
             ) : item.kind === "bookmark" ? (
               /* 书签结果必须有浏览器图标：它来自哪个浏览器是用户要认出的信息。 */

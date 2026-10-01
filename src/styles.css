@@ -574,6 +574,32 @@ body {
   color: var(--fc-text);
 }
 
+/*
+ * 图片剪贴板历史的缩略图（ticket 10）。
+ *
+ * 与图标同一条左列，稍大一点让用户能认出内容；等比缩放不裁切，边框跟随主题。
+ */
+.icon.thumbnail {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--fc-border);
+  background: var(--fc-surface);
+  object-fit: contain;
+}
+
+/*
+ * 按需展开的完整图片：限制高度，不撑破浮窗，也不做动画（高频键盘操作）。
+ */
+.preview-image {
+  max-width: 100%;
+  max-height: 220px;
+  align-self: flex-start;
+  object-fit: contain;
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-item);
+  background: var(--fc-surface);
+}
+
 /* 设置页的备忘录管理：沿用与主题列表相同的紧凑行。 */
 .memo-list {
   list-style: none;
