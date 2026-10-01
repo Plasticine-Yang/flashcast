@@ -25,8 +25,9 @@ use crate::git::{CommitOutcome, GitError, WorkspaceChanges};
 use crate::manifest::{ManifestEntry, ManifestError, PluginManifestFile};
 use crate::memo::{self, Memo, MemoBook, MemoError, MemoProblem};
 use crate::model::{
-    ActionOutcome, BackOutcome, DefaultAction, ItemKind, MatchTier, Notice, PastePlan, PluginFailure, Preview, QueryResponse, QueryScope, Score, SearchItem,
-    COMMAND_CAPABILITIES, COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
+    ActionOutcome, BackOutcome, DefaultAction, ItemKind, MatchTier, Notice, PastePlan,
+    PluginFailure, Preview, QueryResponse, QueryScope, Score, SearchItem, COMMAND_CAPABILITIES,
+    COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
 use crate::plugin::{PluginKind, PluginScope, SearchContext, CAP_CLIPBOARD_WRITE};
 use crate::ranking::{score_match, sort_ranked, RankedItem};
@@ -2296,7 +2297,9 @@ impl Host {
         });
         // 已经在同一个插件的范围里时不算冲突：那是用户在范围里继续输入（关键词本身就
         // 是范围的入口），此时必须留在范围内，否则「执行入口进入范围」会被下一次查询弹回首屏。
-        let keyword_plugin = keyword_scope.as_ref().map(|(manifest, _)| manifest.id.clone());
+        let keyword_plugin = keyword_scope
+            .as_ref()
+            .map(|(manifest, _)| manifest.id.clone());
         let already_in_keyword_scope = match (&inner.scope, &keyword_plugin) {
             (QueryScope::Plugin { id, .. }, Some(keyword_id)) => id == keyword_id,
             _ => false,
