@@ -1869,7 +1869,8 @@ class MockHost implements HostApi {
     return {
       previousApp: null,
       hotkey: { label: this.settings.hotkey, error: null, registered: true },
-      capabilities: MOCK_CAPABILITIES,
+      // 与真实宿主一致：状态里的能力快照与 `get_capabilities` 来自同一次探测。
+      capabilities: await this.get_capabilities(),
       plugins: [
         {
           id: MOCK_MEMO_PLUGIN_ID,

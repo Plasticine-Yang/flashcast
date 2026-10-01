@@ -3,6 +3,7 @@ import { api } from "./api";
 import type {
   ActionOutcome,
   Appearance,
+  Capabilities,
   ChromeState,
   CloneProgress,
   ItemView,
@@ -69,6 +70,8 @@ export default function App() {
   const [response, setResponse] = useState<QueryView>(EMPTY_RESPONSE);
   const [feedback, setFeedback] = useState<ActionOutcome | null>(null);
   const [status, setStatus] = useState<StatusView | null>(null);
+  /** 运行环境与能力状态：设置页每次打开时重新探测一次。 */
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [focused, setFocused] = useState(true);
   const [visible, setVisible] = useState(true);
   const [composing, setComposing] = useState(false);
@@ -119,6 +122,8 @@ export default function App() {
     // 它是空的，只有 query("") 才会给出快速访问项。
     void api.query("").then(apply);
     void api.get_status().then(setStatus);
+    // 设置页的运行环境与能力报告直接来自平台层的 CapabilityProbe（`get_capabilities`）。
+    void api.get_capabilities().then(setCapabilities);
     void api.get_workspace().then((next) => {
       setWorkspace(next);
       setWorkspaceAlert(next.error);
@@ -236,6 +241,8 @@ export default function App() {
     void loadMemos();
     void loadChrome();
     void loadClipboard();
+    // 每次打开设置页都重新探测一次：会话类型与权限可能在应用运行期间变化。
+    void api.get_capabilities().then(setCapabilities);
   };
 
   /** 读取随应用提供的功能插件与启用状态（备忘录的启停入口用）。 */
@@ -982,6 +989,7 @@ export default function App() {
           settings={settings}
           theme={theme}
           hotkey={status?.hotkey ?? null}
+          capabilities={capabilities}
           message={settingsMessage}
           busy={settingsBusy}
           cloneProgress={cloneProgress}

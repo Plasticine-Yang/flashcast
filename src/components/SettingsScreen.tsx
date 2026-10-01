@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
+  Capabilities,
   ChromeState,
   ClonePhase,
   CloneProgress,
@@ -7,6 +8,7 @@ import type {
   MemoProblem,
   PluginView,
   Settings,
+  Support,
   SyncPhase,
   SyncProgress,
   SyncStatus,
@@ -90,11 +92,67 @@ function describeDirty(sync: SyncStatus): string {
   return parts.length > 0 ? parts.join(" + ") : "工作区干净";
 }
 
+/** 操作系统的中文名（`Capabilities.os` 是平台层给出的短名）。 */
+const OS_LABEL: Record<string, string> = {
+  linux: "Linux",
+  windows: "Windows",
+  macos: "macOS",
+  unknown: "未知系统",
+};
+
+/** Linux 会话类型的中文名；其它平台为「不适用」。 */
+const SESSION_LABEL: Record<string, string> = {
+  x11: "X11",
+  wayland: "Wayland",
+  unknown: "未知会话类型",
+  headless: "无桌面会话",
+  "not-applicable": "不适用",
+};
+
+/**
+ * 能力状态的中文文案。
+ *
+ * 与平台层的 `Support::label_zh` 一致：`unknown` 表示**本环境无法判定**（未覆盖），
+ * 不等于「支持」，也不等于「已判定不支持」。设置页必须把这两种情况分开写。
+ */
+export function describeSupport(support: Support): string {
+  switch (support.status) {
+    case "supported":
+      return "支持";
+    case "unsupported":
+      return `不支持（${support.reason}）`;
+    case "unknown":
+      return `未覆盖（${support.reason}）`;
+  }
+}
+
+/** 能力列表里的一行。`id` 用于稳定的 `data-testid`，不随状态变化。 */
+function CapabilityRow({
+  id,
+  label,
+  support,
+}: {
+  id: string;
+  label: string;
+  support: Support;
+}) {
+  return (
+    <div className="settings-fact">
+      <dt>{label}</dt>
+      <dd data-testid={`capability-${id}`} data-support-status={support.status}>
+        {describeSupport(support)}
+      </dd>
+    </div>
+  );
+}
+
 interface Props {
   workspace: WorkspaceStatus | null;
   settings: Settings | null;
   theme: ThemeState | null;
   hotkey: { label: string; error: string | null; registered: boolean } | null;
+  /** 运行环境与能力状态（来自平台层的真实探测）。 */
+  capabilities: Capabilities | null;
   message: SettingsMessage | null;
   /** 正在执行工作区操作，按钮暂时禁用。 */
   busy: boolean;
@@ -172,6 +230,7 @@ export function SettingsScreen({
   settings,
   theme,
   hotkey,
+  capabilities,
   message,
   busy,
   cloneProgress,
@@ -606,6 +665,60 @@ export function SettingsScreen({
           </p>
           <p className="settings-hint">
             修改后立即生效，并写入工作区的 settings.toml，可以直接用编辑器维护。
+          </p>
+        </section>
+
+        <section className="settings-section" data-testid="capability-section">
+          <h2 className="settings-section-title">运行环境与能力</h2>
+          <dl className="settings-facts">
+            <div className="settings-fact">
+              <dt>操作系统</dt>
+              <dd data-testid="capability-os">
+                {capabilities
+                  ? `${OS_LABEL[capabilities.os] ?? capabilities.os}${
+                      capabilities.osVersion ? ` ${capabilities.osVersion}` : "（版本未知）"
+                    }`
+                  : "尚未加载"}
+              </dd>
+            </div>
+            <div className="settings-fact">
+              <dt>架构</dt>
+              <dd data-testid="capability-arch">{capabilities?.arch ?? "尚未加载"}</dd>
+            </div>
+            <div className="settings-fact">
+              <dt>桌面会话</dt>
+              <dd data-testid="capability-session">
+                {capabilities
+                  ? SESSION_LABEL[capabilities.session] ?? capabilities.session
+                  : "尚未加载"}
+                {capabilities && capabilities.session !== "not-applicable"
+                  ? capabilities.desktopAvailable
+                    ? "（存在可交互桌面）"
+                    : "（无可用桌面会话）"
+                  : ""}
+              </dd>
+            </div>
+            {capabilities ? (
+              <>
+                <CapabilityRow id="hotkey" label="全局快捷键" support={capabilities.hotkey} />
+                <CapabilityRow id="clipboard" label="剪贴板" support={capabilities.clipboard} />
+                <CapabilityRow id="auto-paste" label="自动粘贴" support={capabilities.autoPaste} />
+              </>
+            ) : null}
+          </dl>
+
+          {capabilities && capabilities.notes.length > 0 ? (
+            <ul className="settings-hint" data-testid="capability-notes">
+              {capabilities.notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          ) : null}
+
+          <p className="settings-hint" data-testid="capability-disclaimer">
+            以上是这台机器上的实际探测结果：「未覆盖」表示当前环境无法判定，不代表支持；
+            X11 下的结果不能推断 Wayland 可用。本报告只包含系统、会话与权限状态，
+            不包含剪贴板内容、书签或凭证。
           </p>
         </section>
 
