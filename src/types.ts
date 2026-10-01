@@ -421,3 +421,35 @@ export interface SyncProgress {
 }
 
 export type UnlistenFn = () => void;
+
+// ---------------------------------------------------------------------------
+// 备忘录（ticket 07）
+// ---------------------------------------------------------------------------
+
+/** 一条备忘录（对应 flashcast_core::Memo）。 */
+export interface Memo {
+  /** 稳定标识，同时是工作区里 `memos/<id>.md` 的文件名。 */
+  id: string;
+  title: string;
+  /** 多个标签，顺序稳定。 */
+  tags: string[];
+  /** 文字正文。 */
+  body: string;
+}
+
+/** 无法读取的备忘录文件：宿主保留可用内容并如实报告原因。 */
+export interface MemoProblem {
+  /** 工作区里的文件路径。 */
+  path: string;
+  /** 面向用户的中文原因。 */
+  reason: string;
+}
+
+/**
+ * 预览内容（对应 flashcast_core::Preview）。
+ * 备忘录给出完整正文；其它条目类型在后续切片里扩展。
+ */
+export type Preview =
+  | { kind: "none" }
+  | { kind: "text"; title: string | null; body: string }
+  | { kind: "image"; path: string };

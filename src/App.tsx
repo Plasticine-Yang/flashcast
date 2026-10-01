@@ -5,6 +5,10 @@ import type {
   Appearance,
   CloneProgress,
   ItemView,
+  Memo,
+  MemoProblem,
+  PluginView,
+  Preview,
   QueryView,
   Settings,
   StatusView,
@@ -16,6 +20,7 @@ import type {
   WorkspaceStatus,
 } from "./types";
 import { ActionBar } from "./components/ActionBar";
+import { MemoPreview } from "./components/MemoPreview";
 import { ResultList } from "./components/ResultList";
 import { SettingsScreen, type SettingsMessage } from "./components/SettingsScreen";
 import { StatusBanner } from "./components/StatusBanner";
@@ -84,6 +89,12 @@ export default function App() {
   const [diffPath, setDiffPath] = useState<string | null>(null);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  // 备忘录（ticket 07）：设置页的管理列表与搜索页的完整预览。
+  const [plugins, setPlugins] = useState<PluginView[]>([]);
+  const [memos, setMemos] = useState<Memo[]>([]);
+  const [memoProblems, setMemoProblems] = useState<MemoProblem[]>([]);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(true);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const appliedSeq = useRef(0);
@@ -216,7 +227,78 @@ export default function App() {
     void api.get_theme().then(setTheme);
     void loadChanges();
     void loadSync();
+    void loadPlugins();
+    void loadMemos();
   };
+
+  /** 读取随应用提供的功能插件与启用状态（备忘录的启停入口用）。 */
+  const loadPlugins = async () => {
+    try {
+      const status = await api.get_status();
+      setPlugins(status.plugins);
+    } catch (error) {
+      setSettingsMessage({ level: "error", text: String(error) });
+    }
+  };
+
+  /** 读取工作区里的备忘录与无法读取的文件（保留可用内容并如实报告）。 */
+  const loadMemos = async () => {
+    try {
+      const [next, problems] = await Promise.all([api.memos(), api.memo_problems()]);
+      setMemos(next);
+      setMemoProblems(problems);
+    } catch (error) {
+      setSettingsMessage({ level: "error", text: String(error) });
+    }
+  };
+
+  const memoPlugin = plugins.find((plugin) => plugin.id === "memo") ?? null;
+
+  /** 启用 / 停用功能插件：状态写在清单里，列表与搜索随之刷新。 */
+  const handleToggleFeaturePlugin = (id: string, enabled: boolean) => {
+    void runSettingsAction(
+      () => api.set_feature_plugin_enabled(id, enabled),
+      (next) => {
+        setPlugins(next);
+        setSettingsMessage({
+          level: "info",
+          text: `${enabled ? "已启用" : "已停用"}插件：${
+            next.find((plugin) => plugin.id === id)?.name ?? id
+          }`,
+        });
+        // 停用后工作区内容不变，但管理入口与搜索结果都要按新状态重算。
+        void loadMemos();
+        void api.query(input).then(apply);
+      },
+    );
+  };
+
+  const handleCreateMemo = (title: string, tags: string[], body: string) =>
+    runSettingsAction(
+      () => api.create_memo(title, tags, body),
+      async (memo) => {
+        await loadMemos();
+        setSettingsMessage({ level: "info", text: `已创建备忘录：${memo.title}` });
+      },
+    );
+
+  const handleUpdateMemo = (id: string, title: string, tags: string[], body: string) =>
+    runSettingsAction(
+      () => api.update_memo(id, title, tags, body),
+      async (memo) => {
+        await loadMemos();
+        setSettingsMessage({ level: "info", text: `已保存备忘录：${memo.title}` });
+      },
+    );
+
+  const handleDeleteMemo = (id: string) =>
+    runSettingsAction(
+      () => api.delete_memo(id),
+      async () => {
+        await loadMemos();
+        setSettingsMessage({ level: "info", text: `已删除备忘录：${id}` });
+      },
+    );
 
   /**
    * 应用一份变更快照：勾选与差异展示都收敛到仍然存在的路径上，
@@ -656,13 +738,46 @@ export default function App() {
     }
     const back = await api.back();
     apply(back.response);
-    if (!back.restored) {
-      await api.hide_window();
-      setVisible(false);
+    if (back.restored) {
+      // 返回后的查询由宿主决定（例如从插件范围退回首屏会回到进入范围前的输入）：
+      // 输入框必须回显它，否则界面上的查询与列表会对不上。
+      setInput(back.response.input);
+      focusInput();
+      return;
     }
+    await api.hide_window();
+    setVisible(false);
   };
 
   const selected = response.items[response.selection] ?? null;
+  const selectedId = selected?.id ?? null;
+
+  // 预览按选中项按需请求：备忘录给出完整正文，其它条目类型返回 null。
+  // 依赖只有选中项的 **id**：同一输入的重复渲染不会重复请求，也不会重置展开状态。
+  useEffect(() => {
+    if (selectedId === null) {
+      setPreview(null);
+      return;
+    }
+    let cancelled = false;
+    setPreviewOpen(true);
+    void api
+      .preview(selectedId)
+      .then((next) => {
+        if (!cancelled) {
+          setPreview(next);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPreview(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
   const scopeLabel = useMemo(() => response.scopeLabel, [response.scopeLabel]);
 
   return (
@@ -731,6 +846,10 @@ export default function App() {
           commitMessage={commitMessage}
           selectedPaths={selectedPaths}
           diffPath={diffPath}
+          plugins={plugins}
+          memos={memos}
+          memoProblems={memoProblems}
+          memoEnabled={memoPlugin?.enabled ?? false}
           onSelectWorkspace={handleSelectWorkspace}
           onInitWorkspace={handleInitWorkspace}
           onSaveHotkey={handleSaveHotkey}
@@ -750,6 +869,10 @@ export default function App() {
           onPush={handlePush}
           onRedetectSync={handleRedetectSync}
           onCancelSync={handleCancelSync}
+          onToggleFeaturePlugin={handleToggleFeaturePlugin}
+          onCreateMemo={handleCreateMemo}
+          onUpdateMemo={handleUpdateMemo}
+          onDeleteMemo={handleDeleteMemo}
         />
       ) : (
         <>
@@ -764,6 +887,13 @@ export default function App() {
             items={response.items}
             selection={response.selection}
             onActivate={(item) => void runExecute(item)}
+          />
+
+          <MemoPreview
+            item={selected}
+            preview={preview}
+            open={previewOpen}
+            onToggle={() => setPreviewOpen((current) => !current)}
           />
 
           <ActionBar selected={selected} count={response.items.length} />

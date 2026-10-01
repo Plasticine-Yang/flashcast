@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import type {
   ClonePhase,
   CloneProgress,
+  Memo,
+  MemoProblem,
+  PluginView,
   Settings,
   SyncPhase,
   SyncProgress,
@@ -11,6 +14,8 @@ import type {
   WorkspaceStatus,
 } from "../types";
 import { ChangesPanel } from "./ChangesPanel";
+import { FeaturePluginsPanel } from "./FeaturePluginsPanel";
+import { MemoPanel } from "./MemoPanel";
 
 /** 克隆阶段的中文说明。 */
 const PHASE_LABEL: Record<ClonePhase, string> = {
@@ -100,6 +105,14 @@ interface Props {
   commitMessage: string;
   selectedPaths: string[];
   diffPath: string | null;
+  /** 随应用提供的功能插件（备忘录等）与启用状态。 */
+  plugins: PluginView[];
+  /** 当前工作区里的备忘录。 */
+  memos: Memo[];
+  /** 无法读取的备忘录文件与中文原因。 */
+  memoProblems: MemoProblem[];
+  /** 备忘录插件是否启用（决定能否创建 / 修改）。 */
+  memoEnabled: boolean;
   onBack: () => void;
   onSelectWorkspace: (path: string) => void;
   onInitWorkspace: (path: string) => void;
@@ -124,6 +137,10 @@ interface Props {
   onPush: () => void;
   onRedetectSync: () => void;
   onCancelSync: () => void;
+  onToggleFeaturePlugin: (id: string, enabled: boolean) => void;
+  onCreateMemo: (title: string, tags: string[], body: string) => Promise<void>;
+  onUpdateMemo: (id: string, title: string, tags: string[], body: string) => Promise<void>;
+  onDeleteMemo: (id: string) => Promise<void>;
 }
 
 /**
@@ -147,6 +164,10 @@ export function SettingsScreen({
   commitMessage,
   selectedPaths,
   diffPath,
+  plugins,
+  memos,
+  memoProblems,
+  memoEnabled,
   onBack,
   onSelectWorkspace,
   onInitWorkspace,
@@ -167,6 +188,10 @@ export function SettingsScreen({
   onPush,
   onRedetectSync,
   onCancelSync,
+  onToggleFeaturePlugin,
+  onCreateMemo,
+  onUpdateMemo,
+  onDeleteMemo,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
@@ -680,6 +705,23 @@ export function SettingsScreen({
             不执行任何代码；间距与字号由宿主固定，因此切换主题不会移动控件。
           </p>
         </section>
+
+        <FeaturePluginsPanel
+          plugins={plugins}
+          busy={busy}
+          onToggle={onToggleFeaturePlugin}
+        />
+
+        <MemoPanel
+          linked={linked}
+          enabled={memoEnabled}
+          memos={memos}
+          problems={memoProblems}
+          busy={busy}
+          onCreate={onCreateMemo}
+          onUpdate={onUpdateMemo}
+          onDelete={onDeleteMemo}
+        />
 
         {message ? (
           <div

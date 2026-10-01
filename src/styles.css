@@ -516,6 +516,133 @@ body {
   margin-left: auto;
 }
 
+/* 内容预览：紧凑列表下方的按需展开区。展开 / 收起不做动画（高频键盘操作），
+   高度有上限，长正文在内部滚动，窗口尺寸保持稳定。 */
+.preview {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 40%;
+  padding: 8px var(--fc-space-window-padding) 10px;
+  border-top: 1px solid var(--fc-border);
+  background: var(--fc-surface);
+  transition: none;
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: var(--fc-space-section-gap);
+}
+
+.preview-title {
+  font-size: var(--fc-font-aux);
+  font-weight: 600;
+  color: var(--fc-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-meta {
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+  white-space: nowrap;
+}
+
+.preview-header .ghost-button {
+  margin-left: auto;
+}
+
+.preview-body {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--fc-font-family);
+  font-size: var(--fc-font-body);
+  color: var(--fc-text);
+}
+
+/* 设置页的备忘录管理：沿用与主题列表相同的紧凑行。 */
+.memo-list {
+  list-style: none;
+  margin: 0 0 var(--fc-space-section-gap);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.memo-item {
+  display: flex;
+  align-items: center;
+  gap: var(--fc-space-section-gap);
+  padding: var(--fc-space-row-padding) 10px;
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-item);
+  background: var(--fc-surface);
+}
+
+.memo-item[data-editing="true"] {
+  border-color: var(--fc-selection-border);
+  background: var(--fc-selection-bg);
+}
+
+.memo-empty {
+  padding: var(--fc-space-row-padding) 10px;
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+}
+
+.memo-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.memo-title {
+  font-size: var(--fc-font-body);
+  color: var(--fc-text);
+}
+
+.memo-meta,
+.memo-body-preview {
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memo-body-input {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--fc-font-family);
+  font-size: var(--fc-font-body);
+}
+
+.memo-problems {
+  list-style: none;
+  margin: 0 0 var(--fc-space-section-gap);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.memo-problem {
+  padding: 6px 10px;
+  font-size: var(--fc-font-aux);
+  color: var(--fc-error-text);
+  background: var(--fc-error-bg);
+  border: 1px solid var(--fc-error-border);
+  border-radius: var(--fc-radius-control);
+}
+
 kbd {
   font-family: inherit;
   font-size: var(--fc-font-aux);

@@ -14,8 +14,13 @@ import type {
   CloneOutcome,
   CloneProgress,
   CommitOutcome,
+  Memo,
+  MemoProblem,
+  PluginView,
+  Preview,
   PullOutcome,
   PushOutcome,
+  QueryScope,
   QueryView,
   Settings,
   StatusView,
@@ -95,6 +100,20 @@ export interface HostApi {
   sync_progress(): Promise<SyncProgress>;
   /** 请求取消正在进行的同步。 */
   cancel_sync(): Promise<void>;
+  /** 启用或停用**功能插件**；返回更新后的功能插件列表（含启用状态）。 */
+  set_feature_plugin_enabled(id: string, enabled: boolean): Promise<PluginView[]>;
+  /** 当前生效的备忘录（按标识排序）。 */
+  memos(): Promise<Memo[]>;
+  /** 无法读取的备忘录文件：保留可用内容并如实报告原因。 */
+  memo_problems(): Promise<MemoProblem[]>;
+  /** 新建备忘录。未关联工作区或插件停用时 reject，原因为中文。 */
+  create_memo(title: string, tags: string[], body: string): Promise<Memo>;
+  /** 修改一条备忘录（标识不变）。失败时 reject，原因为中文。 */
+  update_memo(id: string, title: string, tags: string[], body: string): Promise<Memo>;
+  /** 删除一条备忘录（同时删除工作区里的文件）。 */
+  delete_memo(id: string): Promise<void>;
+  /** 预览某条结果；未知 id 返回 null。 */
+  preview(itemId: string): Promise<Preview | null>;
   hide_window(): Promise<void>;
   on(event: string, handler: Handler): Promise<UnlistenFn>;
   readonly kind: "tauri" | "browser";
@@ -141,6 +160,17 @@ const tauriApi: HostApi = {
   push_workspace: () => tauriInvoke("push_workspace"),
   sync_progress: () => tauriInvoke("sync_progress"),
   cancel_sync: () => tauriInvoke("cancel_sync"),
+  set_feature_plugin_enabled: (id, enabled) =>
+    tauriInvoke("set_plugin_enabled", { id, enabled })
+      .then(() => tauriInvoke<StatusView>("get_status"))
+      .then((status) => status.plugins),
+  memos: () => tauriInvoke("memos"),
+  memo_problems: () => tauriInvoke("memo_problems"),
+  create_memo: (title, tags, body) => tauriInvoke("create_memo", { title, tags, body }),
+  update_memo: (id, title, tags, body) =>
+    tauriInvoke("update_memo", { id, title, tags, body }),
+  delete_memo: (id) => tauriInvoke("delete_memo", { id }),
+  preview: (itemId) => tauriInvoke("preview", { itemId }),
   hide_window: () => tauriInvoke("hide_window"),
   on: async (event, handler) => {
     const { listen } = await import("@tauri-apps/api/event");
@@ -184,6 +214,41 @@ const MOCK_CAPABILITIES: Capabilities = {
   autoPaste: { status: "unknown", reason: "浏览器中不检查自动粘贴" },
   notes: ["当前运行在浏览器模拟宿主中，不代表真实桌面行为。"],
 };
+
+/** 备忘录插件在模拟宿主里的 id（与 flashcast-core 一致）。 */
+export const MOCK_MEMO_PLUGIN_ID = "memo";
+
+/** 匹配层级的排序权重（与 ADR §4 的稳定排序一致）。 */
+const MATCH_TIER_ORDER: Record<string, number> = {
+  keywordOrTagExact: 0,
+  titlePrefix: 1,
+  titleSubstring: 2,
+  metadataSubstring: 3,
+};
+
+/** 备忘录插件的关键词别名（与 flashcast-core 的插件清单一致）。 */
+export const MOCK_MEMO_KEYWORDS = ["备忘录", "memo", "memos"];
+
+/**
+ * 浏览器模拟宿主里的备忘录。语义与真实宿主一致：稳定标识、多个标签、文字正文；
+ * 首屏按**完整标签**命中，进入插件范围后标题 / 标签 / 正文都可检索。
+ * 真实行为（工作区 Markdown 文件、重启保留、外部修改）由
+ * `crates/flashcast-core/tests/memos.rs` 在真实临时工作区上验证。
+ */
+export const MOCK_MEMOS: Memo[] = [
+  {
+    id: "memo-1",
+    title: "常用回复",
+    tags: ["回复", "工作"],
+    body: "收到，我看一下再回复你。",
+  },
+  {
+    id: "memo-2",
+    title: "会议邀请",
+    tags: ["会议", "工作"],
+    body: "下午三点在三楼会议室，麻烦确认一下时间。",
+  },
+];
 
 // 浏览器模拟宿主的工作区：只模拟 UI 需要区分的几种结果。
 // 真实行为（校验、拒绝覆盖、真实 Git 仓库、真实文件）由
@@ -360,7 +425,9 @@ class MockHost implements HostApi {
   private input = "";
   private selection = 0;
   private items: QueryView["items"] = [];
-  private history: { input: string; selection: number }[] = [];
+  private history: { input: string; selection: number; scope: QueryScope }[] = [];
+  /** 当前查询范围：首屏或某个功能插件的范围。 */
+  private scope: QueryScope = { kind: "home" };
   private handlers = new Map<string, Set<Handler>>();
   private settings: Settings = {
     hotkey: "Ctrl+Alt+Space",
@@ -380,6 +447,8 @@ class MockHost implements HostApi {
   };
   /** 最近一次请求启动的条目 id（含失败样例），供浏览器交互检查脚本断言「是否真的执行了」。 */
   lastLaunched: string | null = null;
+  /** 最近一次复制进剪贴板的内容（备忘录的默认操作是复制）。 */
+  lastCopied: string | null = null;
   hidden = false;
   /** 模拟的克隆进度与取消请求。 */
   private cloneState: CloneProgress = IDLE_CLONE_PROGRESS;
@@ -416,8 +485,19 @@ class MockHost implements HostApi {
   private syncBehind = 0;
   private syncBusy = false;
   private syncProgress: SyncProgress = IDLE_SYNC_PROGRESS;
-  /** 工作区记录的备忘录；拉取时按远端内容重新读取。 */
-  private memos = ["memos/hello.md"];
+  /** 工作区里的备忘录文件（仓库相对路径）；拉取时按远端内容重新读取。 */
+  private memoFiles = ["memos/hello.md"];
+
+  // ---- 备忘录（浏览器模拟） ----
+  /** 生效的备忘录内容（与真实宿主一样按标识排序）。 */
+  private memoEntries: Memo[] = MOCK_MEMOS.map((memo) => ({
+    ...memo,
+    tags: [...memo.tags],
+  }));
+  /** 备忘录插件的启用状态：停用后既不贡献结果也不接受写入。 */
+  private memoPluginEnabled = true;
+  /** 最近一次生成的模拟备忘录标识。 */
+  private memoCounter = MOCK_MEMOS.length;
   /** 远端待拉取的内容（设置快捷键、主题 id、新增备忘录）。 */
   private incoming: { hotkey: string; theme: string; memo: string } | null = null;
 
@@ -436,6 +516,15 @@ class MockHost implements HostApi {
 
   private buildItems(): QueryView["items"] {
     const query = this.input.trim().toLowerCase();
+
+    // 插件范围：关键词完整匹配后进入。范围内的查询先剥掉关键词前缀，
+    // 之后标题、标签与正文都可检索（与真实宿主一致）。
+    if (this.scope.kind === "plugin") {
+      const keyword = this.scope.keyword;
+      const rest = query === keyword ? "" : query.startsWith(keyword) ? query.slice(keyword.length).trim() : query;
+      return this.memoItems(rest);
+    }
+
     const commandItems: QueryView["items"] = [
       {
         id: "flashcast.command.rescan",
@@ -480,13 +569,86 @@ class MockHost implements HostApi {
       return null;
     }).filter((value): value is NonNullable<typeof value> => value !== null);
     const tierOrder = { titlePrefix: 0, titleSubstring: 1, metadataSubstring: 2, keywordOrTagExact: 0 };
-    scored.sort(
+    // 备忘录在首屏按**完整标签**命中（与宿主一致：标签精确匹配优先于较弱的匹配）。
+    const memoScored = this.memoPluginEnabled
+      ? this.memoEntries
+          .filter((memo) => memo.tags.some((tag) => tag.toLowerCase() === query))
+          .map((memo) => ({
+            title: memo.title,
+            tier: "keywordOrTagExact" as const,
+            relevance: 90,
+            item: this.memoItem(memo, { tier: "keywordOrTagExact" as const, relevance: 90 }),
+          }))
+      : [];
+    const ranked = [
+      ...memoScored,
+      ...scored.map(({ app, tier, relevance }) => ({
+        title: app.title,
+        tier,
+        relevance,
+        item: this.toItem(app, { tier, relevance }),
+      })),
+    ];
+    ranked.sort(
       (a, b) =>
         tierOrder[a.tier] - tierOrder[b.tier] ||
         b.relevance - a.relevance ||
-        a.app.title.localeCompare(b.app.title),
+        a.title.localeCompare(b.title),
     );
-    return scored.map(({ app, tier, relevance }) => this.toItem(app, { tier, relevance }));
+    return ranked.map((entry) => entry.item);
+  }
+
+  /** 备忘录范围内的一条结果：默认操作是粘贴（ticket 07 先复制并提示手动粘贴）。 */
+  private memoItem(
+    memo: Memo,
+    score: QueryView["items"][number]["score"],
+  ): QueryView["items"][number] {
+    return {
+      id: `memo:${memo.id}`,
+      title: memo.title,
+      subtitle: memo.tags.length > 0 ? `标签：${memo.tags.join("、")}` : "无标签",
+      iconDataUrl: null,
+      source: MOCK_MEMO_PLUGIN_ID,
+      kind: "memo",
+      defaultAction: "paste",
+      defaultActionLabel: "粘贴",
+      score,
+    };
+  }
+
+  /** 范围内的备忘录检索：标题、标签、正文（`query` 已剥掉关键词前缀）。 */
+  private memoItems(rest: string): QueryView["items"] {
+    if (!this.memoPluginEnabled) {
+      return [];
+    }
+    const query = rest.trim().toLowerCase();
+    if (query.length === 0) {
+      return this.memoEntries.map((memo) =>
+        this.memoItem(memo, { tier: "titlePrefix", relevance: 0 }),
+      );
+    }
+    return this.memoEntries
+      .map((memo) => {
+        const title = memo.title.toLowerCase();
+        if (title === query) return { memo, tier: "titlePrefix" as const, relevance: 100 };
+        if (title.startsWith(query)) return { memo, tier: "titlePrefix" as const, relevance: 80 };
+        if (title.includes(query)) return { memo, tier: "titleSubstring" as const, relevance: 55 };
+        if (memo.tags.some((tag) => tag.toLowerCase().includes(query))) {
+          return { memo, tier: "metadataSubstring" as const, relevance: 32 };
+        }
+        if (memo.body.toLowerCase().includes(query)) {
+          return { memo, tier: "metadataSubstring" as const, relevance: 29 };
+        }
+        return null;
+      })
+      .filter((value): value is NonNullable<typeof value> => value !== null)
+      .sort(
+        (a, b) =>
+          MATCH_TIER_ORDER[a.tier] - MATCH_TIER_ORDER[b.tier] ||
+          b.relevance - a.relevance ||
+          a.memo.title.localeCompare(b.memo.title),
+      )
+      .map(({ memo, tier, relevance }) => this.memoItem(memo, { tier, relevance }));
   }
 
   private toItem(app: MockApp, score: QueryView["items"][number]["score"]): QueryView["items"][number] {
@@ -507,8 +669,8 @@ class MockHost implements HostApi {
     this.seq += 1;
     return {
       seq: this.seq,
-      scope: { kind: "home" },
-      scopeLabel: "首屏",
+      scope: this.scope,
+      scopeLabel: this.scope.kind === "plugin" ? `${this.scope.keyword} 范围` : "首屏",
       input: this.input,
       items: this.items,
       selection: this.selection,
@@ -519,6 +681,23 @@ class MockHost implements HostApi {
 
   async query(input: string): Promise<QueryView> {
     const sameInput = this.input === input;
+    const normalized = input.trim().toLowerCase();
+    const isMemoKeyword =
+      this.memoPluginEnabled && MOCK_MEMO_KEYWORDS.includes(normalized);
+    // 关键词完整匹配即进入插件范围；已在范围内改用另一个别名时更新记下的关键词。
+    if (isMemoKeyword) {
+      if (this.scope.kind === "home") {
+        this.history.push({
+          input: this.input,
+          selection: this.selection,
+          scope: this.scope,
+        });
+      }
+      this.scope = { kind: "plugin", id: MOCK_MEMO_PLUGIN_ID, keyword: normalized };
+    } else if (this.scope.kind === "plugin" && normalized.length === 0) {
+      // 清空输入即离开插件范围。
+      this.scope = { kind: "home" };
+    }
     this.input = input;
     this.items = this.buildItems();
     if (!sameInput) {
@@ -531,6 +710,18 @@ class MockHost implements HostApi {
   async execute(itemId: string): Promise<ActionOutcome> {
     // 记录本次请求，浏览器交互检查脚本据此判断回车是否真的触发了执行。
     this.lastLaunched = itemId;
+    // 备忘录的默认操作是复制：ticket 07 先复制并如实提示手动粘贴。
+    const memo = this.memoFromItemId(itemId);
+    if (memo) {
+      if (!this.memoPluginEnabled) {
+        return { status: "failed", message: "插件「备忘录」已停用，已拒绝执行" };
+      }
+      this.lastCopied = memo.body;
+      return {
+        status: "copiedNeedsManualPaste",
+        message: `已复制「${memo.title}」到剪贴板；自动粘贴由后续版本提供，请手动粘贴`,
+      };
+    }
     const app = MOCK_APPS.find((candidate) => itemId === `app:${candidate.id}`);
     if (app?.failsToLaunch) {
       return {
@@ -539,6 +730,92 @@ class MockHost implements HostApi {
       };
     }
     return { status: "done", message: null };
+  }
+
+  /** 从结果标识还原备忘录（`memo:<id>`）。 */
+  private memoFromItemId(itemId: string): Memo | null {
+    if (!itemId.startsWith("memo:")) {
+      return null;
+    }
+    const id = itemId.slice("memo:".length);
+    return this.memoEntries.find((memo) => memo.id === id) ?? null;
+  }
+
+  async preview(itemId: string): Promise<Preview | null> {
+    const memo = this.memoFromItemId(itemId);
+    if (memo) {
+      return { kind: "text", title: memo.title, body: memo.body };
+    }
+    return null;
+  }
+
+  async memos(): Promise<Memo[]> {
+    return this.memoEntries.map((memo) => ({ ...memo, tags: [...memo.tags] }));
+  }
+
+  async memo_problems(): Promise<MemoProblem[]> {
+    return [];
+  }
+
+  async create_memo(title: string, tags: string[], body: string): Promise<Memo> {
+    this.requireMemoWritable();
+    this.memoCounter += 1;
+    const memo: Memo = {
+      id: `memo-${this.memoCounter}`,
+      title: title.trim(),
+      tags: tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0),
+      body,
+    };
+    this.memoEntries = [...this.memoEntries, memo].sort((a, b) => a.id.localeCompare(b.id));
+    return { ...memo, tags: [...memo.tags] };
+  }
+
+  async update_memo(id: string, title: string, tags: string[], body: string): Promise<Memo> {
+    this.requireMemoWritable();
+    const existing = this.memoEntries.find((memo) => memo.id === id);
+    if (!existing) {
+      throw `找不到这条备忘录：${id}`;
+    }
+    const memo: Memo = {
+      id,
+      title: title.trim(),
+      tags: tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0),
+      body,
+    };
+    this.memoEntries = this.memoEntries.map((candidate) => (candidate.id === id ? memo : candidate));
+    return { ...memo, tags: [...memo.tags] };
+  }
+
+  async delete_memo(id: string): Promise<void> {
+    this.requireMemoWritable();
+    if (!this.memoEntries.some((memo) => memo.id === id)) {
+      throw `找不到这条备忘录：${id}`;
+    }
+    this.memoEntries = this.memoEntries.filter((memo) => memo.id !== id);
+  }
+
+  /** 与宿主一致：插件停用或未关联工作区时拒绝写入。 */
+  private requireMemoWritable(): void {
+    if (!this.memoPluginEnabled) {
+      throw "备忘录插件已停用，无法创建或修改备忘录";
+    }
+    if (!this.workspace.path) {
+      throw "尚未关联配置工作区，无法保存备忘录";
+    }
+  }
+
+  async set_feature_plugin_enabled(id: string, enabled: boolean): Promise<PluginView[]> {
+    if (id !== MOCK_MEMO_PLUGIN_ID) {
+      throw `插件清单里没有这个标识：${id}`;
+    }
+    this.memoPluginEnabled = enabled;
+    // 与宿主一致：停用当前所在范围的插件后回到首屏并按当前输入重算。
+    if (!enabled && this.scope.kind === "plugin" && this.scope.id === id) {
+      this.scope = { kind: "home" };
+    }
+    this.items = this.buildItems();
+    const status = await this.get_status();
+    return status.plugins;
   }
 
   async move_selection(delta: number): Promise<QueryView> {
@@ -557,8 +834,9 @@ class MockHost implements HostApi {
       return { restored: false, response: this.response() };
     }
     this.input = entry.input;
+    this.scope = entry.scope;
     this.items = this.buildItems();
-    this.selection = entry.selection;
+    this.selection = Math.min(entry.selection, Math.max(0, this.items.length - 1));
     return { restored: true, response: this.response() };
   }
 
@@ -593,7 +871,15 @@ class MockHost implements HostApi {
       previousApp: null,
       hotkey: { label: this.settings.hotkey, error: null, registered: true },
       capabilities: MOCK_CAPABILITIES,
-      plugins: [],
+      plugins: [
+        {
+          id: MOCK_MEMO_PLUGIN_ID,
+          name: "备忘录",
+          version: "0.1.0",
+          keywords: [...MOCK_MEMO_KEYWORDS],
+          enabled: this.memoPluginEnabled,
+        },
+      ],
     };
   }
 
@@ -621,6 +907,11 @@ class MockHost implements HostApi {
   async set_plugin_enabled(id: string, enabled: boolean): Promise<ThemeState> {
     const theme = this.mockThemes.find((candidate) => candidate.id === id);
     if (!theme) {
+      // 功能插件（备忘录）：走与真实宿主相同的入口，外观保持不变。
+      if (id === MOCK_MEMO_PLUGIN_ID) {
+        await this.set_feature_plugin_enabled(id, enabled);
+        return this.themeState();
+      }
       throw `插件清单里没有这个标识：${id}`;
     }
     theme.enabled = enabled;
@@ -1088,7 +1379,7 @@ class MockHost implements HostApi {
           // 与宿主一致：拉取后重新加载生效设置，并重新读取主题与备忘录。
           this.settings = { ...this.settings, hotkey: incoming.hotkey };
           this.selectedTheme = incoming.theme;
-          this.memos = [...this.memos, incoming.memo];
+          this.memoFiles = [...this.memoFiles, incoming.memo];
           // 主题变化要像宿主一样推送给 UI（`flashcast://theme`）。
           this.emit("flashcast://theme", this.themeState());
         }
@@ -1110,7 +1401,7 @@ class MockHost implements HostApi {
             error: null,
           },
           theme: this.themeState().selected,
-          memos: this.memos,
+          memos: this.memoFiles,
           message: "已快进拉取到 8b2d4e1，共 1 个提交",
         };
       }
@@ -1126,7 +1417,7 @@ class MockHost implements HostApi {
           error: null,
         },
         theme: this.themeState().selected,
-        memos: this.memos,
+        memos: this.memoFiles,
         message: "远端没有新的提交，本地已是最新",
       };
     } finally {

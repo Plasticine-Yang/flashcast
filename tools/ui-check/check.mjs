@@ -70,6 +70,25 @@ const THEME_PACKAGE_INPUT = '[data-testid="theme-package-input"]';
 const THEME_INSTALL = '[data-testid="theme-install"]';
 const THEME_SELECT = '[data-testid="theme-select"]';
 const THEME_REMOVE = '[data-testid="theme-remove"]';
+// 备忘录与功能插件（ticket 07）。
+const SCOPE_LABEL = '[data-testid="scope-label"]';
+const DEFAULT_ACTION_LABEL = '[data-testid="default-action-label"]';
+const NOTICE = '[data-testid="notice"]';
+const EMPTY_STATE = '[data-testid="empty-state"]';
+const PLUGIN_SECTION = '[data-testid="plugin-section"]';
+const PLUGIN_ITEM = '[data-testid="plugin-item"]';
+const PLUGIN_STATE = '[data-testid="plugin-state"]';
+const PLUGIN_TOGGLE = '[data-testid="plugin-toggle"]';
+const MEMO_SECTION = '[data-testid="memo-section"]';
+const MEMO_DISABLED = '[data-testid="memo-disabled"]';
+const MEMO_ITEM = '[data-testid="memo-item"]';
+const MEMO_TITLE_INPUT = '[data-testid="memo-title-input"]';
+const MEMO_TAGS_INPUT = '[data-testid="memo-tags-input"]';
+const MEMO_BODY_INPUT = '[data-testid="memo-body-input"]';
+const MEMO_SAVE = '[data-testid="memo-save"]';
+const MEMO_PREVIEW = '[data-testid="memo-preview"]';
+const MEMO_PREVIEW_BODY = '[data-testid="memo-preview-body"]';
+const MEMO_PREVIEW_TOGGLE = '[data-testid="memo-preview-toggle"]';
 
 const THEME_LIGHT = "flashcast.theme.light";
 const THEME_DARK = "flashcast.theme.dark";
@@ -1647,6 +1666,273 @@ async function main() {
       );
       const file = await shot(page, "45-settings-sync-redetected.png");
       return `阻塞时「${state}」，重新检测后「${recovered}」，截图 ${blockedShot} / ${file}`;
+    });
+
+    // 25. 备忘录：关键词别名进入范围，列表与完整预览可用（ticket 07）。
+    await check("备忘录范围按别名进入并给出完整预览", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+
+      await page.fill(INPUT, "备忘录");
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SCOPE_LABEL, expected: "备忘录 范围" },
+      );
+      const inScope = await rows(page);
+      assert(inScope.length >= 2, `范围内应列出备忘录，实际 ${inScope.length} 条`);
+      assert(
+        inScope.every((row) => row.kind === "memo"),
+        `范围内的结果必须都是备忘录条目：${inScope.map((row) => row.kind).join("/")}`,
+      );
+      assert(
+        inScope.some((row) => row.title === "常用回复"),
+        `范围内缺少预期备忘录：${inScope.map((row) => row.title).join("/")}`,
+      );
+      const action = await text(DEFAULT_ACTION_LABEL);
+      assert(action === "粘贴", `备忘录的默认操作必须是粘贴，实际「${action}」`);
+
+      // 完整预览：正文必须是完整内容，而不是列表里的摘要。
+      await page.waitForSelector(MEMO_PREVIEW);
+      const body = await text(MEMO_PREVIEW_BODY);
+      assert(body === "收到，我看一下再回复你。", `预览必须是完整正文，实际「${body}」`);
+      const scopeShot = await shot(page, "46-memo-scope.png");
+
+      // 英文别名同样进入范围。
+      await page.fill(INPUT, "memo");
+      const memoScope = await text(SCOPE_LABEL);
+      assert(memoScope.includes("memo 范围"), `别名 memo 必须进入范围：${memoScope}`);
+      await page.fill(INPUT, "memos");
+      const memosScope = await text(SCOPE_LABEL);
+      assert(memosScope.includes("memos 范围"), `别名 memos 必须进入范围：${memosScope}`);
+
+      // 范围内按标题 / 标签检索（在同一个输入框里继续输入）。
+      await page.fill(INPUT, "memos 会议");
+      await page.waitForFunction(
+        (selector) => document.querySelectorAll(selector).length === 1,
+        ROW,
+      );
+      const filtered = await rows(page);
+      assert(
+        filtered[0].title === "会议邀请",
+        `范围内检索结果不对：${filtered.map((row) => row.title).join("/")}`,
+      );
+
+      // 预览可以按需收起 / 展开，列表与操作栏保持不变。
+      await page.click(MEMO_PREVIEW_TOGGLE);
+      assert(!(await page.isVisible(MEMO_PREVIEW_BODY)), "收起后不应显示正文");
+      await page.click(MEMO_PREVIEW_TOGGLE);
+      assert(await page.isVisible(MEMO_PREVIEW_BODY), "再次展开必须恢复正文");
+      return `范围「备忘录 / memo / memos」均可用，${inScope.length} 条，正文完整，截图 ${scopeShot}`;
+    });
+
+    // 26. 备忘录：首屏完整标签命中；回车复制并给出准确反馈。
+    await check("首屏按完整标签命中备忘录，回车复制并提示手动粘贴", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+
+      await page.fill(INPUT, "工作");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some((row) => row.dataset.kind === "memo"),
+        ROW,
+      );
+      const homeScope = await text(SCOPE_LABEL);
+      assert(homeScope === "首屏", `标签命中必须留在首屏，实际「${homeScope}」`);
+      const tagged = await rows(page);
+      const memoRows = tagged.filter((row) => row.kind === "memo");
+      assert(memoRows.length === 2, `完整标签应命中全部两条，实际 ${memoRows.length} 条`);
+      const homeShot = await shot(page, "47-memo-home-tag.png");
+
+      // 进入范围并回车：状态必须是「已复制，需手动粘贴」。
+      await page.fill(INPUT, "备忘录");
+      await page.waitForSelector(MEMO_PREVIEW);
+      const first = await selection(page);
+      const copiable = (await rows(page)).find((row) => row.title === "常用回复");
+      assert(copiable, "范围内必须有「常用回复」");
+      assert(first.id === copiable.id, `第一条应为选中的备忘录，实际 ${first.id}`);
+      await page.keyboard.press("Enter");
+      await page.waitForSelector(NOTICE);
+      const notice = await text(NOTICE);
+      assert(
+        notice.includes("已复制") && notice.includes("手动粘贴"),
+        `复制反馈必须说明已复制且需手动粘贴：${notice}`,
+      );
+      const copied = await page.evaluate(() => window.__flashcastMock.lastCopied);
+      assert(copied === "收到，我看一下再回复你。", `剪贴板内容必须是正文，实际「${copied}」`);
+      const copyShot = await shot(page, "48-memo-copied.png");
+      return `标签命中 ${memoRows.length} 条，反馈「${notice.slice(0, 24)}…」，截图 ${homeShot} / ${copyShot}`;
+    });
+
+    // 27. 备忘录：返回首屏恢复此前的查询、选择与范围。
+    await check("从备忘录范围返回首屏恢复查询、选择与范围", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.click(INPUT);
+      await page.keyboard.press("ArrowDown");
+      await page.waitForFunction(
+        (selector) => document.querySelectorAll(selector)[1]?.dataset.selected === "true",
+        ROW,
+      );
+      await page.keyboard.press("ArrowDown");
+      await page.waitForFunction(
+        (selector) => document.querySelectorAll(selector)[2]?.dataset.selected === "true",
+        ROW,
+      );
+      const before = await selection(page);
+      assert(before && before.index === 2, `应先选中第 3 项：${JSON.stringify(before)}`);
+
+      await page.fill(INPUT, "备忘录");
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: SCOPE_LABEL, expected: "备忘录 范围" },
+      );
+      const inScope = await selection(page);
+      assert(inScope.index === 0, `进入范围后选择必须归零：${JSON.stringify(inScope)}`);
+
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.trim() === expected,
+        { sel: SCOPE_LABEL, expected: "首屏" },
+      );
+      const after = await selection(page);
+      assert(
+        after && after.id === before.id && after.index === 2,
+        `返回必须恢复此前的选择：${JSON.stringify(after)} 应为 ${JSON.stringify(before)}`,
+      );
+      const restoredInput = await page.inputValue(INPUT);
+      assert(restoredInput === "", `返回必须恢复此前的查询，实际「${restoredInput}」`);
+
+      // 已在最外层：再按一次 Escape 关闭窗口。
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(
+        () =>
+          document.querySelector('[data-testid="app-root"]')?.dataset.windowVisible === "false",
+      );
+      return `选择恢复为第 ${after.index} 项（${after.id}），查询恢复为空，再次 Escape 关闭窗口`;
+    });
+
+    // 28. 设置页里管理备忘录：创建、编辑、删除。
+    await check("设置页创建、编辑并删除备忘录", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await linkMockWorkspace();
+      await page.locator(MEMO_SECTION).scrollIntoViewIfNeeded();
+      await page.waitForSelector(MEMO_ITEM);
+      const seed = await page.$$eval(MEMO_ITEM, (nodes) => nodes.length);
+      assert(seed === 2, `工作区里应有两条初始备忘录，实际 ${seed}`);
+
+      // 创建。
+      await page.fill(MEMO_TITLE_INPUT, "报平安");
+      await page.fill(MEMO_TAGS_INPUT, "家人、日常");
+      await page.fill(MEMO_BODY_INPUT, "我到家了，一切都好。");
+      await page.click(MEMO_SAVE);
+      await page.waitForFunction(
+        ({ sel, expected }) =>
+          [...document.querySelectorAll(sel)].some((node) => node.textContent?.includes(expected)),
+        { sel: MEMO_ITEM, expected: "报平安" },
+      );
+      const created = await page.$$eval(MEMO_ITEM, (nodes) =>
+        nodes.map((node) => ({
+          id: node.dataset.memoId,
+          title: node.querySelector('[data-testid="memo-item-title"]')?.textContent ?? "",
+          tags: node.querySelector('[data-testid="memo-item-tags"]')?.textContent ?? "",
+          body: node.querySelector('[data-testid="memo-item-body"]')?.textContent ?? "",
+        })),
+      );
+      const fresh = created.find((memo) => memo.title === "报平安");
+      assert(fresh, "新建的备忘录必须出现在列表里");
+      assert(
+        fresh.tags.includes("家人") && fresh.tags.includes("日常"),
+        `多个标签必须保存：${fresh.tags}`,
+      );
+      assert(fresh.body.includes("我到家了"), `正文必须保存：${fresh.body}`);
+      assert(/^memo-\d+$/.test(fresh.id), `标识必须稳定可追踪：${fresh.id}`);
+      const createShot = await shot(page, "49-settings-memo-created.png");
+
+      // 编辑：标识不变，内容更新。
+      await page.click(`${MEMO_ITEM}[data-memo-id="${fresh.id}"] [data-testid="memo-edit"]`);
+      await page.fill(MEMO_TITLE_INPUT, "报平安（改）");
+      await page.fill(MEMO_BODY_INPUT, "路上堵车，刚到家。");
+      await page.click(MEMO_SAVE);
+      await page.waitForFunction(
+        ({ sel, expected }) =>
+          [...document.querySelectorAll(sel)].some((node) => node.textContent?.includes(expected)),
+        { sel: MEMO_ITEM, expected: "报平安（改）" },
+      );
+      const edited = await page.$$eval(MEMO_ITEM, (nodes) =>
+        nodes.map((node) => ({
+          id: node.dataset.memoId,
+          body: node.querySelector('[data-testid="memo-item-body"]')?.textContent ?? "",
+        })),
+      );
+      const stillThere = edited.find((memo) => memo.id === fresh.id);
+      assert(stillThere, "编辑后标识必须保持不变");
+      assert(stillThere.body.includes("路上堵车"), `编辑后正文必须更新：${stillThere.body}`);
+      const editShot = await shot(page, "50-settings-memo-edited.png");
+
+      // 删除。
+      await page.click(`${MEMO_ITEM}[data-memo-id="${fresh.id}"] [data-testid="memo-delete"]`);
+      await page.waitForFunction(
+        ({ sel, id }) =>
+          ![...document.querySelectorAll(sel)].some((node) => node.dataset.memoId === id),
+        { sel: MEMO_ITEM, id: fresh.id },
+      );
+      return `创建 ${fresh.id}（标签「${fresh.tags.replace("标签：", "")}」）→ 编辑 → 删除，截图 ${createShot} / ${editShot}`;
+    });
+
+    // 29. 停用备忘录插件：不再贡献结果、管理入口拒绝写入、可再启用。
+    await check("停用备忘录插件后不再贡献结果与管理入口", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await linkMockWorkspace();
+      await page.locator(PLUGIN_SECTION).scrollIntoViewIfNeeded();
+      await page.waitForSelector(PLUGIN_ITEM);
+      const state = await text(PLUGIN_STATE);
+      assert(state === "已启用", `默认应启用功能插件，实际「${state}」`);
+
+      await page.click(PLUGIN_TOGGLE);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: PLUGIN_STATE, expected: "已停用" },
+      );
+      const disabledShot = await shot(page, "51-settings-plugin-disabled.png");
+
+      // 管理入口如实说明并拒绝写入。
+      await page.locator(MEMO_SECTION).scrollIntoViewIfNeeded();
+      assert(await page.isVisible(MEMO_DISABLED), "停用后必须说明备忘录不可用");
+      assert(await page.locator(MEMO_SAVE).isDisabled(), "停用后不得创建备忘录");
+
+      // 搜索页：标签不再命中备忘录，关键词也不再进入范围。
+      await page.click('[data-testid="settings-back"]');
+      await page.fill(INPUT, "工作");
+      await page.waitForFunction(
+        (selector) => document.querySelectorAll(selector).length === 0,
+        ROW,
+      );
+      assert(await page.isVisible(EMPTY_STATE), "停用后标签不应命中任何结果");
+      await page.fill(INPUT, "备忘录");
+      const disabledScope = await text(SCOPE_LABEL);
+      assert(disabledScope === "首屏", `停用后不得进入范围，实际「${disabledScope}」`);
+      const searchShot = await shot(page, "52-memo-disabled-search.png");
+
+      // 重新启用后恢复（状态记录在清单里，可以再切换回来）。
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await page.locator(PLUGIN_SECTION).scrollIntoViewIfNeeded();
+      await page.click(PLUGIN_TOGGLE);
+      await page.waitForFunction(
+        ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
+        { sel: PLUGIN_STATE, expected: "已启用" },
+      );
+      await page.click('[data-testid="settings-back"]');
+      await page.fill(INPUT, "工作");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some((row) => row.dataset.kind === "memo"),
+        ROW,
+      );
+      const recovered = (await rows(page)).filter((row) => row.kind === "memo").length;
+      return `停用后标签与关键词都不再命中、管理入口拒绝写入；重新启用后命中 ${recovered} 条，截图 ${disabledShot} / ${searchShot}`;
     });
 
     const failed = results.filter((result) => !result.ok).length;
