@@ -776,16 +776,19 @@ mod tests {
 
     #[test]
     fn binaries_in_path_uses_the_given_path_string() {
-        let found = binaries_in_path(&["google-chrome", "chromium"], Some("/usr/bin:/opt/x"));
-        assert_eq!(
-            found,
-            vec![
-                PathBuf::from("/usr/bin/google-chrome"),
-                PathBuf::from("/opt/x/google-chrome"),
-                PathBuf::from("/usr/bin/chromium"),
-                PathBuf::from("/opt/x/chromium"),
-            ]
-        );
+        // 用平台自己的 PATH 分隔符拼接：Windows 上 `std::env::split_paths` 认 `;`，
+        // 直接写 "/usr/bin:/opt/x" 会被当成**一个**目录（CI Windows 腿实测失败）。
+        let dirs = ["/usr/bin", "/opt/x"];
+        let path_var = std::env::join_paths(dirs)
+            .expect("拼接 PATH")
+            .into_string()
+            .expect("PATH 必须是 UTF-8");
+        let found = binaries_in_path(&["google-chrome", "chromium"], Some(&path_var));
+        let expected: Vec<PathBuf> = ["google-chrome", "chromium"]
+            .iter()
+            .flat_map(|name| dirs.iter().map(move |dir| PathBuf::from(dir).join(name)))
+            .collect();
+        assert_eq!(found, expected);
         assert!(binaries_in_path(&["google-chrome"], None).is_empty());
     }
 }
