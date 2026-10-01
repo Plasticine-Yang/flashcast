@@ -359,6 +359,8 @@ fn main() {
             &capabilities,
             options.allow_clipboard_write,
         ));
+        // 5b. 剪贴板变化监听（ticket 09）：只读，所以不需要 --allow-clipboard-write。
+        checks.push(clipboard_watch_check(&capabilities));
 
         // 6b. 自动粘贴：能力结论 + 注入前置条件（真实查询 XTEST / 会话类型）。
         checks.push(CheckResult {
@@ -557,7 +559,48 @@ fn clipboard_write_check(capabilities: &Capabilities, allowed: bool) -> CheckRes
             }
         }
     }
-    // 回读：优先会话对应的工具，失败再试另一族（XWayland 场景下两者都可能可用）。
+    // 回读（第一路，走 ticket 09 的真实监听路径）：`LinuxClipboardWatcher::poll` 必须
+    // 报告一次变化，且内容就是刚写进去的标记。这一路才真正验证「宿主捕获剪贴板历史」
+    // 所依赖的读路径；命令退出码为 0 不算证据。
+    let watch_marker = marker.clone();
+    let watch_read = run_bounded_blocking(
+        move || {
+            use flashcast_platform::clipboard::{ClipboardPoll, ClipboardWatcher};
+            let watcher = flashcast_platform::linux::LinuxClipboardWatcher::new();
+            match watcher.poll() {
+                Ok(ClipboardPoll::Changed(capture)) => capture
+                    .text
+                    .map(|text| text.trim().to_string())
+                    .ok_or_else(|| "监听报告了变化，但没有可读的文本格式".to_string()),
+                Ok(ClipboardPoll::Unchanged) => {
+                    Err("监听报告「没有变化」，但刚刚写入过标记".to_string())
+                }
+                Err(error) => Err(error.to_string()),
+            }
+        },
+        Duration::from_secs(5),
+    );
+    let mut attempts = Vec::new();
+    match watch_read {
+        Ok(Ok(text)) if text == watch_marker => {
+            return CheckResult {
+                id: "clipboard.write_text",
+                title: "真实写入系统剪贴板并回读",
+                status: Status::MeasuredPass,
+                detail: format!(
+                    "用 LinuxClipboard 写入并由 LinuxClipboardWatcher 读回同一段文本（{} 字节）",
+                    marker.len()
+                ),
+                command: command.to_string(),
+            }
+        }
+        Ok(Ok(text)) => attempts.push(format!("监听读回内容不一致（{} 字节）", text.len())),
+        Ok(Err(reason)) => attempts.push(format!("监听读回失败：{reason}")),
+        Err(reason) => attempts.push(format!("监听读回没有完成：{reason}")),
+    }
+    // 回读（第二路，直接调系统工具）：优先会话对应的工具，失败再试另一族
+    // （XWayland 场景下两者都可能可用）。它的作用是区分「我们的适配层读不到」与
+    // 「整个会话都拿不到选区」。
     let candidates: &[(&str, &[&str])] = if capabilities.session == SessionType::Wayland {
         &[
             ("wl-paste", &["--no-newline"][..]),
@@ -573,16 +616,9 @@ fn clipboard_write_check(capabilities: &Capabilities, allowed: bool) -> CheckRes
     for (program, args) in candidates {
         match run_bounded(program, args, Duration::from_secs(5)) {
             Ok((true, text)) if text.trim() == marker => {
-                return CheckResult {
-                    id: "clipboard.write_text",
-                    title: "真实写入系统剪贴板并回读",
-                    status: Status::MeasuredPass,
-                    detail: format!(
-                        "用 {program} 写入并回读到同一段文本（{} 字节）",
-                        marker.len()
-                    ),
-                    command: command.to_string(),
-                }
+                // 适配层（监听）没读回来，但直接调系统工具读到了：这是适配层的失败，
+                // 必须如实报告，而不是算通过。
+                attempts.push(format!("{program}: 直接调用读回了同一段文本"));
             }
             Ok((true, text)) => attempts.push(format!(
                 "{program}: 回读内容不一致（{} 字节）",
@@ -596,8 +632,68 @@ fn clipboard_write_check(capabilities: &Capabilities, allowed: bool) -> CheckRes
         id: "clipboard.write_text",
         title: "真实写入系统剪贴板并回读",
         status: Status::MeasuredFail,
-        detail: format!("写入成功但回读失败（{}）", attempts.join("；")),
+        detail: format!("写入成功但适配层回读失败（{}）", attempts.join("；")),
         command: command.to_string(),
+    }
+}
+
+/// Linux 剪贴板变化监听（只读）。
+///
+/// 不写入任何内容，因此不需要 `--allow-clipboard-write`：它读当前剪贴板，报告
+/// 监听器能否真的读到文本。自动化会话里拿不到选区是**未覆盖**（不代表真实桌面失败），
+/// 而「读到了内容但返回 `Unchanged`」之类的适配层缺陷是**实测失败**。
+#[cfg(target_os = "linux")]
+fn clipboard_watch_check(capabilities: &Capabilities) -> CheckResult {
+    use flashcast_platform::clipboard::{ClipboardPoll, ClipboardWatcher};
+
+    let command = "cargo run -p flashcast-platform --bin flashcast-platform-check";
+    let watcher = flashcast_platform::linux::LinuxClipboardWatcher::new();
+    let session = capabilities.session;
+    let result = run_bounded_blocking(
+        move || match watcher.poll() {
+            Ok(ClipboardPoll::Changed(capture)) => Ok(capture
+                .text
+                .map(|text| text.trim().to_string())
+                .unwrap_or_default()),
+            Ok(ClipboardPoll::Unchanged) => Ok(String::new()),
+            Err(error) => Err(error.to_string()),
+        },
+        Duration::from_secs(5),
+    );
+    match result {
+        Ok(Ok(text)) if !text.is_empty() => CheckResult {
+            id: "clipboard.watch",
+            title: "剪贴板变化监听（只读）",
+            status: Status::MeasuredPass,
+            detail: format!(
+                "监听读到当前剪贴板文本（{session} 会话，{} 字节）",
+                text.len(),
+                session = session.label_zh()
+            ),
+            command: command.to_string(),
+        },
+        Ok(Ok(_)) => CheckResult {
+            id: "clipboard.watch",
+            title: "剪贴板变化监听（只读）",
+            status: Status::NotCovered,
+            detail: "当前剪贴板里没有可读文本（空剪贴板或只含非文本格式），无法判定监听行为"
+                .to_string(),
+            command: command.to_string(),
+        },
+        Ok(Err(reason)) => CheckResult {
+            id: "clipboard.watch",
+            title: "剪贴板变化监听（只读）",
+            status: Status::NotCovered,
+            detail: format!("读取没有完成：{reason}；这不代表真实桌面上的复制无法被捕获"),
+            command: command.to_string(),
+        },
+        Err(reason) => CheckResult {
+            id: "clipboard.watch",
+            title: "剪贴板变化监听（只读）",
+            status: Status::NotCovered,
+            detail: format!("{reason}；自动化会话缺少可用的选区持有者时会这样"),
+            command: command.to_string(),
+        },
     }
 }
 
@@ -1496,6 +1592,11 @@ fn uncovered_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
             "clipboard.text",
             "剪贴板文字读写",
             "该平台的剪贴板读写由后续 ticket 提供",
+        ),
+        unchecked(
+            "clipboard.watch",
+            "剪贴板变化监听（只读）",
+            "该平台的剪贴板变化监听由后续 ticket 提供",
         ),
         unchecked(
             "paste.auto",

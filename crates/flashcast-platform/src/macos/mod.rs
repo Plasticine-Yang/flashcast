@@ -28,7 +28,7 @@ pub use cap::MacosCapabilityProbe;
 pub use catalog::MacosAppCatalog;
 #[cfg(target_os = "macos")]
 pub use chrome::MacosChromeProvider;
-pub use clipboard::MacosClipboard;
+pub use clipboard::{MacosClipboard, MacosClipboardWatcher};
 #[cfg(target_os = "macos")]
 pub use focus::{accessibility_granted, MacosFocusTracker};
 #[cfg(target_os = "macos")]

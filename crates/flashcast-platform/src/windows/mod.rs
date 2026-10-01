@@ -46,7 +46,7 @@ pub use catalog::WindowsAppCatalog;
 #[cfg(target_os = "windows")]
 pub use chrome::WindowsChromeProvider;
 #[cfg(target_os = "windows")]
-pub use clipboard::WindowsClipboard;
+pub use clipboard::{WindowsClipboard, WindowsClipboardWatcher};
 #[cfg(target_os = "windows")]
 pub use focus::WindowsFocusTracker;
 #[cfg(target_os = "windows")]

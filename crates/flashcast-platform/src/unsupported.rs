@@ -11,7 +11,7 @@ use crate::catalog::{AppCatalog, AppEntry, CatalogError};
 use crate::chrome::{
     ChromeEnvironment, ChromeError, ChromeLaunch, ChromeLaunchRequest, ChromeProvider,
 };
-use crate::clipboard::{ClipboardAccess, ClipboardError};
+use crate::clipboard::{ClipboardAccess, ClipboardError, ClipboardPoll, ClipboardWatcher};
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
 use crate::launch::{AppLauncher, LaunchError, LaunchReceipt};
@@ -39,6 +39,26 @@ impl ClipboardAccess for UnsupportedClipboard {
             reason: REASON.to_string(),
         })
     }
+
+    fn read_text(&self) -> Result<Option<String>, ClipboardError> {
+        Err(ClipboardError::Unsupported {
+            reason: REASON.to_string(),
+        })
+    }
+}
+
+/// 剪贴板变化监听：如实报告「不支持」，而不是返回「没有变化」——
+/// 后者会让宿主以为监听正常，从而静默地永不捕获（spec 禁止静默失败）。
+pub struct UnsupportedClipboardWatcher;
+
+impl ClipboardWatcher for UnsupportedClipboardWatcher {
+    fn poll(&self) -> Result<ClipboardPoll, ClipboardError> {
+        Err(ClipboardError::Unsupported {
+            reason: REASON.to_string(),
+        })
+    }
+
+    fn note_own_write(&self, _text: &str) {}
 }
 
 pub struct UnsupportedCatalog;

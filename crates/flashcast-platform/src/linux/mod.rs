@@ -16,7 +16,7 @@ pub mod x11;
 pub use cap::LinuxCapabilityProbe;
 pub use catalog::LinuxAppCatalog;
 pub use chrome::LinuxChromeProvider;
-pub use clipboard::LinuxClipboard;
+pub use clipboard::{LinuxClipboard, LinuxClipboardWatcher};
 pub use focus::LinuxFocusTracker;
 pub use hotkeys::LinuxHotkeyManager;
 pub use launcher::LinuxLauncher;

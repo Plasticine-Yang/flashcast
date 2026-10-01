@@ -41,7 +41,10 @@ pub use chrome::{
     ChromeError, ChromeLaunch, ChromeLaunchRequest, ChromeProfile, ChromeProvider,
     PathChromeProvider, UserDataCandidate, UserDataOrigin,
 };
-pub use clipboard::{ClipboardAccess, ClipboardError};
+pub use clipboard::{
+    fingerprint, ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFormatKind,
+    ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
+};
 pub use focus::{same_app, FocusError, FocusTracker, FocusedApp};
 pub use hotkey::{HotkeySpec, HotkeySpecError, Key, Modifier, DEFAULT_HOTKEY};
 pub use launch::{AppLauncher, LaunchError, LaunchReceipt};
@@ -58,6 +61,9 @@ pub struct PlatformAdapters {
     pub hotkeys: Arc<dyn HotkeyManager>,
     pub capabilities: Arc<dyn CapabilityProbe>,
     pub clipboard: Arc<dyn ClipboardAccess>,
+    /// 剪贴板变化监听（ADR §5，ticket 09）。剪贴板历史据此在后台捕获复制事件；
+    /// 停用插件后宿主不再轮询它。
+    pub clipboard_watcher: Arc<dyn ClipboardWatcher>,
     /// Chrome 发现与启动（ADR §5 的 `ChromeProvider`）。
     pub chrome: Arc<dyn ChromeProvider>,
     /// 合成粘贴（ADR §5）。只有宿主在核对过「前台确实是唤起前的应用」之后才调用它。
@@ -78,6 +84,7 @@ pub fn current() -> PlatformAdapters {
             hotkeys: Arc::new(linux::LinuxHotkeyManager::new()),
             capabilities: Arc::new(linux::LinuxCapabilityProbe::new()),
             clipboard: Arc::new(linux::LinuxClipboard::new()),
+            clipboard_watcher: Arc::new(linux::LinuxClipboardWatcher::new()),
             chrome: Arc::new(linux::LinuxChromeProvider::new()),
             paster: Arc::new(linux::LinuxPaster::new()),
         }
@@ -91,6 +98,7 @@ pub fn current() -> PlatformAdapters {
             hotkeys: Arc::new(windows::WindowsHotkeyManager::new()),
             capabilities: Arc::new(windows::WindowsCapabilityProbe::new()),
             clipboard: Arc::new(windows::WindowsClipboard::new()),
+            clipboard_watcher: Arc::new(windows::WindowsClipboardWatcher::new()),
             chrome: Arc::new(windows::WindowsChromeProvider::new()),
             paster: Arc::new(windows::WindowsPaster::new()),
         }
@@ -104,6 +112,7 @@ pub fn current() -> PlatformAdapters {
             hotkeys: Arc::new(macos::MacosHotkeyManager::new()),
             capabilities: Arc::new(macos::MacosCapabilityProbe::new()),
             clipboard: Arc::new(macos::MacosClipboard::new()),
+            clipboard_watcher: Arc::new(macos::MacosClipboardWatcher::new()),
             chrome: Arc::new(macos::MacosChromeProvider::new()),
             paster: Arc::new(macos::MacosPaster::new()),
         }
@@ -117,6 +126,7 @@ pub fn current() -> PlatformAdapters {
             hotkeys: Arc::new(unsupported::UnsupportedHotkeyManager),
             capabilities: Arc::new(unsupported::UnsupportedCapabilityProbe),
             clipboard: Arc::new(unsupported::UnsupportedClipboard),
+            clipboard_watcher: Arc::new(unsupported::UnsupportedClipboardWatcher),
             chrome: Arc::new(unsupported::UnsupportedChrome),
             paster: Arc::new(unsupported::UnsupportedPaster),
         }

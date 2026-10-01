@@ -12,7 +12,10 @@ use crate::chrome::{
     discover_from_paths, BinaryCandidate, ChromeEnvironment, ChromeError, ChromeLaunch,
     ChromeLaunchRequest, ChromeProvider, UserDataCandidate,
 };
-use crate::clipboard::{ClipboardAccess, ClipboardError};
+use crate::clipboard::{
+    ClipboardAccess, ClipboardCapture, ClipboardError, ClipboardFormatKind, ClipboardPoll,
+    ClipboardSourceApp, ClipboardWatcher,
+};
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;
 use crate::launch::{AppLauncher, LaunchError, LaunchReceipt};
@@ -274,11 +277,13 @@ impl Paster for FakePaster {
 /// 记录写入内容的剪贴板替身。
 ///
 /// `failures` 非空时按顺序返回失败（用尽后重复最后一个），用于验证「复制失败必须给出
-/// 准确反馈」；默认总是成功。
+/// 准确反馈」；默认总是成功。`read_text` 返回最后一次写入的内容，因此它同时充当
+/// 「系统剪贴板里现在是什么」的可观察视图（ticket 09）。
 #[derive(Default)]
 pub struct FakeClipboard {
     writes: Mutex<Vec<String>>,
     failures: Mutex<Vec<ClipboardError>>,
+    read_failures: Mutex<Vec<ClipboardError>>,
 }
 
 impl FakeClipboard {
@@ -290,9 +295,22 @@ impl FakeClipboard {
     /// 总是返回同一个失败原因。
     pub fn always_fails(error: ClipboardError) -> Self {
         Self {
-            writes: Mutex::new(Vec::new()),
             failures: Mutex::new(vec![error]),
+            ..Self::default()
         }
+    }
+
+    /// 读取总是返回同一个失败原因（写入仍然可用）。
+    pub fn fails_read(error: ClipboardError) -> Self {
+        Self {
+            read_failures: Mutex::new(vec![error]),
+            ..Self::default()
+        }
+    }
+
+    /// 直接设置当前剪贴板内容，模拟「外部应用写入了剪贴板」。
+    pub fn set_text(&self, text: impl Into<String>) {
+        lock(&self.writes).push(text.into());
     }
 
     /// 已写入的文本，按顺序。
@@ -321,6 +339,155 @@ impl ClipboardAccess for FakeClipboard {
         drop(failures);
         lock(&self.writes).push(text.to_string());
         Ok(())
+    }
+
+    fn read_text(&self) -> Result<Option<String>, ClipboardError> {
+        let failures = lock(&self.read_failures);
+        if !failures.is_empty() {
+            let index = lock(&self.writes).len().min(failures.len() - 1);
+            return Err(failures[index].clone());
+        }
+        drop(failures);
+        Ok(lock(&self.writes).last().cloned())
+    }
+}
+
+/// 可控的剪贴板变化监听替身（ticket 09）。
+///
+/// 语义与真实适配层一致，但完全确定：`set_text` 模拟一次**外部**复制（序号自增，
+/// 下一次 `poll` 报告一次变化，再下一次回到「没有变化」），`note_own_write` 模拟
+/// Flashcast 自己的写入（序号自增，但下一次 `poll` 抑制掉，不报告变化）。
+///
+/// 「同一段文字被复制两次」会报告两次变化——真实适配层用内容指纹判断，做不到这一点，
+/// 因此**去重**这条行为由宿主的 `content_hash` 保证，并用这个替身覆盖。
+pub struct FakeClipboardWatcher {
+    state: Mutex<FakeWatcherState>,
+    polls: AtomicUsize,
+    captures: AtomicUsize,
+    own_writes: AtomicUsize,
+}
+
+struct FakeWatcherState {
+    text: Option<String>,
+    formats: Vec<ClipboardFormatKind>,
+    source: Option<ClipboardSourceApp>,
+    /// 外部写入序号：每次写入（含自身写入）自增。
+    sequence: u64,
+    /// 已经交付或抑制到的序号。
+    delivered: u64,
+    /// 自身写入的内容指纹，`poll` 见到就抑制。
+    own: Vec<u64>,
+    error: Option<ClipboardError>,
+}
+
+impl Default for FakeClipboardWatcher {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(FakeWatcherState {
+                text: None,
+                formats: Vec::new(),
+                source: None,
+                sequence: 0,
+                delivered: 0,
+                own: Vec::new(),
+                error: None,
+            }),
+            polls: AtomicUsize::new(0),
+            captures: AtomicUsize::new(0),
+            own_writes: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl FakeClipboardWatcher {
+    /// 空剪贴板。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 剪贴板初始就有内容（第一次 `poll` 会报告一次变化）。
+    pub fn with_text(text: impl Into<String>) -> Self {
+        let watcher = Self::default();
+        watcher.set_text(text);
+        watcher
+    }
+
+    /// 每次 `poll` 都返回同一个读取失败原因（模拟「拿不到剪贴板选区」）。
+    pub fn failing(error: ClipboardError) -> Self {
+        let watcher = Self::default();
+        lock(&watcher.state).error = Some(error);
+        watcher
+    }
+
+    /// 模拟一次外部复制：序号自增，下一次 `poll` 报告变化。
+    pub fn set_text(&self, text: impl Into<String>) {
+        let mut state = lock(&self.state);
+        state.text = Some(text.into());
+        state.formats = vec![ClipboardFormatKind::Text];
+        state.sequence += 1;
+    }
+
+    /// 模拟「来源应用」信息（平台能提供时）。
+    pub fn set_source(&self, app_id: &str, title: &str) {
+        lock(&self.state).source = Some(ClipboardSourceApp {
+            app_id: app_id.to_string(),
+            title: Some(title.to_string()),
+        });
+    }
+
+    /// 已轮询次数。
+    pub fn poll_count(&self) -> usize {
+        self.polls.load(Ordering::SeqCst)
+    }
+
+    /// 已报告的变化次数（去重与抑制都发生在这之后）。
+    pub fn capture_count(&self) -> usize {
+        self.captures.load(Ordering::SeqCst)
+    }
+
+    /// 已登记的自身写入次数。
+    pub fn own_write_count(&self) -> usize {
+        self.own_writes.load(Ordering::SeqCst)
+    }
+}
+
+impl ClipboardWatcher for FakeClipboardWatcher {
+    fn poll(&self) -> Result<ClipboardPoll, ClipboardError> {
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        let mut state = lock(&self.state);
+        if let Some(error) = state.error.clone() {
+            return Err(error);
+        }
+        if state.sequence == state.delivered {
+            return Ok(ClipboardPoll::Unchanged);
+        }
+        state.delivered = state.sequence;
+        let text = state.text.clone();
+        let Some(text) = text else {
+            return Ok(ClipboardPoll::Unchanged);
+        };
+        let print = crate::clipboard::fingerprint(&text);
+        if let Some(index) = state.own.iter().position(|item| *item == print) {
+            state.own.remove(index);
+            return Ok(ClipboardPoll::Unchanged);
+        }
+        self.captures.fetch_add(1, Ordering::SeqCst);
+        Ok(ClipboardPoll::Changed(ClipboardCapture {
+            formats: state.formats.clone(),
+            text: Some(text),
+            source: state.source.clone(),
+        }))
+    }
+
+    fn note_own_write(&self, text: &str) {
+        self.own_writes.fetch_add(1, Ordering::SeqCst);
+        let mut state = lock(&self.state);
+        if !text.is_empty() {
+            state.own.push(crate::clipboard::fingerprint(text));
+        }
+        // 自身写入同样改变剪贴板（序号自增），只是不会被报告成复制事件。
+        state.text = Some(text.to_string());
+        state.sequence += 1;
     }
 }
 

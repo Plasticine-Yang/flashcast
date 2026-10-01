@@ -30,7 +30,9 @@ impl WindowsFocusTracker {
 
 impl FocusTracker for WindowsFocusTracker {
     fn capture(&self) -> Result<FocusedApp, FocusError> {
-        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId,
+        };
 
         if !super::session::interactive_desktop_available() {
             return Err(FocusError::Unsupported {
@@ -135,11 +137,8 @@ fn force_foreground(target: windows::Win32::Foundation::HWND) -> bool {
         if target_thread == 0 || target_thread == our_thread {
             return GetForegroundWindow() == target;
         }
-        let attached = windows::Win32::System::Threading::AttachThreadInput(
-            our_thread,
-            target_thread,
-            true,
-        );
+        let attached =
+            windows::Win32::System::Threading::AttachThreadInput(our_thread, target_thread, true);
         if !attached.as_bool() {
             return GetForegroundWindow() == target;
         }
@@ -150,11 +149,8 @@ fn force_foreground(target: windows::Win32::Foundation::HWND) -> bool {
         if !previous.is_invalid() {
             let _ = SetActiveWindow(previous);
         }
-        let _ = windows::Win32::System::Threading::AttachThreadInput(
-            our_thread,
-            target_thread,
-            false,
-        );
+        let _ =
+            windows::Win32::System::Threading::AttachThreadInput(our_thread, target_thread, false);
         GetForegroundWindow() == target
     }
 }
@@ -163,7 +159,9 @@ fn force_foreground(target: windows::Win32::Foundation::HWND) -> bool {
 ///
 /// 用 `PROCESS_QUERY_LIMITED_INFORMATION`：它跨完整性级别可用，且不需要
 /// `PROCESS_VM_READ`，因此对提升权限的进程也能读（`GetModuleFileNameExW` 不行）。
-fn process_image_path(pid: u32) -> Option<String> {
+///
+/// `pub(crate)`：剪贴板监听用它从选区持有进程推导「来源应用」（ticket 09）。
+pub(crate) fn process_image_path(pid: u32) -> Option<String> {
     use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
@@ -190,7 +188,9 @@ fn process_image_path(pid: u32) -> Option<String> {
 }
 
 /// 窗口标题；读取失败或为空时返回 `None`。
-fn window_title(window: windows::Win32::Foundation::HWND) -> Option<String> {
+///
+/// `pub(crate)`：剪贴板监听用它记录来源窗口标题（ticket 09）。
+pub(crate) fn window_title(window: windows::Win32::Foundation::HWND) -> Option<String> {
     use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
 
     unsafe {

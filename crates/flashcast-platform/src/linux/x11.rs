@@ -94,6 +94,39 @@ pub fn active_window() -> Option<X11ActiveWindow> {
     })
 }
 
+/// 当前 `CLIPBOARD` 选区的持有者窗口，用于记录「这次复制来自哪个应用」。
+///
+/// 选区持有者通常是发起复制的应用的顶层窗口，因此 `WM_CLASS` / `_NET_WM_PID`
+/// 与前台窗口是同一套读法。拿不到（没有 `DISPLAY`、没有持有者、Wayland 下由合成器
+/// 持有）时返回 `None`：来源应用是**尽力而为**的信息，缺失不影响捕获本身。
+pub fn clipboard_owner() -> Option<X11ActiveWindow> {
+    let (conn, _screen_num) = connect().ok()?;
+    let clipboard = intern(&conn, b"CLIPBOARD").ok()?;
+    let net_wm_pid = intern(&conn, b"_NET_WM_PID").ok()?;
+    let owner = conn
+        .get_selection_owner(clipboard)
+        .ok()?
+        .reply()
+        .ok()?
+        .owner;
+    if owner == 0 {
+        return None;
+    }
+    let (instance, class) = read_wm_class(&conn, owner).unwrap_or((None, None));
+    let title = read_text_property(&conn, owner, b"_NET_WM_NAME")
+        .or_else(|| read_text_property(&conn, owner, b"WM_NAME"));
+    let pid = get_u32_property(&conn, owner, net_wm_pid, AtomEnum::CARDINAL)
+        .and_then(|values| values.first().copied())
+        .filter(|pid| *pid != 0);
+    Some(X11ActiveWindow {
+        window: owner as u64,
+        instance,
+        class,
+        title,
+        pid,
+    })
+}
+
 /// 请窗口管理器把焦点切换给 `window`。
 pub fn activate_window(window: u64) -> Result<(), String> {
     let (conn, screen_num) = connect().map_err(|e| e.to_string())?;
