@@ -7,6 +7,7 @@
 //! 本 crate 不依赖 Tauri，因此可以在没有桌面会话的 CI runner 上完整测试。
 
 pub mod chrome;
+pub mod clipboard;
 pub mod clone;
 pub mod device;
 pub mod git;
@@ -29,6 +30,13 @@ pub use chrome::{
     BookmarkSnapshot, BookmarksFile, BookmarksStatus, ChromeAssociation, ChromeBookmarkError,
     ChromeProfileView, ChromeState, Node as BookmarkNode, Roots as BookmarkRoots,
     BOOKMARK_ITEM_PREFIX, KEY_CHROME_ASSOCIATION, PARSE_RETRY_DELAY,
+};
+pub use clipboard::{
+    content_hash_text, event_from_capture, event_id_from_item_id, new_event_id, now_ms,
+    summary_for_text, AttachmentKind, ClipboardAttachment, ClipboardEvent, ClipboardFormat,
+    ClipboardPayload, ClipboardStats, ClipboardStore, ClipboardStoreError, InsertOutcome,
+    PayloadRole, ReclaimReport, ATTACHMENTS_DIR, CLIPBOARD_DB_FILE, CLIPBOARD_DIR,
+    CLIPBOARD_ITEM_PREFIX, CLIPBOARD_PLUGIN_ID, SCHEMA_VERSION, SUMMARY_MAX_CHARS,
 };
 pub use clone::{
     redact, strip_userinfo, CloneControl, CloneOutcome, ClonePhase, CloneProgress,

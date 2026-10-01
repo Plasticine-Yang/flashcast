@@ -28,6 +28,10 @@ git2 = { version = "0.21.0", default-features = false, features = [
 ] }
 # 工作区文件监听（ADR §8；设计见 notes/research/git-workspace.md §6）。
 notify-debouncer-full = "0.7.0"
+# 本机数据（剪贴板历史与索引、附件）的存储（ADR §8）。必须用 `bundled`：
+# 各平台系统 SQLite 的版本差异会让同一份 schema 在不同机器上行为不同。
+# 关闭默认 feature 后 `bundled` 自己会把 `libsqlite3-sys` 配成随包编译。
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 
 [dev-dependencies]
 # 测试替身由 flashcast-platform 的 `fake` feature 提供（ADR §5）。
