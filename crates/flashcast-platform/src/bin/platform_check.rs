@@ -364,6 +364,9 @@ fn main() {
         // 5c. 富文本格式（ticket 11）：只读探测；加 --allow-clipboard-write 时实测写回
         //     与降级结论（Linux 只能提供纯文本）。
         checks.push(clipboard_rich_check(options.allow_clipboard_write));
+        // 5d. 文件列表（ticket 12）：只读探测；加 --allow-clipboard-write 时实测写入
+        //     一份含空格与非 ASCII 名的列表并读回核对。
+        checks.push(clipboard_files_check(options.allow_clipboard_write));
 
         // 6b. 自动粘贴：能力结论 + 注入前置条件（真实查询 XTEST / 会话类型）。
         checks.push(CheckResult {
@@ -910,6 +913,155 @@ fn clipboard_rich_check(options_allow_write: bool) -> CheckResult {
             command: command.to_string(),
         },
     }
+}
+
+/// Linux 文件列表（`text/uri-list` / GNOME 私有种格式）的真实读写（ticket 12）。
+///
+/// 两种模式，各自只回答它能回答的问题：
+///
+/// - 只读（默认）：读当前选区的文件列表。读到了就是**实测通过**（`read_files` 这条真实
+///   路径可用，路径里的空格与非 ASCII 已按 RFC 2483 百分号解码还原）；剪贴板里没有文件
+///   列表、或拿不到选区，都是**未覆盖**并写明原因——自动化会话没有选区持有者时必然如此，
+///   这不代表真实桌面上的文件复制失败。
+/// - `--allow-clipboard-write`：在临时目录里建两个文件（一个名字带空格、一个非 ASCII 名），
+///   用 `LinuxClipboard::write_files` 写进剪贴板再读回，核对路径与顺序完全一致。
+///   **这一项会把当前剪贴板覆盖成文件列表**，因此必须显式加参数。
+#[cfg(target_os = "linux")]
+fn clipboard_files_check(options_allow_write: bool) -> CheckResult {
+    use flashcast_platform::clipboard::ClipboardAccess;
+
+    let command = "cargo run -p flashcast-platform --bin flashcast-platform-check \
+                   -- --allow-clipboard-write";
+    let title = "文件列表（text/uri-list）的真实读写";
+    let not_covered = |detail: String| CheckResult {
+        id: "clipboard.files",
+        title,
+        status: Status::NotCovered,
+        detail,
+        command: command.to_string(),
+    };
+    if !options_allow_write {
+        let result = run_bounded_blocking(
+            move || {
+                let clipboard = flashcast_platform::linux::LinuxClipboard::new();
+                clipboard.read_files().map_err(|error| error.to_string())
+            },
+            Duration::from_secs(8),
+        );
+        return match result {
+            Ok(Ok(Some(paths))) => CheckResult {
+                id: "clipboard.files",
+                title,
+                status: Status::MeasuredPass,
+                detail: format!(
+                    "当前选区提供了文件列表（{} 个），read_files 可用：{}",
+                    paths.len(),
+                    describe_paths(&paths)
+                ),
+                command: command.to_string(),
+            },
+            Ok(Ok(None)) => not_covered(
+                "当前剪贴板里没有文件列表（此刻没有复制文件；自动化会话里也可能根本没有选区\
+                 持有者）。用 --allow-clipboard-write 可以实测本平台的写入与读回"
+                    .to_string(),
+            ),
+            Ok(Err(reason)) => {
+                not_covered(format!("读取没有完成：{reason}；这不代表真实桌面上的文件复制失败"))
+            }
+            Err(reason) => not_covered(format!("{reason}；自动化会话缺少可用的选区持有者时会这样")),
+        };
+    }
+
+    // 写 + 读回：两个真实存在的文件，名字分别带空格与非 ASCII。
+    let result = run_bounded_blocking(
+        move || {
+            let clipboard = flashcast_platform::linux::LinuxClipboard::new();
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_millis())
+                .unwrap_or(0);
+            let root = std::env::temp_dir().join(format!("flashcast-check-files-{stamp}"));
+            std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+            let with_space = root.join("flashcast 报告.txt");
+            let non_ascii = root.join("中文 名称.txt");
+            for path in [&with_space, &non_ascii] {
+                std::fs::write(path, b"flashcast").map_err(|error| error.to_string())?;
+            }
+            let written = vec![with_space.clone(), non_ascii.clone()];
+            let write = clipboard
+                .write_files(&written)
+                .map_err(|error| error.to_string());
+            let read_back = clipboard
+                .read_files()
+                .map_err(|error| error.to_string());
+            // 这个检查自己不留下垃圾；清理失败不影响结论。
+            let _ = std::fs::remove_dir_all(&root);
+            write?;
+            read_back.map(|paths| (written, paths))
+        },
+        Duration::from_secs(10),
+    );
+
+    match result {
+        Ok(Ok((written, Some(read_back)))) => {
+            let same = read_back == written;
+            CheckResult {
+                id: "clipboard.files",
+                title,
+                status: if same {
+                    Status::MeasuredPass
+                } else {
+                    Status::MeasuredFail
+                },
+                detail: format!(
+                    "写入 {} 个文件后读回 {} 个。写={}；读={}{}",
+                    written.len(),
+                    read_back.len(),
+                    describe_paths(&written),
+                    describe_paths(&read_back),
+                    if same {
+                        "（含空格与非 ASCII 名，路径与顺序完全一致）"
+                    } else {
+                        "（读回与写入不一致）"
+                    }
+                ),
+                command: command.to_string(),
+            }
+        }
+        Ok(Ok((_, None))) => not_covered(
+            "写入之后读不回文件列表：当前会话里可能没有选区持有者（自动化会话的常态），\
+             这不代表真实桌面上的文件列表会写入失败"
+                .to_string(),
+        ),
+        Ok(Err(reason)) => CheckResult {
+            id: "clipboard.files",
+            title,
+            // 「工具没有返回」说明这个会话拿不到选区，属于未覆盖；其它错误才是实现失败。
+            status: if selection_unavailable(&reason) {
+                Status::NotCovered
+            } else {
+                Status::MeasuredFail
+            },
+            detail: format!(
+                "写入没有完成：{reason}。当前会话里剪贴板工具（wl-copy / xclip）可能无法取得\
+                 选区；这不代表真实桌面上的写入会失败"
+            ),
+            command: command.to_string(),
+        },
+        Err(reason) => not_covered(format!(
+            "写入没有完成：{reason}。自动化会话缺少可用的选区持有者时就是这样"
+        )),
+    }
+}
+
+/// 把路径列表压成一行可读文本（诊断输出用）。
+#[cfg(target_os = "linux")]
+fn describe_paths(paths: &[std::path::PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("、")
 }
 
 /// Linux 自动粘贴的前置条件：会话类型 + XTEST 扩展是否真的可用。
