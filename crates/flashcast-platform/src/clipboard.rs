@@ -355,31 +355,40 @@ const CF_HTML_START: &str = "StartFragment:";
 /// `HTML Format` 头部里的片段结束键。
 const CF_HTML_END: &str = "EndFragment:";
 
+/// CF_HTML 头部的唯一拼装点。四个偏移都用 `{:010}` 定宽输出，因此格式化后的头部长度与
+/// 偏移值无关——这正是 CF_HTML 偏移可以自洽回填的前提。
+fn cf_html_head(
+    start_html: usize,
+    end_html: usize,
+    start_fragment: usize,
+    end_fragment: usize,
+) -> String {
+    use std::fmt::Write;
+    let mut head = String::new();
+    // `write!` 到 String 不会失败；偏移超过 10 位时长度会变，因此下面用断言兜住。
+    let _ = write!(
+        head,
+        "Version:1.0\r\nStartHTML:{start_html:010}\r\nEndHTML:{end_html:010}\r\nStartFragment:{start_fragment:010}\r\nEndFragment:{end_fragment:010}\r\n"
+    );
+    head
+}
+
 /// 把一段 HTML 片段编码成 Windows `HTML Format`（CF_HTML）载荷。
 ///
 /// CF_HTML 是「头部 + 完整文档」的字节串，头部里的偏移是**从字节串开头算起的字节数**，
-/// 而且是定宽 10 位十进制。这里先生成占位头部以取得固定长度，再回填真实偏移：
-/// 头部长度只取决于模板（每个占位符固定 10 位），因此可以精确算出来。
+/// 而且是定宽 10 位十进制。先用全 0 偏移量一次头部长度（与真实头部等长），再回填真实
+/// 偏移并断言长度未变。
 ///
 /// 这个函数是**纯逻辑**，放在跨平台模块里，好让 Linux 开发机上也能用真实字节验证编码
 /// （Windows 适配层本身只能在 Windows 上编译与运行）。
 pub fn cf_html_bytes(fragment: &str) -> Vec<u8> {
-    // 占位头部：`{n:010}` 各 6 个字符，格式化后是 10 个字符，因此真实头部长度 =
-    // 模板长度 + 4 个偏移各多出的 4 个字符。
-    const TEMPLATE: &str = "Version:1.0\r\nStartHTML:{0:010}\r\nEndHTML:{1:010}\r\nStartFragment:{2:010}\r\nEndFragment:{3:010}\r\n";
-    let head_len = TEMPLATE.len() + 4 * 4;
+    let head_len = cf_html_head(0, 0, 0, 0).len();
     const OPEN: &str = "<html><body><!--StartFragment-->";
     const CLOSE: &str = "<!--EndFragment--></body></html>";
     let start_fragment = head_len + OPEN.len();
     let end_fragment = start_fragment + fragment.len();
     let end_html = end_fragment + CLOSE.len();
-    let head = format!(
-        "Version:1.0\r\nStartHTML:{start_html:010}\r\nEndHTML:{end_html:010}\r\nStartFragment:{start_fragment:010}\r\nEndFragment:{end_fragment:010}\r\n",
-        start_html = head_len,
-        end_html = end_html,
-        start_fragment = start_fragment,
-        end_fragment = end_fragment,
-    );
+    let head = cf_html_head(head_len, end_html, start_fragment, end_fragment);
     debug_assert_eq!(head.len(), head_len, "CF_HTML 头部必须是定宽偏移");
     let mut bytes = head.into_bytes();
     bytes.extend_from_slice(OPEN.as_bytes());
@@ -402,7 +411,8 @@ pub fn cf_html_fragment(payload: &str) -> Option<String> {
     let head = &payload[..head_end];
     let start = cf_html_offset(head, CF_HTML_START)?;
     let end = cf_html_offset(head, CF_HTML_END)?;
-    if start >= end || end > payload.len() {
+    // 偏移颠倒或越界说明头部不可信；相等是合法的（空片段）。
+    if start > end || end > payload.len() {
         return None;
     }
     // 偏移落在字符边界之外时 `get` 返回 `None`，同样视为不可解析。
