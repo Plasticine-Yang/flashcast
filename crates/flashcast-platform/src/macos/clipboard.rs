@@ -131,6 +131,29 @@ impl ClipboardAccess for MacosClipboard {
         }
         Ok(Some(paths))
     }
+
+    /// 恢复剪贴板历史：`pbcopy` 只接收纯文本，因此只提供文本并如实报告。
+    ///
+    /// `pbpaste -Prefer rtf` / `-Prefer ps` 存在，但对**写入**没有对应开关；读取侧也不
+    /// 可靠：`pbpaste` 在没有该风味时会退回它挑得到的内容，无法区分「真的是 RTF」与
+    /// 「拿到的其实是纯文本」。因此 macOS 上不声称保存或恢复了 HTML/RTF。
+    fn write_content(
+        &self,
+        content: &ClipboardContent,
+    ) -> Result<ClipboardWriteReport, ClipboardError> {
+        check_text(&content.text)?;
+        let program = find_program("pbcopy").ok_or_else(|| ClipboardError::ToolMissing {
+            reason: "未找到 /usr/bin/pbcopy".to_string(),
+        })?;
+        write_with_tool(&program, &[], &content.text)?;
+        Ok(ClipboardWriteReport::text_only(
+            "pbcopy 只支持纯文本，富文本格式无法写回系统剪贴板",
+            content
+                .requested_formats()
+                .into_iter()
+                .filter(|kind| *kind != ClipboardFormatKind::Text),
+        ))
+    }
 }
 
 /// 有界运行一个命令，成功时返回标准输出（解码为 UTF-8）。
@@ -226,30 +249,6 @@ fn wait_bounded(
     }
 }
 
-impl ClipboardAccess for MacosClipboard {
-    /// 恢复剪贴板历史：`pbcopy` 只接收纯文本，因此只提供文本并如实报告。
-    ///
-    /// `pbpaste -Prefer rtf` / `-Prefer ps` 存在，但对**写入**没有对应开关；读取侧也不
-    /// 可靠：`pbpaste` 在没有该风味时会退回它挑得到的内容，无法区分「真的是 RTF」与
-    /// 「拿到的其实是纯文本」。因此 macOS 上不声称保存或恢复了 HTML/RTF。
-    fn write_content(
-        &self,
-        content: &ClipboardContent,
-    ) -> Result<ClipboardWriteReport, ClipboardError> {
-        check_text(&content.text)?;
-        let program = find_program("pbcopy").ok_or_else(|| ClipboardError::ToolMissing {
-            reason: "未找到 /usr/bin/pbcopy".to_string(),
-        })?;
-        write_with_tool(&program, &[], &content.text)?;
-        Ok(ClipboardWriteReport::text_only(
-            "pbcopy 只支持纯文本，富文本格式无法写回系统剪贴板",
-            content
-                .requested_formats()
-                .into_iter()
-                .filter(|kind| *kind != ClipboardFormatKind::Text),
-        ))
-    }
-}
 
 /// macOS 的剪贴板变化监听（内容指纹 + 自身写入抑制）。
 pub struct MacosClipboardWatcher {
@@ -301,6 +300,8 @@ impl ClipboardWatcher for MacosClipboardWatcher {
                 formats: vec![ClipboardFormatKind::Files],
                 text: None,
                 files: file_entries(&paths),
+                html: None,
+                rtf: None,
                 source: None,
             }));
         }

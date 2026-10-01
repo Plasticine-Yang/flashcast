@@ -419,6 +419,8 @@ impl ClipboardWatcher for LinuxClipboardWatcher {
                 formats: vec![ClipboardFormatKind::Files],
                 text: None,
                 files: file_entries(&paths),
+                html: None,
+                rtf: None,
                 source: self.source(),
             }));
         }
