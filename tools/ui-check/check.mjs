@@ -415,6 +415,19 @@ async function waitForRowCount(page, expected, timeout = 5000) {
   );
 }
 
+/**
+ * 富文本剪贴板条目在结果列表里的下标（副标题同时标注文字与 HTML）。
+ *
+ * 鼠标点击结果会**执行**条目，因此选中必须用键盘移动，这个下标就是按键次数。
+ */
+async function richClipboardIndex(page) {
+  return page.$$eval(ROW, (nodes) =>
+    nodes.findIndex((node) =>
+      (node.querySelector(".result-subtitle")?.textContent ?? "").includes("HTML"),
+    ),
+  );
+}
+
 async function main() {
   mkdirSync(ARTIFACTS, { recursive: true });
   const url = process.env.FLASHCAST_UI_URL || DEFAULT_URL;
@@ -2639,6 +2652,132 @@ async function main() {
       assert(pausedDisabled, "停用时不得提供暂停入口");
       const file = await shot(page, "70-settings-clipboard-disabled.png");
       return `停用时关键词不返回条目、状态显示未启用，截图 ${file}`;
+    });
+
+    // 75. 富文本剪贴板条目：格式集合可见（同一次复制的文字 + HTML/RTF）。
+    await check("富文本剪贴板条目在结果里显示完整格式集合", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+
+      await page.fill(INPUT, "剪贴板");
+      await page.waitForFunction(
+        (selector) =>
+          [...document.querySelectorAll(selector)].some(
+            (row) => row.dataset.kind === "clipboardEntry",
+          ),
+        ROW,
+      );
+      const subtitles = await page.$$eval(ROW, (nodes) =>
+        nodes.map((node) => node.querySelector(".result-subtitle")?.textContent ?? ""),
+      );
+      const rich = subtitles.find(
+        (subtitle) => subtitle.includes("文字") && subtitle.includes("HTML"),
+      );
+      assert(
+        rich !== undefined,
+        `必须有一条同时标注文字与 HTML 的条目：${subtitles.join(" | ")}`,
+      );
+      assert(rich.includes("RTF"), `同一次复制还要标注 RTF：${rich}`);
+      // 只有一条富文本条目（同一次复制不得拆成多条重复记录）。
+      const richCount = subtitles.filter((subtitle) => subtitle.includes("HTML")).length;
+      assert(richCount === 1, `富文本条目只能有一条，实际 ${richCount} 条`);
+      const file = await shot(page, "75-clipboard-richtext-scope.png");
+      return `富文本条目副标题「${rich}」，同一次复制只有一条，截图 ${file}`;
+    });
+
+    // 76. 富文本预览：只渲染惰性纯文本，剪贴板提供的脚本 / 远端资源不入 DOM。
+    await check("富文本剪贴板预览是惰性文本且不执行剪贴板标记", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() =>
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true),
+      );
+      await page.fill(INPUT, "剪贴板");
+      await waitForRowCount(page, 2);
+
+      // 鼠标点击会**执行**条目，选中必须走键盘（与真实键盘操作一致）。
+      const richIndex = await richClipboardIndex(page);
+      assert(richIndex >= 0, "必须能找到富文本条目");
+      await page.click(INPUT);
+      for (let index = 0; index < richIndex; index += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
+      // 预览元素一开始就存在（默认选中第一条），因此必须等它换成这条历史的正文。
+      await page.waitForFunction(
+        (selector) =>
+          document.querySelector(selector)?.textContent?.includes("确认一下参加人") === true,
+        MEMO_PREVIEW_BODY,
+      );
+
+      const body = await text(MEMO_PREVIEW_BODY);
+      assert(
+        body.includes("确认一下参加人"),
+        `预览必须是这条历史的完整纯文本，实际「${body}」`,
+      );
+
+      // 预览与结果列表的 DOM 都不得含有剪贴板提供的活动内容。
+      // （整页 body 里本来就有 Vite 注入的 `<script type="module">`，因此只查这两处。）
+      const dom = await page.evaluate(() => {
+        const preview = document.querySelector('[data-testid="memo-preview"]')?.outerHTML ?? "";
+        const list = document.querySelector('[data-testid="result-list"]')?.outerHTML ?? "";
+        return preview + list;
+      });
+      for (const needle of ["clipboard-xss", "example.invalid", "onerror", "<script", "<img"]) {
+        assert(!dom.includes(needle), `剪贴板提供的内容「${needle}」不得进入 DOM`);
+      }
+      const wholeBody = await page.evaluate(() => document.body.innerHTML);
+      for (const needle of ["clipboard-xss", "example.invalid", "onerror"]) {
+        assert(!wholeBody.includes(needle), `剪贴板提供的内容「${needle}」不得出现在页面上`);
+      }
+      // 页面上也不得出现由剪贴板内容创建的元素。
+      const injected = await page.evaluate(
+        () =>
+          document.querySelectorAll(
+            '[data-testid="memo-preview-body"] script, [data-testid="memo-preview-body"] img',
+          ).length,
+      );
+      assert(injected === 0, `预览里不得由剪贴板内容创建元素，实际 ${injected} 个`);
+      const file = await shot(page, "76-clipboard-richtext-preview.png");
+      return `预览为惰性纯文本（${body.length} 字），DOM 中没有脚本/远端资源，截图 ${file}`;
+    });
+
+    // 77. 富文本条目粘贴：写进剪贴板的是纯文本（文本目标拿到的仍是纯文本）。
+    await check("富文本剪贴板条目粘贴时提供纯文本", async () => {
+      await page.goto(url, { waitUntil: "load" });
+      await page.waitForSelector(ROW);
+      await page.evaluate(() => {
+        window.__flashcastMock.set_feature_plugin_enabled("clipboard", true);
+        window.__flashcastMock.setAutoPasteSupported(true);
+        window.__flashcastMock.lastCopied = null;
+        window.__flashcastMock.lastPaste = null;
+      });
+      await page.fill(INPUT, "剪贴板");
+      await waitForRowCount(page, 2);
+      const richIndex = await richClipboardIndex(page);
+      assert(richIndex >= 0, "必须能找到富文本条目");
+      await page.click(INPUT);
+      for (let index = 0; index < richIndex; index += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => window.__flashcastMock.lastPaste !== null);
+
+      const pasted = await page.evaluate(() => window.__flashcastMock.lastPaste);
+      assert(
+        pasted.content.includes("确认一下参加人"),
+        `粘贴的必须是纯文本正文，实际「${pasted.content}」`,
+      );
+      for (const needle of ["clipboard-xss", "<p>", "example.invalid"]) {
+        assert(
+          !pasted.content.includes(needle),
+          `写进剪贴板的正文不得含剪贴板标记「${needle}」：${pasted.content}`,
+        );
+      }
+      const file = await shot(page, "77-clipboard-richtext-paste.png");
+      return `富文本条目粘贴纯文本到「${pasted.target}」，截图 ${file}`;
     });
 
     const failed = results.filter((result) => !result.ok).length;
