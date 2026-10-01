@@ -19,9 +19,8 @@ use std::sync::Mutex;
 
 use crate::clipboard::{
     check_files, check_text, file_entries, find_program, fingerprint, fingerprint_files,
-    read_with_tool, write_with_tool, ClipboardAccess, ClipboardCapture,
-    ClipboardContent, ClipboardError, ClipboardFormatKind, ClipboardPoll,
-    ClipboardWatcher, ClipboardWriteReport,
+    read_with_tool, write_with_tool, ClipboardAccess, ClipboardCapture, ClipboardContent,
+    ClipboardError, ClipboardFormatKind, ClipboardPoll, ClipboardWatcher, ClipboardWriteReport,
 };
 
 /// macOS 的文本剪贴板后端。
@@ -248,7 +247,6 @@ fn wait_bounded(
         }
     }
 }
-
 
 /// macOS 的剪贴板变化监听（内容指纹 + 自身写入抑制）。
 pub struct MacosClipboardWatcher {

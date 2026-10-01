@@ -15,8 +15,7 @@ use crate::chrome::{
 };
 use crate::clipboard::{
     ClipboardAccess, ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFileEntry,
-    ClipboardFormatKind, ClipboardPoll, ClipboardSourceApp, ClipboardWatcher,
-    ClipboardWriteReport,
+    ClipboardFormatKind, ClipboardPoll, ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport,
 };
 use crate::focus::{FocusError, FocusTracker, FocusedApp};
 use crate::hotkey::HotkeySpec;

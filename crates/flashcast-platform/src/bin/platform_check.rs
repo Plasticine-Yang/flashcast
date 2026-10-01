@@ -965,9 +965,9 @@ fn clipboard_files_check(options_allow_write: bool) -> CheckResult {
                  持有者）。用 --allow-clipboard-write 可以实测本平台的写入与读回"
                     .to_string(),
             ),
-            Ok(Err(reason)) => {
-                not_covered(format!("读取没有完成：{reason}；这不代表真实桌面上的文件复制失败"))
-            }
+            Ok(Err(reason)) => not_covered(format!(
+                "读取没有完成：{reason}；这不代表真实桌面上的文件复制失败"
+            )),
             Err(reason) => not_covered(format!("{reason}；自动化会话缺少可用的选区持有者时会这样")),
         };
     }
@@ -991,9 +991,7 @@ fn clipboard_files_check(options_allow_write: bool) -> CheckResult {
             let write = clipboard
                 .write_files(&written)
                 .map_err(|error| error.to_string());
-            let read_back = clipboard
-                .read_files()
-                .map_err(|error| error.to_string());
+            let read_back = clipboard.read_files().map_err(|error| error.to_string());
             // 这个检查自己不留下垃圾；清理失败不影响结论。
             let _ = std::fs::remove_dir_all(&root);
             write?;

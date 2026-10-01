@@ -38,10 +38,10 @@ use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT};
 use windows::Win32::UI::Shell::{DragQueryFileW, DROPFILES, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
-    cf_html_bytes, cf_html_fragment, check_files, check_text, file_entries,
-    fingerprint_files, ClipboardAccess, ClipboardCapture, ClipboardContent,
-    ClipboardError, ClipboardFormatKind, ClipboardPoll, ClipboardSkippedFormat,
-    ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport,
+use crate::clipboard::{
+    cf_html_bytes, cf_html_fragment, check_files, check_text, file_entries, ClipboardAccess,
+    ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFormatKind, ClipboardPoll,
+    ClipboardSkippedFormat, ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport,
 };
 
 /// Windows 上 HTML 载荷的剪贴板格式注册名（CF_HTML）。
@@ -364,7 +364,7 @@ unsafe fn read_files_locked() -> Result<Option<Vec<PathBuf>>, ClipboardError> {
         return Ok(None);
     }
     Ok(Some(paths))
-    }
+}
 
 /// 剪贴板已打开：按注册名读取一种私有格式的原始字节。没有该格式时返回 `None`。
 ///

@@ -29,8 +29,8 @@ use crate::capability::SessionType;
 use crate::clipboard::{
     check_files, check_text, file_entries, find_program, fingerprint, fingerprint_files,
     format_uri_list, parse_uri_list, read_with_tool, write_with_tool, ClipboardAccess,
-    ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFormatKind,
-    ClipboardPoll, ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport,
+    ClipboardCapture, ClipboardContent, ClipboardError, ClipboardFormatKind, ClipboardPoll,
+    ClipboardSourceApp, ClipboardWatcher, ClipboardWriteReport,
 };
 
 use super::{force_x11_backend, x11};
