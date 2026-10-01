@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "testDoubles": [],
+  "product": "flashcast",
+  "version": "0.1.0",
+  "environment": {
+    "os": "linux",
+    "osVersion": "Ubuntu 22.04.5 LTS",
+    "arch": "x86_64",
+    "sessionType": "headless",
+    "desktopAvailable": false,
+    "xdgSessionType": null,
+    "xdgCurrentDesktop": null,
+    "source": "flashcast-platform-check"
+  },
+  "capabilities": {
+    "hotkey": "不支持（当前没有桌面会话）",
+    "clipboard": "不支持（未找到 xclip 或 xsel，X11 下无法读写剪贴板）",
+    "autoPaste": "不支持（当前没有桌面会话，无法注入粘贴）"
+  },
+  "checks": [
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "linux x86_64 上编译并运行成功",
+      "command": "cargo build -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话类型判定",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "XDG_SESSION_TYPE=\"<未设置>\"，判定为 无桌面会话；有 DISPLAY=false，WAYLAND_DISPLAY=false",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "freedesktop 软件发现",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "发现 10 个可启动软件，其中 9 个解析到图标文件；扫描 18 个 .desktop 文件，跳过 8 个；应用目录 3 个，图标索引主题 9 个",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "当前没有桌面会话，无法读取焦点窗口",
+      "command": "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "当前没有桌面会话，无法注册全局快捷键",
+      "command": "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "detail": "未找到 xclip 或 xsel，X11 下无法读写剪贴板",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check                       -- --allow-clipboard-write"
+    },
+    {
+      "id": "clipboard.write_text",
+      "title": "真实写入系统剪贴板并回读",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "未执行：该检查会覆盖当前剪贴板内容，需要显式加 --allow-clipboard-write",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write"
+    },
+    {
+      "id": "clipboard.watch",
+      "title": "剪贴板变化监听（只读）",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "读取没有完成：未找到可用的剪贴板工具：无桌面会话 会话需要 wl-copy / wl-paste（Wayland）或 xclip / xsel（X11），当前都没有找到；这不代表真实桌面上的复制无法被捕获",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "读取没有完成：未找到可用的剪贴板工具：无桌面会话 会话需要 wl-copy / wl-paste（Wayland）或 xclip / xsel（X11），当前都没有找到；这不代表真实桌面上的富文本复制失败",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write"
+    },
+    {
+      "id": "clipboard.image",
+      "title": "图片剪贴板读写（PNG）",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "当前剪贴板的选区里没有 PNG 图片（此刻可能没有复制图片；自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的图片写入与读回",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write"
+    },
+    {
+      "id": "clipboard.files",
+      "title": "文件列表（text/uri-list）的真实读写",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "当前剪贴板里没有文件列表（此刻没有复制文件；自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的写入与读回",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "detail": "当前没有桌面会话，无法注入粘贴",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（XTEST / 会话类型）",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "会话=无桌面会话，XTEST=false，注入后端=不可用；未注入真实按键（会打到当前前台窗口）；Wayland 不允许应用在把焦点交给其他应用后注入按键：GNOME 没有可用的公开接口，只有经 XDG RemoteDesktop 门户授权后才能做到，本版本不申请该权限。内容已复制到剪贴板，可手动粘贴。",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "x11.diagnostics",
+      "title": "X11/EWMH 诊断",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "可用性=ConnectFailed(\"$DISPLAY variable not set and no value was provided explicitly\")，窗口管理器=None，_NET_CLIENT_LIST 窗口数=None，前台窗口=None",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    }
+  ],
+  "summary": {
+    "measuredPass": 3,
+    "measuredFail": 2,
+    "notCovered": 9
+  },
+  "notes": [
+    "未检测到 D-Bus 会话总线，托盘与通知可能不可用。"
+  ]
+}

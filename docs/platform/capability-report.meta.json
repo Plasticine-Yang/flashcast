@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "product": "flashcast",
+  "version": "0.1.0",
+  "generatedAt": "2026-10-01T21:05:00Z",
+  "generatedBy": "scripts/ci/capability-report.py",
+  "generatedFrom": "docs/platform/capability-report.meta.json + docs/platform/evidence/*",
+  "statements": [
+    "编译成功**不是**行为证据：`cargo build` / `cargo test` / 交叉 `cargo check` 通过只说明代码能编译，不说明任何桌面行为可用。",
+    "测试替身通过**不**证明平台适配通过：替身检查与真实平台检查在本报告里分开列出，只有「真实平台 / 真实桌面」一栏才算行为证据。",
+    "「未覆盖」不等于「支持」也不等于「不支持」：它表示当前环境无法判定该项；本报告对每一项都写明原因。",
+    "X11（含 XWayland）下的检查结果**不能**推断 Wayland 支持：本机是 Wayland，XWayland 的注册成功只记录为 X11 服务器上的实测通过。",
+    "安装包构建成功单独列示（见 `runner-SHA256SUMS.txt` 与 installer 证据），不与桌面交互结论混在一起。"
+  ],
+  "evidenceCaveats": [
+    "证据采集于提交 `6a2c946` 的 CI 运行；本机证据采集于 ticket 17 工作期间，其中剪贴板相关的本机证据是**修复剪贴板挂起缺陷之后**重新采集的（同一台机器、同一会话）。",
+    "runner 的 Windows / macOS 证据里，`clipboard.text` 的原因文本当时仍写着「文件列表尚未实现」；这是文案错误，已在 ticket 17 更正（提交 `5ef378e`，`windows/cap.rs` / `macos/cap.rs`），实现（CF_HDROP / osascript）本来就在。没有重跑 runner，因此这两个平台文件列表的**真实读写**仍然是未覆盖。",
+    "本机的剪贴板检查会覆盖用户当前剪贴板内容（`--allow-clipboard-write`）；ticket 17 运行时没有能力先备份原内容（当时读取也受同一个缺陷影响）。"
+  ],
+  "ci": {    "repository": "Plasticine-Yang/flashcast",
+    "branch": "feat/flashcast-v0.1.0",
+    "commit": "6a2c9466675a50db71b3a6b6913a6a403f2ad310",
+    "runId": 36861987134,
+    "url": "https://github.com/Plasticine-Yang/flashcast/actions/runs/36861987134",
+    "conclusion": "success",
+    "jobsAllSuccess": true,
+    "jobCount": 11,
+    "evidenceCommands": [
+      "gh run list --branch feat/flashcast-v0.1.0 --limit 12 --json databaseId,headSha,conclusion,createdAt",
+      "gh run view 36861987134 --json headSha,jobs,conclusion,url",
+      "gh run download 36861987134 -n diagnostics-linux-x64 -D /tmp/17-run-artifacts/diagnostics-linux-x64",
+      "gh run download 36861987134 -n diagnostics-windows-x64 -D /tmp/17-run-artifacts/diagnostics-windows-x64",
+      "gh run download 36861987134 -n diagnostics-macos-arm64 -D /tmp/17-run-artifacts/diagnostics-macos-arm64",
+      "gh run download 36861987134 -n diagnostics-macos-x64 -D /tmp/17-run-artifacts/diagnostics-macos-x64",
+      "gh run download 36861987134 -n flashcast-candidate-macos-arm64 -D /tmp/17-run-artifacts/flashcast-candidate-macos-arm64",
+      "gh run download 36861987134 -n flashcast-candidate-windows-x64 -D /tmp/17-run-artifacts/flashcast-candidate-windows-x64",
+      "gh run download 36861987134 -n flashcast-sha256sums -D /tmp/17-run-artifacts/sums"
+    ]
+  },
+  "environments": [
+    {
+      "id": "runner-linux-x64",
+      "label": "GitHub runner Linux x64",
+      "kind": "real-platform-runner",
+      "evidence": "evidence/runner-linux-x64.json",
+      "artifact": "diagnostics-linux-x64 / platform-check-linux-x64.json",
+      "signing": "不适用（该 runner 只做检查，不打包、不签名）",
+      "requiredPermissions": "无（无桌面会话，无剪贴板选区）",
+      "note": "无头 runner：编译与部分真实行为可测，桌面交互一律未覆盖。"
+    },
+    {
+      "id": "runner-windows-x64",
+      "label": "GitHub runner Windows x64",
+      "kind": "real-platform-runner",
+      "evidence": "evidence/runner-windows-x64.json",
+      "artifact": "diagnostics-windows-x64 / platform-check-windows-x64.json",
+      "signing": "安装程序未签名（没有提供代码签名证书）；见 evidence/runner-windows-x64-installer.json",
+      "requiredPermissions": "交互式桌面（runner 有前台窗口与 shell 窗口）；无需提权",
+      "note": "真实 Windows API：软件发现、CreateProcess/ShellExecute、剪贴板打开、焦点读取与恢复、Win32 热键注册都在 runner 上真实执行。"
+    },
+    {
+      "id": "runner-macos-arm64",
+      "label": "GitHub runner macOS arm64（原生）",
+      "kind": "real-platform-runner",
+      "evidence": "evidence/runner-macos-arm64.json",
+      "artifact": "diagnostics-macos-arm64 / platform-check-macos-arm64.json",
+      "signing": "ad-hoc 签名（未公证）；Gatekeeper 拒绝属预期，用户需手动放行。见 evidence/runner-macos-arm64-installer.json",
+      "requiredPermissions": "辅助功能权限：runner 上 AXIsProcessTrusted() = true",
+      "note": "NSWorkspace 前台应用、图标渲染、Carbon 热键注册与 CGEvent 注入前置条件真实执行；不注入真实按键。"
+    },
+    {
+      "id": "runner-macos-x64",
+      "label": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "kind": "real-platform-runner",
+      "evidence": "evidence/runner-macos-x64.json",
+      "artifact": "diagnostics-macos-x64 / platform-check-macos-x64.json",
+      "signing": "ad-hoc 签名（未公证），与 arm64 同一次构建流程",
+      "requiredPermissions": "辅助功能权限：AXIsProcessTrusted() = true",
+      "note": "与 arm64 结果一致；两个架构分别记录，不互相推断。"
+    },
+    {
+      "id": "local-wayland",
+      "label": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "kind": "real-desktop-local",
+      "evidence": "evidence/local-wayland-write.json",
+      "artifact": "artifacts/platform-check/17-local-wayland-{readonly,write}.{json,log}",
+      "signing": "不适用（本机不打包、不签名）",
+      "requiredPermissions": "无（自动化会话没有输入注入/截图能力；剪贴板写入会覆盖当前剪贴板内容）",
+      "note": "自动化 shell 会话：能真正读写 Wayland 剪贴板与文件系统，但没有可注入按键的桌面会话；真实启动/备忘录粘贴由 evidence/local-real-desktop-acceptance.log 记录。"
+    },
+    {
+      "id": "local-xwayland",
+      "label": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "kind": "real-desktop-local",
+      "evidence": "evidence/local-xwayland-forced.json",
+      "artifact": "artifacts/platform-check/17-local-xwayland-forced.{json,log}",
+      "signing": "不适用",
+      "requiredPermissions": "XWayland 的 DISPLAY=:0 可用",
+      "note": "刻意保留的对照：X11 服务器上的成功**不**作为 Wayland 支持的证据。本机没有安装 xclip，X11 剪贴板后端因此不可用。"
+    }
+  ],
+  "testDouble": {
+    "statement": "以下检查全部经过宿主对外的查询 / 命令入口，但平台适配层使用 `flashcast-platform` 的 `fake` 替身（`--features fake`）。它们证明宿主逻辑正确，**不**证明任何真实平台行为。工作区、Git 与文件系统部分是真实的临时目录/真实仓库。",
+    "cargoTest": [
+      { "platform": "linux-x64（runner）", "suites": 28, "passed": 362, "failed": 0, "evidence": "run 36861987134 job Linux x64" },
+      { "platform": "windows-x64（runner）", "suites": 28, "passed": 351, "failed": 0, "evidence": "run 36861987134 job Windows x64" },
+      { "platform": "macos-arm64（runner）", "suites": 28, "passed": 360, "failed": 0, "evidence": "run 36861987134 job macOS arm64 (native)" },
+      { "platform": "macos-x64（runner）", "suites": 28, "passed": 360, "failed": 0, "evidence": "run 36861987134 job macOS x86_64 (cross-compiled)" }
+    ],
+    "uiCheck": {
+      "command": "pnpm ui-check",
+      "passed": 66,
+      "failed": 0,
+      "total": 66,
+      "what": "真实 Chrome 驱动的浏览器 UI + 浏览器模拟宿主；不是 Tauri webview，不代表托盘、全局快捷键、自动粘贴或真实软件启动可用",
+      "screenshots": "artifacts/ui/01-…83-…84-…（编号在 ticket 17 的 Comments 里登记）"
+    },
+    "checks": [
+      { "id": "host.query.scope", "title": "查询范围、插件关键词与标签冲突（替身）", "suite": "tests/host_search.rs, tests/memos.rs", "status": "measured_pass" },
+      { "id": "host.execute.actions", "title": "命令入口：启动、粘贴、书签、备忘录、剪贴板（替身 launcher/paster/chrome/clipboard）", "suite": "tests/host_execute.rs, tests/paste.rs, tests/chrome.rs", "status": "measured_pass" },
+      { "id": "host.selection", "title": "键盘选择、异步过期结果、返回上一查询", "suite": "tests/host_selection.rs", "status": "measured_pass" },
+      { "id": "host.plugin_isolation", "title": "插件停用与失败隔离、超时", "suite": "tests/plugin_isolation.rs", "status": "measured_pass" },
+      { "id": "host.settings", "title": "设置读写与校验失败保留上次可用状态", "suite": "tests/settings.rs", "status": "measured_pass" },
+      { "id": "host.clipboard_text", "title": "剪贴板历史文字：去重、抑制自身写入、暂停、期限与容量（替身剪贴板）", "suite": "tests/clipboard.rs", "status": "measured_pass" },
+      { "id": "host.clipboard_files", "title": "文件引用与已保存副本语义（真实文件系统 + 替身剪贴板）", "suite": "tests/clipboard_files.rs", "status": "measured_pass" },
+      { "id": "host.themes", "title": "主题安装/切换/无效主题保留上次外观（真实文件系统）", "suite": "tests/themes.rs", "status": "measured_pass" },
+      { "id": "host.workspace", "title": "配置工作区选择/初始化/外部重载（真实临时仓库）", "suite": "tests/workspace.rs, tests/workspace_watch.rs", "status": "measured_pass" },
+      { "id": "host.workspace_git", "title": "变更查看、部分提交（真实 Git 仓库）", "suite": "tests/workspace_git.rs", "status": "measured_pass" },
+      { "id": "host.workspace_clone", "title": "克隆（本地 bare 远端；鉴权在外部边界控制）", "suite": "tests/workspace_clone.rs", "status": "measured_pass" },
+      { "id": "host.workspace_sync", "title": "拉取/推送、分叉、脏工作区保护、离线与鉴权失败（本地 bare 远端 + 桩 HTTP）", "suite": "tests/workspace_sync.rs", "status": "measured_pass" },
+      { "id": "platform.freedesktop_fixture", "title": "freedesktop .desktop 解析与字段码展开（真实解析器 + 临时夹具）", "suite": "crates/flashcast-platform/tests/freedesktop_fixture.rs", "status": "measured_pass" },
+      { "id": "platform.chrome_fixture", "title": "Chrome profile 发现与书签解析（临时 profile 夹具）", "suite": "crates/flashcast-platform/tests/chrome_fixture.rs", "status": "measured_pass" },
+      { "id": "ui.browser", "title": "UI 主流程、键盘、中文输入、返回、紧凑/预览、浅深色、缩放、失败反馈（浏览器 + 模拟宿主）", "suite": "tools/ui-check/check.mjs", "status": "measured_pass" }
+    ]
+  },
+  "uncovered": [
+    { "id": "desktop.global_hotkey_summon", "reason": "Wayland 下 global-hotkey 0.8 只有 X11 的 XGrabKey 实现，注册直接判定不可用；本报告不把 XWayland 下「注册成功」当成唤起可用，也没有向真实桌面注入按键来验证唤起。", "evidence": "evidence/local-wayland-write.json 的 hotkey.register=未覆盖；evidence/local-xwayland-forced.json 的 hotkey.register=实测通过（仅 X11 服务器）" },
+    { "id": "desktop.focus_capture", "reason": "Wayland 不向普通应用暴露全局焦点窗口（GNOME 无公开接口）；XWayland 下能读到窗口句柄但拿不到应用身份（id=unknown）。", "evidence": "evidence/local-wayland-write.json 的 focus.capture=未覆盖" },
+    { "id": "desktop.auto_paste_end_to_end", "reason": "Wayland 不允许应用把焦点交给其他应用后注入按键；没有 XDG RemoteDesktop 门户授权，也没有真实目标应用接收粘贴内容。跳过注入真实按键是刻意的（会打到用户当前前台窗口）。", "evidence": "evidence/local-wayland-write.json 的 paste.auto=实测失败、paste.prepare=未覆盖；evidence/local-xwayland-forced.json 的 paste.auto=未覆盖" },
+    { "id": "desktop.memo_paste_into_previous_app", "reason": "真实剪贴板写入与「已复制，请手动粘贴」降级已实测通过，但没有唤起前的目标应用可用于核对「目标应用里真的出现了内容」。", "evidence": "evidence/local-real-desktop-acceptance.log" },
+    { "id": "desktop.clipboard_origin_app", "reason": "X11 下的来源应用推导需要 xclip，本机未安装；Wayland 下没有公开的来源应用接口。", "evidence": "evidence/local-wayland-write.json 的 clipboard.text 说明" },
+    { "id": "desktop.tauri_webview_visual", "reason": "本机没有桌面截图/输入注入工具（grim/import/scrot/xdotool/wtype 均不存在），无法目视核对真实 webview 的缩放、浅深色与渲染；只能记录进程级启动（ticket 04 的安装包检查）。", "evidence": "artifacts/ui/*.png 是浏览器截图，不是 Tauri webview" },
+    { "id": "desktop.tray_menu", "reason": "同上：没有输入注入工具，无法点击托盘菜单；只验证过托盘进程能初始化（ticket 01 的冒烟）。", "evidence": "ticket 01 Comments 的未覆盖项" },
+    { "id": "desktop.chrome_visible_window_open", "reason": "真实 Chrome 的启动与页面加载已由 headless 检查覆盖（一次性的 --user-data-dir，绝不使用用户的真实 profile）；在真实桌面里弹出可见窗口并核对书签页没有做，因为没有可用的窗口观察手段，也不允许触碰用户真实 Chrome profile。", "evidence": "crates/flashcast-platform/tests/chrome_fixture.rs 的 real_chrome_spawn_starts_a_process；artifacts/platform-check/17-real-chrome-spawn.log" },
+    { "id": "runner.macos_windows_clipboard_roundtrip", "reason": "macOS runner 的 pbcopy/pbpaste 只能提供纯文本（HTML/RTF 写入为实测失败，属已记录的降级）；Windows runner 不执行剪贴板写入（可能没有交互剪贴板），真实读写未覆盖。", "evidence": "evidence/runner-macos-arm64.json、evidence/runner-windows-x64.json" },
+    { "id": "runner.windows_cf_hdrop_macos_applescript_files", "reason": "Windows 的 CF_HDROP 与 macOS AppleScript 文件列表的真实读写没有执行过；Linux 上的 text/uri-list 已实测通过。", "evidence": "evidence/runner-windows-x64.json、evidence/runner-macos-arm64.json" },
+    { "id": "runner.signing_with_credentials", "reason": "有证书时的签名分支（Windows 导入 pfx → certificateThumbprint；macOS 正式签名 + 公证）从未执行：没有凭证。当前状态是 macOS ad-hoc（未公证）、Windows 未签名。", "evidence": "evidence/runner-macos-arm64-installer.json、evidence/runner-windows-x64-installer.json" },
+    { "id": "local.linux_x11_clipboard", "reason": "本机是 Wayland 且未安装 xclip/xsel，X11 剪贴板后端不可用；不能用 Wayland 的结果推断 X11 可用。", "evidence": "evidence/local-wayland-write.json 的 clipboard.text=未覆盖（原因写明 wl-copy 可用）" }
+  ],
+  "installerBuild": {
+    "statement": "安装包构建成功单独列示，不构成桌面行为证据。",
+    "evidence": "evidence/runner-SHA256SUMS.txt（5 个包：Linux AppImage/deb、Windows exe、macOS arm64/x64 dmg）",
+    "signing": [
+      { "platform": "macOS arm64 / x64", "status": "ad-hoc 签名（未公证）", "detail": "codesign --verify --deep --strict 通过，签名标识 -；spctl 拒绝，用户需 xattr -dr com.apple.quarantine 或「仍要打开」。" },
+      { "platform": "Windows x64", "status": "未签名", "detail": "没有提供代码签名证书；SmartScreen 提示「更多信息 → 仍要运行」。" },
+      { "platform": "Linux x64", "status": "不签名", "detail": "AppImage 与 deb 不做代码签名；以 SHA256 校验值核对（见 installers 检查的 8 实测通过 / 0 失败 / 0 未覆盖，由 ticket 04 记录）。" }
+    ]
+  },
+  "releaseNotesGuidance": [
+    "不得声称「已在 Windows / macOS 真实桌面完成全流程」：这两个平台只有 runner 上的真实系统接口检查 + 安装包检查，没有人工桌面交互。",
+    "不得声称全局快捷键在 Linux Wayland 下可用：本机为未覆盖 / 不支持，托盘是唯一入口。",
+    "不得声称自动粘贴在 Linux Wayland 下可用：实测失败，行为是「已复制，请手动粘贴」。",
+    "不得声称 macOS / Windows 代码已签名或已公证：macOS 是 ad-hoc（Gatekeeper 会拦），Windows 未签名（SmartScreen 会拦）。",
+    "必须写明 macOS 首次启动需要手动放行、Windows 需要「仍要运行」。",
+    "已经实测通过的项可以写：Linux Wayland 上的文字 / 图片 / 富文本降级 / 文件列表剪贴板读写与监听、真实软件启动（回车）、备忘录标签复制与手动粘贴降级。",
+    "「未覆盖」项必须逐条列出并给出原因，不得因为构建或替身测试全绿就省略。"
+  ]
+}

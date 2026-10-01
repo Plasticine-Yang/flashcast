@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "product": "flashcast",
+  "version": "0.1.0",
+  "environment": {
+    "platform": "windows",
+    "os": "Windows",
+    "osVersion": "3.6.10-710e5275.x86_64",
+    "arch": "x64",
+    "slug": "windows-x64",
+    "commit": "6a2c9466675a50db71b3a6b6913a6a403f2ad310",
+    "source": "scripts/ci/check-installers.sh"
+  },
+  "artifacts": [
+    { "kind": "nsis", "name": "Flashcast_0.1.0_x64-setup.exe", "path": "artifacts/packages/Flashcast_0.1.0_x64-setup.exe", "sizeBytes": 2976915, "sha256": "bf7603e1612a4b99c5a35c13f6beab8cdef902b8b54bb2514d447425660bcb66" }
+  ],
+  "signing": [
+    { "scope": "windows", "status": "未签名", "detail": "没有提供 Windows 代码签名证书，安装程序未签名；Windows SmartScreen 会提示「Windows 已保护你的电脑」，用户需选择「更多信息 → 仍要运行」。" }
+  ],
+  "checks": [
+    {
+      "id": "installer.version_consistent",
+      "title": "版本号一致性",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "tauri.conf.json / Cargo.toml(workspace.package) / package.json 均为 0.1.0",
+      "command": "grep -n 'version' src-tauri/tauri.conf.json Cargo.toml package.json"
+    },
+    {
+      "id": "installer.nsis.present",
+      "title": "NSIS 安装程序",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "nsis/Flashcast_0.1.0_x64-setup.exe，2976915 字节，sha256=bf7603e1612a4b99c5a35c13f6beab8cdef902b8b54bb2514d447425660bcb66",
+      "command": "ls -l /d/a/flashcast/flashcast/target/release/bundle/nsis/Flashcast_0.1.0_x64-setup.exe && sha256sum /d/a/flashcast/flashcast/target/release/bundle/nsis/Flashcast_0.1.0_x64-setup.exe"
+    },
+    {
+      "id": "installer.nsis.install",
+      "title": "NSIS 静默安装",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "currentUser 静默安装成功，主程序位于 /c/Users/runneradmin/AppData/Local/Flashcast/flashcast.exe",
+      "command": "/d/a/flashcast/flashcast/target/release/bundle/nsis/Flashcast_0.1.0_x64-setup.exe //S"
+    },
+    {
+      "id": "installer.app.launch",
+      "title": "Windows 应用启动",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "安装后的 flashcast.exe 启动后仍在运行（10 秒）",
+      "command": "\"/c/Users/runneradmin/AppData/Local/Flashcast/flashcast.exe\""
+    },
+    {
+      "id": "installer.nsis.uninstall",
+      "title": "NSIS 静默卸载",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "uninstall.exe //S 已移除已安装的程序",
+      "command": "\"/c/Users/runneradmin/AppData/Local/Flashcast\\uninstall.exe\" //S"
+    }
+  ],
+  "summary": {
+    "measuredPass": 5,
+    "measuredFail": 0,
+    "notCovered": 0
+  },
+  "notes": [
+    "本报告只覆盖本平台 runner 上真实执行的检查；其他平台由各自的 job 分别产出。"
+  ]
+}

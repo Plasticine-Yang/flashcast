@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "testDoubles": [],
+  "product": "flashcast",
+  "version": "0.1.0",
+  "environment": {
+    "os": "linux",
+    "osVersion": "Ubuntu 26.04.1 LTS",
+    "arch": "x86_64",
+    "sessionType": "wayland",
+    "desktopAvailable": true,
+    "xdgSessionType": "wayland",
+    "xdgCurrentDesktop": "ubuntu:GNOME",
+    "source": "flashcast-platform-check"
+  },
+  "capabilities": {
+    "hotkey": "不支持（Wayland 会话不支持全局快捷键抓取（global-hotkey 仅实现 X11 的 XGrabKey，GNOME 未提供 XDG GlobalShortcuts 门户的一等实现）；请使用托盘入口打开 Flashcast）",
+    "clipboard": "未覆盖（文字、HTML/RTF、图片与文件列表已实现（ticket 09/10/11/12：读按 MIME 类型与 text/uri-list，写纯文本、图片按 image/png、文件列表用 text/uri-list）；环境已具备 wl-copy）",
+    "autoPaste": "不支持（Wayland 不允许应用在把焦点交给其他应用后注入按键：GNOME 没有可用的公开接口，只有经 XDG RemoteDesktop 门户授权后才能做到，本版本不申请该权限。内容已复制到剪贴板，可手动粘贴。）"
+  },
+  "checks": [
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "linux x86_64 上编译并运行成功",
+      "command": "cargo build -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话类型判定",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "XDG_SESSION_TYPE=\"wayland\"，判定为 Wayland；有 DISPLAY=true，WAYLAND_DISPLAY=true",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "freedesktop 软件发现",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "发现 35 个可启动软件，其中 35 个解析到图标文件；扫描 108 个 .desktop 文件，跳过 73 个；应用目录 3 个，图标索引主题 24 个",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "Wayland 会话不向普通应用暴露全局焦点窗口；GNOME 等合成器未提供可用的公开接口。如需记录唤起前应用，请在 X11 会话下运行，或使用后续 ticket 提供的替代方案。",
+      "command": "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "Wayland 会话不支持全局快捷键抓取；请使用托盘入口，或在 X11 会话下运行",
+      "command": "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "文字、HTML/RTF、图片与文件列表已实现（ticket 09/10/11/12：读按 MIME 类型与 text/uri-list，写纯文本、图片按 image/png、文件列表用 text/uri-list）；环境已具备 wl-copy",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check                       -- --allow-clipboard-write"
+    },
+    {
+      "id": "clipboard.write_text",
+      "title": "真实写入系统剪贴板并回读",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "未执行：该检查会覆盖当前剪贴板内容，需要显式加 --allow-clipboard-write",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write"
+    },
+    {
+      "id": "clipboard.watch",
+      "title": "剪贴板变化监听（只读）",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "当前剪贴板里没有可读文本（空剪贴板或只含非文本格式），无法判定监听行为",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "当前剪贴板没有提供 text/html 或 text/rtf（可能此刻没有复制富文本；自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的写回行为与降级结论",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write"
+    },
+    {
+      "id": "clipboard.image",
+      "title": "图片剪贴板读写（PNG）",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "当前剪贴板的选区里没有 PNG 图片（此刻可能没有复制图片；自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的图片写入与读回",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write"
+    },
+    {
+      "id": "clipboard.files",
+      "title": "文件列表（text/uri-list）的真实读写",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "当前选区提供了文件列表（2 个），read_files 可用：/tmp/flashcast-check-files-1790859013060/flashcast 报告.txt、/tmp/flashcast-check-files-1790859013060/中文 名称.txt",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "detail": "Wayland 不允许应用在把焦点交给其他应用后注入按键：GNOME 没有可用的公开接口，只有经 XDG RemoteDesktop 门户授权后才能做到，本版本不申请该权限。内容已复制到剪贴板，可手动粘贴。",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（XTEST / 会话类型）",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "会话=Wayland，XTEST=true，注入后端=不可用；未注入真实按键（会打到当前前台窗口）；Wayland 不允许应用在把焦点交给其他应用后注入按键：GNOME 没有可用的公开接口，只有经 XDG RemoteDesktop 门户授权后才能做到，本版本不申请该权限。内容已复制到剪贴板，可手动粘贴。",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "x11.diagnostics",
+      "title": "X11/EWMH 诊断",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "可用性=Available，窗口管理器=Some(\"GNOME Shell\")，_NET_CLIENT_LIST 窗口数=Some(1)，前台窗口=None",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    }
+  ],
+  "summary": {
+    "measuredPass": 5,
+    "measuredFail": 1,
+    "notCovered": 8
+  },
+  "notes": [
+    "桌面环境：ubuntu:GNOME",
+    "Wayland 会话不向普通应用暴露全局焦点窗口；GNOME 等合成器未提供可用的公开接口。如需记录唤起前应用，请在 X11 会话下运行，或使用后续 ticket 提供的替代方案。",
+    "检测到 XWayland 的 DISPLAY，但 X11 检查结果不能推断 Wayland 下的行为。"
+  ]
+}

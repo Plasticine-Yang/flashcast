@@ -50,6 +50,10 @@ cargo clippy --workspace --all-targets
 - 平台适配层用 `flashcast-platform` 的测试替身；替身通过不证明平台适配通过。
 - UI 不写单元测试，通过浏览器交互或真实桌面手动检查。
 - 真实平台检查在各平台 runner 上运行，输出「通过 / 失败 / 未覆盖」与原因。
+- 候选版本的能力与覆盖情况汇总在 [`docs/platform/capability-report.md`](../platform/capability-report.md)
+  （机器可读版本 `docs/platform/capability-report.json`，由 `scripts/ci/capability-report.py`
+  从 `docs/platform/capability-report.meta.json` 与 `docs/platform/evidence/*` 生成）。
+  替身检查、真实平台检查与未覆盖项分列；编译成功不是行为证据。
 
 ### 在开发机上模拟 CI 环境
 

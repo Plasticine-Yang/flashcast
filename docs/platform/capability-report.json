@@ -1,0 +1,1380 @@
+{
+  "schemaVersion": 1,
+  "product": "flashcast",
+  "version": "0.1.0",
+  "generatedAt": "2026-10-01T21:05:00Z",
+  "generatedBy": "scripts/ci/capability-report.py",
+  "generatedFrom": "docs/platform/capability-report.meta.json + docs/platform/evidence/*",
+  "statements": [
+    "编译成功**不是**行为证据：`cargo build` / `cargo test` / 交叉 `cargo check` 通过只说明代码能编译，不说明任何桌面行为可用。",
+    "测试替身通过**不**证明平台适配通过：替身检查与真实平台检查在本报告里分开列出，只有「真实平台 / 真实桌面」一栏才算行为证据。",
+    "「未覆盖」不等于「支持」也不等于「不支持」：它表示当前环境无法判定该项；本报告对每一项都写明原因。",
+    "X11（含 XWayland）下的检查结果**不能**推断 Wayland 支持：本机是 Wayland，XWayland 的注册成功只记录为 X11 服务器上的实测通过。",
+    "安装包构建成功单独列示（见 `runner-SHA256SUMS.txt` 与 installer 证据），不与桌面交互结论混在一起。"
+  ],
+  "evidenceCaveats": [
+    "证据采集于提交 `6a2c946` 的 CI 运行；本机证据采集于 ticket 17 工作期间，其中剪贴板相关的本机证据是**修复剪贴板挂起缺陷之后**重新采集的（同一台机器、同一会话）。",
+    "runner 的 Windows / macOS 证据里，`clipboard.text` 的原因文本当时仍写着「文件列表尚未实现」；这是文案错误，已在 ticket 17 更正（提交 `5ef378e`，`windows/cap.rs` / `macos/cap.rs`），实现（CF_HDROP / osascript）本来就在。没有重跑 runner，因此这两个平台文件列表的**真实读写**仍然是未覆盖。",
+    "本机的剪贴板检查会覆盖用户当前剪贴板内容（`--allow-clipboard-write`）；ticket 17 运行时没有能力先备份原内容（当时读取也受同一个缺陷影响）。"
+  ],
+  "ci": {
+    "repository": "Plasticine-Yang/flashcast",
+    "branch": "feat/flashcast-v0.1.0",
+    "commit": "6a2c9466675a50db71b3a6b6913a6a403f2ad310",
+    "runId": 36861987134,
+    "url": "https://github.com/Plasticine-Yang/flashcast/actions/runs/36861987134",
+    "conclusion": "success",
+    "jobsAllSuccess": true,
+    "jobCount": 11,
+    "evidenceCommands": [
+      "gh run list --branch feat/flashcast-v0.1.0 --limit 12 --json databaseId,headSha,conclusion,createdAt",
+      "gh run view 36861987134 --json headSha,jobs,conclusion,url",
+      "gh run download 36861987134 -n diagnostics-linux-x64 -D /tmp/17-run-artifacts/diagnostics-linux-x64",
+      "gh run download 36861987134 -n diagnostics-windows-x64 -D /tmp/17-run-artifacts/diagnostics-windows-x64",
+      "gh run download 36861987134 -n diagnostics-macos-arm64 -D /tmp/17-run-artifacts/diagnostics-macos-arm64",
+      "gh run download 36861987134 -n diagnostics-macos-x64 -D /tmp/17-run-artifacts/diagnostics-macos-x64",
+      "gh run download 36861987134 -n flashcast-candidate-macos-arm64 -D /tmp/17-run-artifacts/flashcast-candidate-macos-arm64",
+      "gh run download 36861987134 -n flashcast-candidate-windows-x64 -D /tmp/17-run-artifacts/flashcast-candidate-windows-x64",
+      "gh run download 36861987134 -n flashcast-sha256sums -D /tmp/17-run-artifacts/sums"
+    ]
+  },
+  "categories": {
+    "testDouble": "经宿主入口、但平台适配层使用替身的检查（不证明平台行为）",
+    "realPlatform": "真实平台实现 / 真实桌面上的检查（行为证据）",
+    "uncovered": "当前环境无法判定，逐条写明原因"
+  },
+  "environments": [
+    {
+      "id": "runner-linux-x64",
+      "label": "GitHub runner Linux x64",
+      "kind": "real-platform-runner",
+      "os": "linux",
+      "osVersion": "Ubuntu 22.04.5 LTS",
+      "arch": "x86_64",
+      "sessionType": "headless",
+      "desktopAvailable": false,
+      "capabilities": {
+        "hotkey": "不支持（当前没有桌面会话）",
+        "clipboard": "不支持（未找到 xclip 或 xsel，X11 下无法读写剪贴板）",
+        "autoPaste": "不支持（当前没有桌面会话，无法注入粘贴）"
+      },
+      "summary": {
+        "measuredPass": 3,
+        "measuredFail": 2,
+        "notCovered": 9
+      },
+      "signing": "不适用（该 runner 只做检查，不打包、不签名）",
+      "requiredPermissions": "无（无桌面会话，无剪贴板选区）",
+      "note": "无头 runner：编译与部分真实行为可测，桌面交互一律未覆盖。",
+      "evidence": "evidence/runner-linux-x64.json",
+      "artifact": "diagnostics-linux-x64 / platform-check-linux-x64.json"
+    },
+    {
+      "id": "runner-windows-x64",
+      "label": "GitHub runner Windows x64",
+      "kind": "real-platform-runner",
+      "os": "windows",
+      "osVersion": "Windows Server 2025 Datacenter 24H2（build 26100.33438）",
+      "arch": "x86_64",
+      "sessionType": "not-applicable",
+      "desktopAvailable": true,
+      "capabilities": {
+        "hotkey": "支持",
+        "clipboard": "未覆盖（文字、HTML/RTF 与图片已实现（ticket 09/10/11：一次剪贴板打开里读全部格式，图片同时提供 CF_DIB 与注册格式 PNG）；文件列表尚未实现（ticket 12 覆盖）；Windows 提供 OpenClipboard 与 WinRT Clipboard API，环境本身具备条件）",
+        "autoPaste": "支持"
+      },
+      "summary": {
+        "measuredPass": 9,
+        "measuredFail": 0,
+        "notCovered": 4
+      },
+      "signing": "安装程序未签名（没有提供代码签名证书）；见 evidence/runner-windows-x64-installer.json",
+      "requiredPermissions": "交互式桌面（runner 有前台窗口与 shell 窗口）；无需提权",
+      "note": "真实 Windows API：软件发现、CreateProcess/ShellExecute、剪贴板打开、焦点读取与恢复、Win32 热键注册都在 runner 上真实执行。",
+      "evidence": "evidence/runner-windows-x64.json",
+      "artifact": "diagnostics-windows-x64 / platform-check-windows-x64.json"
+    },
+    {
+      "id": "runner-macos-arm64",
+      "label": "GitHub runner macOS arm64（原生）",
+      "kind": "real-platform-runner",
+      "os": "macos",
+      "osVersion": "Version 26.6.2 (Build 25G83)",
+      "arch": "aarch64",
+      "sessionType": "not-applicable",
+      "desktopAvailable": true,
+      "capabilities": {
+        "hotkey": "支持",
+        "clipboard": "未覆盖（文字与图片已实现（ticket 09/10：pbpaste 读文本、图片经 osascript 读写）；HTML/RTF 不声称支持（ticket 11）；文件列表尚未实现（ticket 12 覆盖）；macOS 由 NSPasteboard 提供，无需外部工具）",
+        "autoPaste": "支持"
+      },
+      "summary": {
+        "measuredPass": 10,
+        "measuredFail": 1,
+        "notCovered": 1
+      },
+      "signing": "ad-hoc 签名（未公证）；Gatekeeper 拒绝属预期，用户需手动放行。见 evidence/runner-macos-arm64-installer.json",
+      "requiredPermissions": "辅助功能权限：runner 上 AXIsProcessTrusted() = true",
+      "note": "NSWorkspace 前台应用、图标渲染、Carbon 热键注册与 CGEvent 注入前置条件真实执行；不注入真实按键。",
+      "evidence": "evidence/runner-macos-arm64.json",
+      "artifact": "diagnostics-macos-arm64 / platform-check-macos-arm64.json"
+    },
+    {
+      "id": "runner-macos-x64",
+      "label": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "kind": "real-platform-runner",
+      "os": "macos",
+      "osVersion": "Version 26.6.2 (Build 25G83)",
+      "arch": "x86_64",
+      "sessionType": "not-applicable",
+      "desktopAvailable": true,
+      "capabilities": {
+        "hotkey": "支持",
+        "clipboard": "未覆盖（文字与图片已实现（ticket 09/10：pbpaste 读文本、图片经 osascript 读写）；HTML/RTF 不声称支持（ticket 11）；文件列表尚未实现（ticket 12 覆盖）；macOS 由 NSPasteboard 提供，无需外部工具）",
+        "autoPaste": "支持"
+      },
+      "summary": {
+        "measuredPass": 10,
+        "measuredFail": 1,
+        "notCovered": 1
+      },
+      "signing": "ad-hoc 签名（未公证），与 arm64 同一次构建流程",
+      "requiredPermissions": "辅助功能权限：AXIsProcessTrusted() = true",
+      "note": "与 arm64 结果一致；两个架构分别记录，不互相推断。",
+      "evidence": "evidence/runner-macos-x64.json",
+      "artifact": "diagnostics-macos-x64 / platform-check-macos-x64.json"
+    },
+    {
+      "id": "local-wayland",
+      "label": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "kind": "real-desktop-local",
+      "os": "linux",
+      "osVersion": "Ubuntu 26.04.1 LTS",
+      "arch": "x86_64",
+      "sessionType": "wayland",
+      "desktopAvailable": true,
+      "capabilities": {
+        "hotkey": "不支持（Wayland 会话不支持全局快捷键抓取（global-hotkey 仅实现 X11 的 XGrabKey，GNOME 未提供 XDG GlobalShortcuts 门户的一等实现）；请使用托盘入口打开 Flashcast）",
+        "clipboard": "未覆盖（文字、HTML/RTF、图片与文件列表已实现（ticket 09/10/11/12：读按 MIME 类型与 text/uri-list，写纯文本、图片按 image/png、文件列表用 text/uri-list）；环境已具备 wl-copy）",
+        "autoPaste": "不支持（Wayland 不允许应用在把焦点交给其他应用后注入按键：GNOME 没有可用的公开接口，只有经 XDG RemoteDesktop 门户授权后才能做到，本版本不申请该权限。内容已复制到剪贴板，可手动粘贴。）"
+      },
+      "summary": {
+        "measuredPass": 9,
+        "measuredFail": 1,
+        "notCovered": 4
+      },
+      "signing": "不适用（本机不打包、不签名）",
+      "requiredPermissions": "无（自动化会话没有输入注入/截图能力；剪贴板写入会覆盖当前剪贴板内容）",
+      "note": "自动化 shell 会话：能真正读写 Wayland 剪贴板与文件系统，但没有可注入按键的桌面会话；真实启动/备忘录粘贴由 evidence/local-real-desktop-acceptance.log 记录。",
+      "evidence": "evidence/local-wayland-write.json",
+      "artifact": "artifacts/platform-check/17-local-wayland-{readonly,write}.{json,log}"
+    },
+    {
+      "id": "local-xwayland",
+      "label": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "kind": "real-desktop-local",
+      "os": "linux",
+      "osVersion": "Ubuntu 26.04.1 LTS",
+      "arch": "x86_64",
+      "sessionType": "wayland",
+      "desktopAvailable": true,
+      "capabilities": {
+        "hotkey": "未覆盖（已通过 FLASHCAST_FORCE_X11_BACKEND 强制使用 X11 后端；XWayland 下抓取通常无法收到按键，结果不可靠）",
+        "clipboard": "未覆盖（文字、HTML/RTF、图片与文件列表已实现（ticket 09/10/11/12：读按 MIME 类型与 text/uri-list，写纯文本、图片按 image/png、文件列表用 text/uri-list）；环境已具备 wl-copy）",
+        "autoPaste": "未覆盖（已通过 FLASHCAST_FORCE_X11_BACKEND 强制使用 X11 后端：只有 XWayland 里的 X11 客户端能收到合成按键，原生 Wayland 客户端收不到，因此不能算作 Wayland 支持）"
+      },
+      "summary": {
+        "measuredPass": 8,
+        "measuredFail": 0,
+        "notCovered": 6
+      },
+      "signing": "不适用",
+      "requiredPermissions": "XWayland 的 DISPLAY=:0 可用",
+      "note": "刻意保留的对照：X11 服务器上的成功**不**作为 Wayland 支持的证据。本机没有安装 xclip，X11 剪贴板后端因此不可用。",
+      "evidence": "evidence/local-xwayland-forced.json",
+      "artifact": "artifacts/platform-check/17-local-xwayland-forced.{json,log}"
+    }
+  ],
+  "checks": [
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "linux x86_64 上编译并运行成功",
+      "command": "cargo build -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话类型判定",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "XDG_SESSION_TYPE=\"<未设置>\"，判定为 无桌面会话；有 DISPLAY=false，WAYLAND_DISPLAY=false",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "freedesktop 软件发现",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "发现 10 个可启动软件，其中 9 个解析到图标文件；扫描 18 个 .desktop 文件，跳过 8 个；应用目录 3 个，图标索引主题 9 个",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "当前没有桌面会话，无法读取焦点窗口",
+      "command": "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "当前没有桌面会话，无法注册全局快捷键",
+      "command": "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "category": "real-platform",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "未找到 xclip 或 xsel，X11 下无法读写剪贴板",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check                       -- --allow-clipboard-write",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "clipboard.write_text",
+      "title": "真实写入系统剪贴板并回读",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "未执行：该检查会覆盖当前剪贴板内容，需要显式加 --allow-clipboard-write",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "clipboard.watch",
+      "title": "剪贴板变化监听（只读）",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "读取没有完成：未找到可用的剪贴板工具：无桌面会话 会话需要 wl-copy / wl-paste（Wayland）或 xclip / xsel（X11），当前都没有找到；这不代表真实桌面上的复制无法被捕获",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "读取没有完成：未找到可用的剪贴板工具：无桌面会话 会话需要 wl-copy / wl-paste（Wayland）或 xclip / xsel（X11），当前都没有找到；这不代表真实桌面上的富文本复制失败",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "clipboard.image",
+      "title": "图片剪贴板读写（PNG）",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "当前剪贴板的选区里没有 PNG 图片（此刻可能没有复制图片；自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的图片写入与读回",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "clipboard.files",
+      "title": "文件列表（text/uri-list）的真实读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "当前剪贴板里没有文件列表（此刻没有复制文件；自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的写入与读回",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "category": "real-platform",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "当前没有桌面会话，无法注入粘贴",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（XTEST / 会话类型）",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "会话=无桌面会话，XTEST=false，注入后端=不可用；未注入真实按键（会打到当前前台窗口）；Wayland 不允许应用在把焦点交给其他应用后注入按键：GNOME 没有可用的公开接口，只有经 XDG RemoteDesktop 门户授权后才能做到，本版本不申请该权限。内容已复制到剪贴板，可手动粘贴。",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "x11.diagnostics",
+      "title": "X11/EWMH 诊断",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-linux-x64",
+      "environmentLabel": "GitHub runner Linux x64",
+      "detail": "可用性=ConnectFailed(\"$DISPLAY variable not set and no value was provided explicitly\")，窗口管理器=None，_NET_CLIENT_LIST 窗口数=None，前台窗口=None",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-linux-x64.json"
+    },
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "windows x86_64 上编译并运行成功",
+      "command": "cargo build -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（SendInput）",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "注入后端=SendInput（Ctrl+V，带 dwExtraInfo 标记），能力=支持；             本检查不注入真实按键，端到端粘贴未覆盖（受 UIPI 限制，管理员窗口收不到）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话判定",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "Windows 会话（不适用 X11/Wayland 分类）：交互式桌面（有前台窗口与 shell 窗口）；GetForegroundWindow=true，GetShellWindow=true",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "Windows 软件发现（开始菜单 / 注册表 / 打包应用）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "发现 346 个可启动条目：开始菜单快捷方式 161 个（54 次走 IShellLinkW 纠正），注册表子键 456 个，打包应用 175 个；其中 346 个解析到图标文件、抽取失败 0 次；跳过 444 条",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "apps.launch",
+      "title": "启动真实目标与失效条目报错",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "用 C:\\Windows\\system32\\cmd.exe /c exit 启动成功（pid=Some(8168)）；失效路径按预期报错：找不到可执行文件 C:\\Flashcast\\definitely-missing\\nope.exe",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "读取到 id=c:\\program files\\windowsapps\\microsoft.windowsterminal_1.23.20211.0_x64__8wekyb3d8bbwe\\windowsterminal.exe name=C:\\ProgramData\\GitHub\\HostedComputeAgent\\hosted-compute-agent pid=Some(8888) window=Some(131542)",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "focus.restore",
+      "title": "把焦点还给唤起前应用",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "ShowWindow(SW_RESTORE)+SetForegroundWindow 把焦点还给 C:\\ProgramData\\GitHub\\HostedComputeAgent\\hosted-compute-agent 并在回读校验中一致",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "注册并注销 Ctrl+Alt+F12 成功",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "文字、HTML/RTF 与图片已实现（ticket 09/10/11：一次剪贴板打开里读全部格式，图片同时提供 CF_DIB 与注册格式 PNG）；文件列表尚未实现（ticket 12 覆盖）；Windows 提供 OpenClipboard 与 WinRT Clipboard API，环境本身具备条件",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "支持",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "实现：一次剪贴板打开里写 CF_UNICODETEXT + HTML Format + Rich Text Format，读取时同样一次读出三种格式（HF-11）。本 runner 不执行写入（可能没有交互剪贴板），真机复核见 ticket 17",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "win.shell",
+      "title": "Windows shell 环境（explorer / PowerShell）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "WINDIR=Some(\"C:\\\\Windows\")，ComSpec=Some(\"C:\\\\Windows\\\\system32\\\\cmd.exe\")，C:\\Windows\\explorer.exe 存在=true，PowerShell=5.1.26100.33438（实测通过）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "x11.diagnostics",
+      "title": "X11/EWMH 诊断",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-windows-x64",
+      "environmentLabel": "GitHub runner Windows x64",
+      "detail": "X11 / EWMH 只存在于 Linux 会话，Windows 上不适用",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "macos aarch64 上编译并运行成功",
+      "command": "cargo check -p flashcast-platform --target x86_64-apple-darwin",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话可用性",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "macOS 没有 X11/Wayland 会话类型；NSWorkspace 能报出前台应用，桌面会话可用",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "macOS 应用发现",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "发现 86 个 .app 包，其中 85 个可启动；跳过 1 个；应用目录存在 4 个、缺失 1 个（[\"/Users/runner/Applications\"]）；图标渲染成功 85 个、失败 0 个",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "apps.discovery.skipped",
+      "title": "被跳过的 .app 包明细",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "/System/Applications/Passwords.app（不是应用包（CFBundlePackageType 不是 APPL））",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "apps.icon_render",
+      "title": "应用图标渲染（NSWorkspace → PNG）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "NSWorkspace 渲染 /System/Applications/Utilities/Activity Monitor.app 得到 1814217 字节 PNG（宽度 128 点）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "读取到 id=com.apple.finder name=Finder bundle=Some(\"com.apple.finder\") pid=Some(357)",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "accessibility.permission",
+      "title": "辅助功能（Accessibility）权限",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "AXIsProcessTrusted() = true；系统设置 → 隐私与安全性 → 辅助功能",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（辅助功能权限 / CGEvent）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "注入后端=CGEvent（Cmd+V），权限=已授权；未注入真实按键，端到端粘贴需要对准目标应用手动验证",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "注册并注销 Ctrl+Alt+F12 成功",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "文字与图片已实现（ticket 09/10：pbpaste 读文本、图片经 osascript 读写）；HTML/RTF 不声称支持（ticket 11）；文件列表尚未实现（ticket 12 覆盖）；macOS 由 NSPasteboard 提供，无需外部工具",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "支持",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "category": "real-platform",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "environment": "runner-macos-arm64",
+      "environmentLabel": "GitHub runner macOS arm64（原生）",
+      "detail": "macOS 的 pbcopy / pbpaste 只支持纯文本：HTML/RTF 既不被保存也不被恢复，恢复时只提供文本（历史里的富文本载荷若来自其它平台仍原样保存在本机）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "macos x86_64 上编译并运行成功",
+      "command": "cargo check -p flashcast-platform --target x86_64-apple-darwin",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话可用性",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "macOS 没有 X11/Wayland 会话类型；NSWorkspace 能报出前台应用，桌面会话可用",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "macOS 应用发现",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "发现 86 个 .app 包，其中 85 个可启动；跳过 1 个；应用目录存在 4 个、缺失 1 个（[\"/Users/runner/Applications\"]）；图标渲染成功 85 个、失败 0 个",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "apps.discovery.skipped",
+      "title": "被跳过的 .app 包明细",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "/System/Applications/Passwords.app（不是应用包（CFBundlePackageType 不是 APPL））",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "apps.icon_render",
+      "title": "应用图标渲染（NSWorkspace → PNG）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "NSWorkspace 渲染 /System/Applications/Utilities/Activity Monitor.app 得到 1814185 字节 PNG（宽度 128 点）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "读取到 id=com.apple.finder name=Finder bundle=Some(\"com.apple.finder\") pid=Some(361)",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "accessibility.permission",
+      "title": "辅助功能（Accessibility）权限",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "AXIsProcessTrusted() = true；系统设置 → 隐私与安全性 → 辅助功能",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（辅助功能权限 / CGEvent）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "注入后端=CGEvent（Cmd+V），权限=已授权；未注入真实按键，端到端粘贴需要对准目标应用手动验证",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "注册并注销 Ctrl+Alt+F12 成功",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "文字与图片已实现（ticket 09/10：pbpaste 读文本、图片经 osascript 读写）；HTML/RTF 不声称支持（ticket 11）；文件列表尚未实现（ticket 12 覆盖）；macOS 由 NSPasteboard 提供，无需外部工具",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "支持",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "category": "real-platform",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "environment": "runner-macos-x64",
+      "environmentLabel": "GitHub runner macOS x86_64（在 arm64 runner 上交叉编译）",
+      "detail": "macOS 的 pbcopy / pbpaste 只支持纯文本：HTML/RTF 既不被保存也不被恢复，恢复时只提供文本（历史里的富文本载荷若来自其它平台仍原样保存在本机）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/runner-macos-x64.json"
+    },
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "linux x86_64 上编译并运行成功",
+      "command": "cargo build -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话类型判定",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "XDG_SESSION_TYPE=\"wayland\"，判定为 Wayland；有 DISPLAY=true，WAYLAND_DISPLAY=true",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "freedesktop 软件发现",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "发现 35 个可启动软件，其中 35 个解析到图标文件；扫描 108 个 .desktop 文件，跳过 73 个；应用目录 3 个，图标索引主题 24 个",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "Wayland 会话不向普通应用暴露全局焦点窗口；GNOME 等合成器未提供可用的公开接口。如需记录唤起前应用，请在 X11 会话下运行，或使用后续 ticket 提供的替代方案。",
+      "command": "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "Wayland 会话不支持全局快捷键抓取；请使用托盘入口，或在 X11 会话下运行",
+      "command": "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "文字、HTML/RTF、图片与文件列表已实现（ticket 09/10/11/12：读按 MIME 类型与 text/uri-list，写纯文本、图片按 image/png、文件列表用 text/uri-list）；环境已具备 wl-copy",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check                       -- --allow-clipboard-write",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "clipboard.write_text",
+      "title": "真实写入系统剪贴板并回读",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "用 LinuxClipboard 写入并由 LinuxClipboardWatcher 读回同一段文本（38 字节）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "clipboard.watch",
+      "title": "剪贴板变化监听（只读）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "监听读到当前剪贴板文本（Wayland 会话，38 字节）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "写入成功。实际提供：文字；未提供：HTML（wl-copy 一次只能提供一种 MIME 类型，同时提供会让纯文本目标拿不到内容；富文本载荷仍保存在本机历史里）、RTF（wl-copy 一次只能提供一种 MIME 类型，同时提供会让纯文本目标拿不到内容；富文本载荷仍保存在本机历史里）。Linux 上 wl-copy 一次只能提供一种 MIME 类型，因此恢复时只提供纯文本是**已知降级**：富文本载荷仍完整保存在 本机历史（clipboard_payloads）里；读回：HTML=不可读，RTF=不可读",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "clipboard.image",
+      "title": "图片剪贴板读写（PNG）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "写入 3×2 PNG（94 字节）并读回 image/png 3×2（94 字节）：像素逐点一致",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "clipboard.files",
+      "title": "文件列表（text/uri-list）的真实读写",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "写入 2 个文件后读回 2 个。写=/tmp/flashcast-check-files-1790859013060/flashcast 报告.txt、/tmp/flashcast-check-files-1790859013060/中文 名称.txt；读=/tmp/flashcast-check-files-1790859013060/flashcast 报告.txt、/tmp/flashcast-check-files-1790859013060/中文 名称.txt（含空格与非 ASCII 名，路径与顺序完全一致）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "category": "real-platform",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "Wayland 不允许应用在把焦点交给其他应用后注入按键：GNOME 没有可用的公开接口，只有经 XDG RemoteDesktop 门户授权后才能做到，本版本不申请该权限。内容已复制到剪贴板，可手动粘贴。",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（XTEST / 会话类型）",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "会话=Wayland，XTEST=true，注入后端=不可用；未注入真实按键（会打到当前前台窗口）；Wayland 不允许应用在把焦点交给其他应用后注入按键：GNOME 没有可用的公开接口，只有经 XDG RemoteDesktop 门户授权后才能做到，本版本不申请该权限。内容已复制到剪贴板，可手动粘贴。",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "x11.diagnostics",
+      "title": "X11/EWMH 诊断",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-wayland",
+      "environmentLabel": "本机 Ubuntu 26.04 x86_64 / GNOME / Wayland（真实桌面）",
+      "detail": "可用性=Available，窗口管理器=Some(\"GNOME Shell\")，_NET_CLIENT_LIST 窗口数=Some(1)，前台窗口=None",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-wayland-write.json"
+    },
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "linux x86_64 上编译并运行成功",
+      "command": "cargo build -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话类型判定",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "XDG_SESSION_TYPE=\"wayland\"，判定为 Wayland；有 DISPLAY=true，WAYLAND_DISPLAY=true",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "freedesktop 软件发现",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "发现 35 个可启动软件，其中 35 个解析到图标文件；扫描 108 个 .desktop 文件，跳过 73 个；应用目录 3 个，图标索引主题 24 个",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "读取到 id=unknown name=unknown wm_class=None pid=None window=Some(2097155)",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "注册并注销 Ctrl+Alt+F12 成功",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "文字、HTML/RTF、图片与文件列表已实现（ticket 09/10/11/12：读按 MIME 类型与 text/uri-list，写纯文本、图片按 image/png、文件列表用 text/uri-list）；环境已具备 wl-copy",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check                       -- --allow-clipboard-write",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "clipboard.write_text",
+      "title": "真实写入系统剪贴板并回读",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "未执行：该检查会覆盖当前剪贴板内容，需要显式加 --allow-clipboard-write",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "clipboard.watch",
+      "title": "剪贴板变化监听（只读）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "监听读到当前剪贴板文本（Wayland 会话，49 字节）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "当前剪贴板没有提供 text/html 或 text/rtf（可能此刻没有复制富文本；自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的写回行为与降级结论",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "clipboard.image",
+      "title": "图片剪贴板读写（PNG）",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "当前剪贴板的选区里没有 PNG 图片（此刻可能没有复制图片；自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的图片写入与读回",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "clipboard.files",
+      "title": "文件列表（text/uri-list）的真实读写",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "当前剪贴板里没有文件列表（此刻没有复制文件；自动化会话里也可能根本没有选区持有者）。用 --allow-clipboard-write 可以实测本平台的写入与读回",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-clipboard-write",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "category": "real-platform",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "已通过 FLASHCAST_FORCE_X11_BACKEND 强制使用 X11 后端：只有 XWayland 里的 X11 客户端能收到合成按键，原生 Wayland 客户端收不到，因此不能算作 Wayland 支持",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（XTEST / 会话类型）",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "会话=Wayland，XTEST=true，注入后端=X11/XTEST；未注入真实按键（会打到当前前台窗口）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-xwayland-forced.json"
+    },
+    {
+      "id": "x11.diagnostics",
+      "title": "X11/EWMH 诊断",
+      "category": "real-platform",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "environment": "local-xwayland",
+      "environmentLabel": "本机同一会话、强制 X11 后端（FLASHCAST_FORCE_X11_BACKEND=1，经 XWayland）",
+      "detail": "可用性=Available，窗口管理器=Some(\"GNOME Shell\")，_NET_CLIENT_LIST 窗口数=Some(1)，前台窗口=None",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check",
+      "evidence": "evidence/local-xwayland-forced.json"
+    }
+  ],
+  "summary": {
+    "realPlatformMeasuredPass": 49,
+    "realPlatformMeasuredFail": 5,
+    "realPlatformNotCovered": 25,
+    "testDoubleMeasuredPass": 15,
+    "uncoveredItems": 12
+  },
+  "testDouble": {
+    "statement": "以下检查全部经过宿主对外的查询 / 命令入口，但平台适配层使用 `flashcast-platform` 的 `fake` 替身（`--features fake`）。它们证明宿主逻辑正确，**不**证明任何真实平台行为。工作区、Git 与文件系统部分是真实的临时目录/真实仓库。",
+    "cargoTest": [
+      {
+        "platform": "linux-x64（runner）",
+        "suites": 28,
+        "passed": 362,
+        "failed": 0,
+        "evidence": "run 36861987134 job Linux x64"
+      },
+      {
+        "platform": "windows-x64（runner）",
+        "suites": 28,
+        "passed": 351,
+        "failed": 0,
+        "evidence": "run 36861987134 job Windows x64"
+      },
+      {
+        "platform": "macos-arm64（runner）",
+        "suites": 28,
+        "passed": 360,
+        "failed": 0,
+        "evidence": "run 36861987134 job macOS arm64 (native)"
+      },
+      {
+        "platform": "macos-x64（runner）",
+        "suites": 28,
+        "passed": 360,
+        "failed": 0,
+        "evidence": "run 36861987134 job macOS x86_64 (cross-compiled)"
+      }
+    ],
+    "uiCheck": {
+      "command": "pnpm ui-check",
+      "passed": 66,
+      "failed": 0,
+      "total": 66,
+      "what": "真实 Chrome 驱动的浏览器 UI + 浏览器模拟宿主；不是 Tauri webview，不代表托盘、全局快捷键、自动粘贴或真实软件启动可用",
+      "screenshots": "artifacts/ui/01-…83-…84-…（编号在 ticket 17 的 Comments 里登记）"
+    },
+    "checks": [
+      {
+        "id": "host.query.scope",
+        "title": "查询范围、插件关键词与标签冲突（替身）",
+        "suite": "tests/host_search.rs, tests/memos.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.execute.actions",
+        "title": "命令入口：启动、粘贴、书签、备忘录、剪贴板（替身 launcher/paster/chrome/clipboard）",
+        "suite": "tests/host_execute.rs, tests/paste.rs, tests/chrome.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.selection",
+        "title": "键盘选择、异步过期结果、返回上一查询",
+        "suite": "tests/host_selection.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.plugin_isolation",
+        "title": "插件停用与失败隔离、超时",
+        "suite": "tests/plugin_isolation.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.settings",
+        "title": "设置读写与校验失败保留上次可用状态",
+        "suite": "tests/settings.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.clipboard_text",
+        "title": "剪贴板历史文字：去重、抑制自身写入、暂停、期限与容量（替身剪贴板）",
+        "suite": "tests/clipboard.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.clipboard_files",
+        "title": "文件引用与已保存副本语义（真实文件系统 + 替身剪贴板）",
+        "suite": "tests/clipboard_files.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.themes",
+        "title": "主题安装/切换/无效主题保留上次外观（真实文件系统）",
+        "suite": "tests/themes.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.workspace",
+        "title": "配置工作区选择/初始化/外部重载（真实临时仓库）",
+        "suite": "tests/workspace.rs, tests/workspace_watch.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.workspace_git",
+        "title": "变更查看、部分提交（真实 Git 仓库）",
+        "suite": "tests/workspace_git.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.workspace_clone",
+        "title": "克隆（本地 bare 远端；鉴权在外部边界控制）",
+        "suite": "tests/workspace_clone.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "host.workspace_sync",
+        "title": "拉取/推送、分叉、脏工作区保护、离线与鉴权失败（本地 bare 远端 + 桩 HTTP）",
+        "suite": "tests/workspace_sync.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "platform.freedesktop_fixture",
+        "title": "freedesktop .desktop 解析与字段码展开（真实解析器 + 临时夹具）",
+        "suite": "crates/flashcast-platform/tests/freedesktop_fixture.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "platform.chrome_fixture",
+        "title": "Chrome profile 发现与书签解析（临时 profile 夹具）",
+        "suite": "crates/flashcast-platform/tests/chrome_fixture.rs",
+        "status": "measured_pass"
+      },
+      {
+        "id": "ui.browser",
+        "title": "UI 主流程、键盘、中文输入、返回、紧凑/预览、浅深色、缩放、失败反馈（浏览器 + 模拟宿主）",
+        "suite": "tools/ui-check/check.mjs",
+        "status": "measured_pass"
+      }
+    ]
+  },
+  "uncovered": [
+    {
+      "id": "desktop.global_hotkey_summon",
+      "reason": "Wayland 下 global-hotkey 0.8 只有 X11 的 XGrabKey 实现，注册直接判定不可用；本报告不把 XWayland 下「注册成功」当成唤起可用，也没有向真实桌面注入按键来验证唤起。",
+      "evidence": "evidence/local-wayland-write.json 的 hotkey.register=未覆盖；evidence/local-xwayland-forced.json 的 hotkey.register=实测通过（仅 X11 服务器）"
+    },
+    {
+      "id": "desktop.focus_capture",
+      "reason": "Wayland 不向普通应用暴露全局焦点窗口（GNOME 无公开接口）；XWayland 下能读到窗口句柄但拿不到应用身份（id=unknown）。",
+      "evidence": "evidence/local-wayland-write.json 的 focus.capture=未覆盖"
+    },
+    {
+      "id": "desktop.auto_paste_end_to_end",
+      "reason": "Wayland 不允许应用把焦点交给其他应用后注入按键；没有 XDG RemoteDesktop 门户授权，也没有真实目标应用接收粘贴内容。跳过注入真实按键是刻意的（会打到用户当前前台窗口）。",
+      "evidence": "evidence/local-wayland-write.json 的 paste.auto=实测失败、paste.prepare=未覆盖；evidence/local-xwayland-forced.json 的 paste.auto=未覆盖"
+    },
+    {
+      "id": "desktop.memo_paste_into_previous_app",
+      "reason": "真实剪贴板写入与「已复制，请手动粘贴」降级已实测通过，但没有唤起前的目标应用可用于核对「目标应用里真的出现了内容」。",
+      "evidence": "evidence/local-real-desktop-acceptance.log"
+    },
+    {
+      "id": "desktop.clipboard_origin_app",
+      "reason": "X11 下的来源应用推导需要 xclip，本机未安装；Wayland 下没有公开的来源应用接口。",
+      "evidence": "evidence/local-wayland-write.json 的 clipboard.text 说明"
+    },
+    {
+      "id": "desktop.tauri_webview_visual",
+      "reason": "本机没有桌面截图/输入注入工具（grim/import/scrot/xdotool/wtype 均不存在），无法目视核对真实 webview 的缩放、浅深色与渲染；只能记录进程级启动（ticket 04 的安装包检查）。",
+      "evidence": "artifacts/ui/*.png 是浏览器截图，不是 Tauri webview"
+    },
+    {
+      "id": "desktop.tray_menu",
+      "reason": "同上：没有输入注入工具，无法点击托盘菜单；只验证过托盘进程能初始化（ticket 01 的冒烟）。",
+      "evidence": "ticket 01 Comments 的未覆盖项"
+    },
+    {
+      "id": "desktop.chrome_visible_window_open",
+      "reason": "真实 Chrome 的启动与页面加载已由 headless 检查覆盖（一次性的 --user-data-dir，绝不使用用户的真实 profile）；在真实桌面里弹出可见窗口并核对书签页没有做，因为没有可用的窗口观察手段，也不允许触碰用户真实 Chrome profile。",
+      "evidence": "crates/flashcast-platform/tests/chrome_fixture.rs 的 real_chrome_spawn_starts_a_process；artifacts/platform-check/17-real-chrome-spawn.log"
+    },
+    {
+      "id": "runner.macos_windows_clipboard_roundtrip",
+      "reason": "macOS runner 的 pbcopy/pbpaste 只能提供纯文本（HTML/RTF 写入为实测失败，属已记录的降级）；Windows runner 不执行剪贴板写入（可能没有交互剪贴板），真实读写未覆盖。",
+      "evidence": "evidence/runner-macos-arm64.json、evidence/runner-windows-x64.json"
+    },
+    {
+      "id": "runner.windows_cf_hdrop_macos_applescript_files",
+      "reason": "Windows 的 CF_HDROP 与 macOS AppleScript 文件列表的真实读写没有执行过；Linux 上的 text/uri-list 已实测通过。",
+      "evidence": "evidence/runner-windows-x64.json、evidence/runner-macos-arm64.json"
+    },
+    {
+      "id": "runner.signing_with_credentials",
+      "reason": "有证书时的签名分支（Windows 导入 pfx → certificateThumbprint；macOS 正式签名 + 公证）从未执行：没有凭证。当前状态是 macOS ad-hoc（未公证）、Windows 未签名。",
+      "evidence": "evidence/runner-macos-arm64-installer.json、evidence/runner-windows-x64-installer.json"
+    },
+    {
+      "id": "local.linux_x11_clipboard",
+      "reason": "本机是 Wayland 且未安装 xclip/xsel，X11 剪贴板后端不可用；不能用 Wayland 的结果推断 X11 可用。",
+      "evidence": "evidence/local-wayland-write.json 的 clipboard.text=未覆盖（原因写明 wl-copy 可用）"
+    }
+  ],
+  "installerBuild": {
+    "statement": "安装包构建成功单独列示，不构成桌面行为证据。",
+    "evidence": "evidence/runner-SHA256SUMS.txt（5 个包：Linux AppImage/deb、Windows exe、macOS arm64/x64 dmg）",
+    "signing": [
+      {
+        "platform": "macOS arm64 / x64",
+        "status": "ad-hoc 签名（未公证）",
+        "detail": "codesign --verify --deep --strict 通过，签名标识 -；spctl 拒绝，用户需 xattr -dr com.apple.quarantine 或「仍要打开」。"
+      },
+      {
+        "platform": "Windows x64",
+        "status": "未签名",
+        "detail": "没有提供代码签名证书；SmartScreen 提示「更多信息 → 仍要运行」。"
+      },
+      {
+        "platform": "Linux x64",
+        "status": "不签名",
+        "detail": "AppImage 与 deb 不做代码签名；以 SHA256 校验值核对（见 installers 检查的 8 实测通过 / 0 失败 / 0 未覆盖，由 ticket 04 记录）。"
+      }
+    ]
+  },
+  "releaseNotesGuidance": [
+    "不得声称「已在 Windows / macOS 真实桌面完成全流程」：这两个平台只有 runner 上的真实系统接口检查 + 安装包检查，没有人工桌面交互。",
+    "不得声称全局快捷键在 Linux Wayland 下可用：本机为未覆盖 / 不支持，托盘是唯一入口。",
+    "不得声称自动粘贴在 Linux Wayland 下可用：实测失败，行为是「已复制，请手动粘贴」。",
+    "不得声称 macOS / Windows 代码已签名或已公证：macOS 是 ad-hoc（Gatekeeper 会拦），Windows 未签名（SmartScreen 会拦）。",
+    "必须写明 macOS 首次启动需要手动放行、Windows 需要「仍要运行」。",
+    "已经实测通过的项可以写：Linux Wayland 上的文字 / 图片 / 富文本降级 / 文件列表剪贴板读写与监听、真实软件启动（回车）、备忘录标签复制与手动粘贴降级。",
+    "「未覆盖」项必须逐条列出并给出原因，不得因为构建或替身测试全绿就省略。"
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "testDoubles": [],
+  "product": "flashcast",
+  "version": "0.1.0",
+  "environment": {
+    "os": "macos",
+    "osVersion": "Version 26.6.2 (Build 25G83)",
+    "arch": "aarch64",
+    "sessionType": "not-applicable",
+    "desktopAvailable": true,
+    "xdgSessionType": null,
+    "xdgCurrentDesktop": null,
+    "source": "flashcast-platform-check"
+  },
+  "capabilities": {
+    "hotkey": "支持",
+    "clipboard": "未覆盖（文字与图片已实现（ticket 09/10：pbpaste 读文本、图片经 osascript 读写）；HTML/RTF 不声称支持（ticket 11）；文件列表尚未实现（ticket 12 覆盖）；macOS 由 NSPasteboard 提供，无需外部工具）",
+    "autoPaste": "支持"
+  },
+  "checks": [
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "macos aarch64 上编译并运行成功",
+      "command": "cargo check -p flashcast-platform --target x86_64-apple-darwin"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话可用性",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "macOS 没有 X11/Wayland 会话类型；NSWorkspace 能报出前台应用，桌面会话可用",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "macOS 应用发现",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "发现 86 个 .app 包，其中 85 个可启动；跳过 1 个；应用目录存在 4 个、缺失 1 个（[\"/Users/runner/Applications\"]）；图标渲染成功 85 个、失败 0 个",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json"
+    },
+    {
+      "id": "apps.discovery.skipped",
+      "title": "被跳过的 .app 包明细",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "/System/Applications/Passwords.app（不是应用包（CFBundlePackageType 不是 APPL））",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "apps.icon_render",
+      "title": "应用图标渲染（NSWorkspace → PNG）",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "NSWorkspace 渲染 /System/Applications/Utilities/Activity Monitor.app 得到 1814217 字节 PNG（宽度 128 点）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "读取到 id=com.apple.finder name=Finder bundle=Some(\"com.apple.finder\") pid=Some(357)",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "accessibility.permission",
+      "title": "辅助功能（Accessibility）权限",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "AXIsProcessTrusted() = true；系统设置 → 隐私与安全性 → 辅助功能",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（辅助功能权限 / CGEvent）",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "注入后端=CGEvent（Cmd+V），权限=已授权；未注入真实按键，端到端粘贴需要对准目标应用手动验证",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "注册并注销 Ctrl+Alt+F12 成功",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "文字与图片已实现（ticket 09/10：pbpaste 读文本、图片经 osascript 读写）；HTML/RTF 不声称支持（ticket 11）；文件列表尚未实现（ticket 12 覆盖）；macOS 由 NSPasteboard 提供，无需外部工具",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "支持",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "detail": "macOS 的 pbcopy / pbpaste 只支持纯文本：HTML/RTF 既不被保存也不被恢复，恢复时只提供文本（历史里的富文本载荷若来自其它平台仍原样保存在本机）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    }
+  ],
+  "summary": {
+    "measuredPass": 10,
+    "measuredFail": 1,
+    "notCovered": 1
+  },
+  "notes": [
+    "辅助功能权限：已授权",
+    "软件发现扫描 /Applications、/System/Applications、/System/Applications/Utilities、/Applications/Utilities 与 ~/Applications 下的 .app 包。",
+    "应用图标由 NSWorkspace 渲染为 PNG 并缓存（现代应用只提供 Assets.car，没有可用的 .icns）。",
+    "全局快捷键依赖应用的 Cocoa 事件循环，注册需在应用启动阶段（主线程）完成。"
+  ]
+}

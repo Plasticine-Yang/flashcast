@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "testDoubles": [],
+  "product": "flashcast",
+  "version": "0.1.0",
+  "environment": {
+    "os": "windows",
+    "osVersion": "Windows Server 2025 Datacenter 24H2（build 26100.33438）",
+    "arch": "x86_64",
+    "sessionType": "not-applicable",
+    "desktopAvailable": true,
+    "xdgSessionType": null,
+    "xdgCurrentDesktop": null,
+    "source": "flashcast-platform-check"
+  },
+  "capabilities": {
+    "hotkey": "支持",
+    "clipboard": "未覆盖（文字、HTML/RTF 与图片已实现（ticket 09/10/11：一次剪贴板打开里读全部格式，图片同时提供 CF_DIB 与注册格式 PNG）；文件列表尚未实现（ticket 12 覆盖）；Windows 提供 OpenClipboard 与 WinRT Clipboard API，环境本身具备条件）",
+    "autoPaste": "支持"
+  },
+  "checks": [
+    {
+      "id": "build.compile",
+      "title": "flashcast-platform 编译",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "windows x86_64 上编译并运行成功",
+      "command": "cargo build -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "paste.prepare",
+      "title": "自动粘贴前置条件（SendInput）",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "注入后端=SendInput（Ctrl+V，带 dwExtraInfo 标记），能力=支持；             本检查不注入真实按键，端到端粘贴未覆盖（受 UIPI 限制，管理员窗口收不到）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "session.detect",
+      "title": "桌面会话判定",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "Windows 会话（不适用 X11/Wayland 分类）：交互式桌面（有前台窗口与 shell 窗口）；GetForegroundWindow=true，GetShellWindow=true",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "apps.discovery",
+      "title": "Windows 软件发现（开始菜单 / 注册表 / 打包应用）",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "发现 346 个可启动条目：开始菜单快捷方式 161 个（54 次走 IShellLinkW 纠正），注册表子键 456 个，打包应用 175 个；其中 346 个解析到图标文件、抽取失败 0 次；跳过 444 条",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json"
+    },
+    {
+      "id": "apps.launch",
+      "title": "启动真实目标与失效条目报错",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "用 C:\\Windows\\system32\\cmd.exe /c exit 启动成功（pid=Some(8168)）；失效路径按预期报错：找不到可执行文件 C:\\Flashcast\\definitely-missing\\nope.exe",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "focus.capture",
+      "title": "读取唤起前前台应用",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "读取到 id=c:\\program files\\windowsapps\\microsoft.windowsterminal_1.23.20211.0_x64__8wekyb3d8bbwe\\windowsterminal.exe name=C:\\ProgramData\\GitHub\\HostedComputeAgent\\hosted-compute-agent pid=Some(8888) window=Some(131542)",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "focus.restore",
+      "title": "把焦点还给唤起前应用",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "ShowWindow(SW_RESTORE)+SetForegroundWindow 把焦点还给 C:\\ProgramData\\GitHub\\HostedComputeAgent\\hosted-compute-agent 并在回读校验中一致",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "hotkey.register",
+      "title": "全局快捷键注册",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "注册并注销 Ctrl+Alt+F12 成功",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "clipboard.text",
+      "title": "剪贴板文字读写",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "文字、HTML/RTF 与图片已实现（ticket 09/10/11：一次剪贴板打开里读全部格式，图片同时提供 CF_DIB 与注册格式 PNG）；文件列表尚未实现（ticket 12 覆盖）；Windows 提供 OpenClipboard 与 WinRT Clipboard API，环境本身具备条件",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "paste.auto",
+      "title": "自动粘贴到唤起前应用",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "支持",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "clipboard.rich",
+      "title": "富文本格式（HTML/RTF）的真实读写",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "实现：一次剪贴板打开里写 CF_UNICODETEXT + HTML Format + Rich Text Format，读取时同样一次读出三种格式（HF-11）。本 runner 不执行写入（可能没有交互剪贴板），真机复核见 ticket 17",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "win.shell",
+      "title": "Windows shell 环境（explorer / PowerShell）",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "WINDIR=Some(\"C:\\\\Windows\")，ComSpec=Some(\"C:\\\\Windows\\\\system32\\\\cmd.exe\")，C:\\Windows\\explorer.exe 存在=true，PowerShell=5.1.26100.33438（实测通过）",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    },
+    {
+      "id": "x11.diagnostics",
+      "title": "X11/EWMH 诊断",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "X11 / EWMH 只存在于 Linux 会话，Windows 上不适用",
+      "command": "cargo run -p flashcast-platform --bin flashcast-platform-check"
+    }
+  ],
+  "summary": {
+    "measuredPass": 9,
+    "measuredFail": 0,
+    "notCovered": 4
+  },
+  "notes": [
+    "Windows 没有 X11/Wayland 之分；会话类型记为「不适用」，桌面可用性单独报告。",
+    "打包应用（UWP/MSIX）通过 Get-StartApps 枚举、以 AUMID 启动；没有开始菜单快捷方式、也没有可推导 .exe 的注册表条目会被丢弃。",
+    "自动粘贴用 SendInput 注入 Ctrl+V，并带 dwExtraInfo 标记；受 UIPI 限制，无法注入到以管理员身份运行的前台窗口（那种情况下会如实退回手动粘贴提示）。"
+  ]
+}

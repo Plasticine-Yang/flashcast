@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "product": "flashcast",
+  "version": "0.1.0",
+  "environment": {
+    "platform": "macos",
+    "os": "macOS",
+    "osVersion": "25.6.0",
+    "arch": "aarch64",
+    "slug": "macos-arm64",
+    "commit": "6a2c9466675a50db71b3a6b6913a6a403f2ad310",
+    "source": "scripts/ci/check-installers.sh"
+  },
+  "artifacts": [
+    { "kind": "dmg", "name": "Flashcast_0.1.0_aarch64.dmg", "path": "artifacts/packages/Flashcast_0.1.0_aarch64.dmg", "sizeBytes": 5124577, "sha256": "00a9fd3144b68a8142f7d938eb1f455d681c735cad626991173960ac45294886" }
+  ],
+  "signing": [
+    { "scope": "macos", "status": "ad-hoc 签名（未公证）", "detail": "使用签名标识 -（ad-hoc）。可避免 Apple Silicon 上被报成「已损坏」，但不绕过 Gatekeeper，用户仍需手动放行。" }
+  ],
+  "checks": [
+    {
+      "id": "installer.version_consistent",
+      "title": "版本号一致性",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "tauri.conf.json / Cargo.toml(workspace.package) / package.json 均为 0.1.0",
+      "command": "grep -n 'version' src-tauri/tauri.conf.json Cargo.toml package.json"
+    },
+    {
+      "id": "installer.dmg.present",
+      "title": "dmg 安装包",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "dmg/Flashcast_0.1.0_aarch64.dmg，5124577 字节，sha256=00a9fd3144b68a8142f7d938eb1f455d681c735cad626991173960ac45294886",
+      "command": "ls -l /Users/runner/work/flashcast/flashcast/target/aarch64-apple-darwin/release/bundle/dmg/Flashcast_0.1.0_aarch64.dmg && sha256sum /Users/runner/work/flashcast/flashcast/target/aarch64-apple-darwin/release/bundle/dmg/Flashcast_0.1.0_aarch64.dmg"
+    },
+    {
+      "id": "installer.dmg.payload",
+      "title": "dmg 内容",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "挂载成功并含 Flashcast.app，Info.plist、可执行文件与图标齐备",
+      "command": "hdiutil attach /Users/runner/work/flashcast/flashcast/target/aarch64-apple-darwin/release/bundle/dmg/Flashcast_0.1.0_aarch64.dmg; codesign -dv --verbose=4 <app>"
+    },
+    {
+      "id": "installer.macos.codesign",
+      "title": "macOS 代码签名",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "codesign --verify --deep --strict 通过；签名标识：ad-hoc（-）",
+      "command": "codesign --verify --deep --strict --verbose=2 <app>"
+    },
+    {
+      "id": "installer.macos.notarized",
+      "title": "macOS 公证",
+      "status": "not_covered",
+      "statusLabel": "未覆盖",
+      "detail": "ad-hoc 签名无法公证（需要开发者账号）；本次构建未配置公证凭证",
+      "command": "stapler validate <app>"
+    },
+    {
+      "id": "installer.macos.gatekeeper",
+      "title": "macOS Gatekeeper 首启策略",
+      "status": "measured_fail",
+      "statusLabel": "实测失败",
+      "detail": "spctl 拒绝（未公证时属预期）：/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T//flashcast-installer-check.dWWJ18/dmg-mnt/Flashcast.app: rejected。用户需 xattr -dr com.apple.quarantine 或在「隐私与安全性」中选择仍要打开。",
+      "command": "spctl -a -t exec -vv <app>"
+    },
+    {
+      "id": "installer.app.launch",
+      "title": "macOS 应用启动",
+      "status": "measured_pass",
+      "statusLabel": "实测通过",
+      "detail": "解包后的 .app 内可执行文件启动后存活 10 秒，未崩溃",
+      "command": "/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T//flashcast-installer-check.dWWJ18/staging/Flashcast.app/Contents/MacOS/flashcast"
+    }
+  ],
+  "summary": {
+    "measuredPass": 5,
+    "measuredFail": 1,
+    "notCovered": 1
+  },
+  "notes": [
+    "macOS：dmg=/Users/runner/work/flashcast/flashcast/target/aarch64-apple-darwin/release/bundle/dmg/Flashcast_0.1.0_aarch64.dmg。ad-hoc 签名只避免 Apple Silicon 报「已损坏」，不等于通过 Gatekeeper；安装说明必须给出 xattr -dr com.apple.quarantine 或「隐私与安全性 → 仍要打开」。",
+    "macOS：installer.macos.gatekeeper 记为「实测失败」是 ad-hoc 签名未公证的预期结果，不是打包失败；未配置公证凭证时不应把它当作发布阻断项。",
+    "本报告只覆盖本平台 runner 上真实执行的检查；其他平台由各自的 job 分别产出。"
+  ]
+}
