@@ -16,25 +16,27 @@ use flashcast_platform::capability::Capabilities;
 
 // 以下都只用于 Linux 的真实检查；非 Linux 目标上这些检查一律报告「未覆盖」。
 #[cfg(target_os = "linux")]
-use std::sync::Arc;
-#[cfg(target_os = "linux")]
 use flashcast_platform::capability::{CapabilityProbe, SessionType, Support};
 #[cfg(target_os = "linux")]
 use flashcast_platform::focus::FocusTracker;
 #[cfg(target_os = "linux")]
 use flashcast_platform::hotkey::HotkeySpec;
 #[cfg(target_os = "linux")]
-use flashcast_platform::shortcut::HotkeyManager;
-#[cfg(target_os = "linux")]
 use flashcast_platform::linux::{
     LinuxAppCatalog, LinuxCapabilityProbe, LinuxFocusTracker, LinuxHotkeyManager,
 };
+#[cfg(target_os = "linux")]
+use flashcast_platform::shortcut::HotkeyManager;
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
+#[cfg(target_os = "linux")]
+use std::time::Duration;
 
 // macOS 的真实检查全部经 `flashcast_platform::macos`，不经过任何替身。
 #[cfg(target_os = "macos")]
-use std::sync::Arc as MacosArc;
-#[cfg(target_os = "macos")]
-use flashcast_platform::capability::{CapabilityProbe as MacosCapabilityProbeTrait, Support as MacosSupport};
+use flashcast_platform::capability::{
+    CapabilityProbe as MacosCapabilityProbeTrait, Support as MacosSupport,
+};
 #[cfg(target_os = "macos")]
 use flashcast_platform::focus::FocusTracker as MacosFocusTrackerTrait;
 #[cfg(target_os = "macos")]
@@ -50,11 +52,13 @@ use flashcast_platform::macos::hotkeys::MacosHotkeyManager;
 #[cfg(target_os = "macos")]
 use flashcast_platform::macos::icons::{self as macos_icons, ICON_POINT_SIZE};
 #[cfg(target_os = "macos")]
-use flashcast_platform::shortcut::{HotkeyError as MacosHotkeyError, HotkeyManager as MacosHotkeyManagerTrait};
+use flashcast_platform::shortcut::{
+    HotkeyError as MacosHotkeyError, HotkeyManager as MacosHotkeyManagerTrait,
+};
+#[cfg(target_os = "macos")]
+use std::sync::Arc as MacosArc;
 
 // 以下是 Windows 真实检查所需的导入。
-#[cfg(target_os = "windows")]
-use std::sync::Arc;
 #[cfg(target_os = "windows")]
 use flashcast_platform::capability::{CapabilityProbe, Support};
 #[cfg(target_os = "windows")]
@@ -72,6 +76,8 @@ use flashcast_platform::windows::{
     WindowsAppCatalog, WindowsCapabilityProbe, WindowsFocusTracker, WindowsHotkeyManager,
     WindowsLauncher,
 };
+#[cfg(target_os = "windows")]
+use std::sync::Arc;
 
 /// 只在 macOS 等尚未实现真实适配的平台上报告「未覆盖」时给出的复现命令提示。
 #[cfg(target_os = "macos")]
@@ -156,6 +162,8 @@ fn json_escape(value: &str) -> String {
 struct Options {
     json: bool,
     output: Option<String>,
+    /// 允许检查真的写一次系统剪贴板（会覆盖用户当前剪贴板里的内容）。
+    allow_clipboard_write: bool,
 }
 
 fn parse_args() -> Options {
@@ -165,6 +173,7 @@ fn parse_args() -> Options {
         match arg.as_str() {
             "--json" => options.json = true,
             "--output" => options.output = args.next(),
+            "--allow-clipboard-write" => options.allow_clipboard_write = true,
             _ => {}
         }
     }
@@ -207,7 +216,9 @@ fn main() {
                 "XDG_SESSION_TYPE={:?}，判定为 {}；有 DISPLAY={}，WAYLAND_DISPLAY={}",
                 std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "<未设置>".to_string()),
                 capabilities.session.label_zh(),
-                std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false),
+                std::env::var("DISPLAY")
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false),
                 std::env::var("WAYLAND_DISPLAY")
                     .map(|v| !v.is_empty())
                     .unwrap_or(false),
@@ -268,7 +279,8 @@ fn main() {
                     "读取到 id={} name={} wm_class={:?} pid={:?} window={:?}",
                     app.id, app.name, app.wm_class, app.pid, app.window
                 ),
-                command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
+                command: "cargo run -p flashcast-platform --bin flashcast-platform-check"
+                    .to_string(),
             },
             Err(flashcast_platform::focus::FocusError::Unsupported { reason }) => CheckResult {
                 id: "focus.capture",
@@ -284,7 +296,8 @@ fn main() {
                 title: "读取唤起前前台应用",
                 status: Status::MeasuredFail,
                 detail: error.to_string(),
-                command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
+                command: "cargo run -p flashcast-platform --bin flashcast-platform-check"
+                    .to_string(),
             },
         };
         checks.push(focus_check);
@@ -320,37 +333,49 @@ fn main() {
                 title: "全局快捷键注册",
                 status: Status::MeasuredFail,
                 detail: error.to_string(),
-                command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
+                command: "cargo run -p flashcast-platform --bin flashcast-platform-check"
+                    .to_string(),
             },
         };
         checks.push(hotkey_check);
 
-        // 6. 剪贴板与自动粘贴：ticket 01 只报告环境前提，状态保持未覆盖。
-        for (id, title, support) in [
-            (
-                "clipboard.text",
-                "剪贴板文字读写",
-                capabilities.clipboard.clone(),
-            ),
-            (
-                "paste.auto",
-                "自动粘贴到唤起前应用",
-                capabilities.auto_paste.clone(),
-            ),
-        ] {
-            let (status, detail) = match &support {
-                Support::Supported => (Status::MeasuredPass, "支持".to_string()),
-                Support::Unsupported { reason } => (Status::MeasuredFail, reason.clone()),
-                Support::Unknown { reason } => (Status::NotCovered, reason.clone()),
-            };
-            checks.push(CheckResult {
-                id,
-                title,
-                status,
-                detail,
-                command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
-            });
-        }
+        // 6a. 剪贴板：能力报告（只有环境前提）与一次**真实**的写入 + 回读。
+        checks.push(CheckResult {
+            id: "clipboard.text",
+            title: "剪贴板文字读写",
+            status: match &capabilities.clipboard {
+                Support::Supported => Status::MeasuredPass,
+                Support::Unsupported { .. } => Status::MeasuredFail,
+                Support::Unknown { .. } => Status::NotCovered,
+            },
+            detail: match &capabilities.clipboard {
+                Support::Supported => "支持".to_string(),
+                Support::Unsupported { reason } | Support::Unknown { reason } => reason.clone(),
+            },
+            command: "cargo run -p flashcast-platform --bin flashcast-platform-check                       -- --allow-clipboard-write"
+                .to_string(),
+        });
+        checks.push(clipboard_write_check(
+            &capabilities,
+            options.allow_clipboard_write,
+        ));
+
+        // 6b. 自动粘贴：能力结论 + 注入前置条件（真实查询 XTEST / 会话类型）。
+        checks.push(CheckResult {
+            id: "paste.auto",
+            title: "自动粘贴到唤起前应用",
+            status: match &capabilities.auto_paste {
+                Support::Supported => Status::MeasuredPass,
+                Support::Unsupported { .. } => Status::MeasuredFail,
+                Support::Unknown { .. } => Status::NotCovered,
+            },
+            detail: match &capabilities.auto_paste {
+                Support::Supported => "支持：X11 + XTEST 可用，将注入 Ctrl+V".to_string(),
+                Support::Unsupported { reason } | Support::Unknown { reason } => reason.clone(),
+            },
+            command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
+        });
+        checks.push(paste_prepare_check());
 
         // 7. X11 诊断（即便在 Wayland 下也如实报告 XWayland 暴露的内容）。
         let x11 = flashcast_platform::linux::x11::diagnostics();
@@ -370,7 +395,6 @@ fn main() {
             ),
             command: "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string(),
         });
-
     }
 
     #[cfg(target_os = "macos")]
@@ -398,6 +422,227 @@ fn main() {
 /// Windows 平台的检查列表。
 ///
 /// 每一项都调用**真实实现**（真实扫描、真实 `CreateProcessW`/`ShellExecuteW`、
+/// 在有限时间内运行一个外部命令并取回它的标准输出。
+///
+/// 诊断工具**不能**因为外部工具阻塞而挂死：当前会话里 `wl-copy` 就可能拿不到选区而永久
+/// 阻塞（自动化会话没有可用的输入序列）。这里用「stdout 重定向到临时文件 + 轮询 + 超时
+/// 杀掉」的方式等待，既不依赖管道（被 fork 出的守护进程会一直持有管道写端），也不会
+/// 无限等待。
+#[cfg(target_os = "linux")]
+fn run_bounded(program: &str, args: &[&str], timeout: Duration) -> Result<(bool, String), String> {
+    use std::process::{Command, Stdio};
+
+    let out_path = std::env::temp_dir().join(format!(
+        "flashcast-check-{}-{}.out",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let file = std::fs::File::create(&out_path)
+        .map_err(|error| format!("{program}: 无法创建输出文件（{error}）"))?;
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(file))
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("{program}: 无法启动（{error}）"))?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let text = std::fs::read_to_string(&out_path).unwrap_or_default();
+                let _ = std::fs::remove_file(&out_path);
+                return Ok((status.success(), text));
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&out_path);
+                return Err(format!(
+                    "{program}: 超过 {} 秒没有返回，已中止（当前会话里该工具被阻塞）",
+                    timeout.as_secs()
+                ));
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&out_path);
+                return Err(format!("{program}: 等待失败（{error}）"));
+            }
+        }
+    }
+}
+
+/// 在有限时间内运行一段可能阻塞的操作（真实剪贴板写入）。
+///
+/// 用独立线程 + `recv_timeout`：超时后丢弃那个线程（进程退出时它自然消失），
+/// 这样诊断报告仍然能如实写出「写入被阻塞」，而不是整个检查挂死。
+#[cfg(target_os = "linux")]
+fn run_bounded_blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    timeout: Duration,
+) -> Result<T, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    rx.recv_timeout(timeout)
+        .map_err(|_| format!("超过 {} 秒没有返回，已放弃等待", timeout.as_secs()))
+}
+
+/// Linux 剪贴板真实写入 + 回读。
+///
+/// 这一项**会覆盖用户当前的剪贴板**，因此必须显式加 `--allow-clipboard-write` 才执行；
+/// 未允许时如实报「未覆盖」并给出复现命令，而不是假装通过。
+///
+/// 回读用同一族的工具（Wayland 下 `wl-paste`，X11 下 `xclip -o`）：只有真的读回同一段
+/// 文本，才算「写进系统剪贴板」，命令退出码为 0 不算证据。
+#[cfg(target_os = "linux")]
+fn clipboard_write_check(capabilities: &Capabilities, allowed: bool) -> CheckResult {
+    use flashcast_platform::clipboard::ClipboardAccess;
+
+    let command = "cargo run -p flashcast-platform --bin flashcast-platform-check \
+                   -- --allow-clipboard-write";
+    if !allowed {
+        return CheckResult {
+            id: "clipboard.write_text",
+            title: "真实写入系统剪贴板并回读",
+            status: Status::NotCovered,
+            detail: "未执行：该检查会覆盖当前剪贴板内容，需要显式加 --allow-clipboard-write"
+                .to_string(),
+            command: command.to_string(),
+        };
+    }
+    let marker = format!(
+        "flashcast-platform-check-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let write_marker = marker.clone();
+    let clipboard = flashcast_platform::linux::LinuxClipboard::new();
+    let written = run_bounded_blocking(
+        move || {
+            clipboard
+                .write_text(&write_marker)
+                .map_err(|error| error.to_string())
+        },
+        Duration::from_secs(5),
+    );
+    match written {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            return CheckResult {
+                id: "clipboard.write_text",
+                title: "真实写入系统剪贴板并回读",
+                status: Status::MeasuredFail,
+                detail: format!("写入失败：{error}"),
+                command: command.to_string(),
+            }
+        }
+        Err(reason) => {
+            return CheckResult {
+                id: "clipboard.write_text",
+                title: "真实写入系统剪贴板并回读",
+                status: Status::NotCovered,
+                detail: format!(
+                    "写入没有完成：{reason}。当前会话里剪贴板工具（wl-copy / xclip）无法取得                     选区——自动化会话缺少可用的输入序列时就是这样；这不代表真实桌面上的复制会失败"
+                ),
+                command: command.to_string(),
+            }
+        }
+    }
+    // 回读：优先会话对应的工具，失败再试另一族（XWayland 场景下两者都可能可用）。
+    let candidates: &[(&str, &[&str])] = if capabilities.session == SessionType::Wayland {
+        &[
+            ("wl-paste", &["--no-newline"][..]),
+            ("xclip", &["-selection", "clipboard", "-o"][..]),
+        ]
+    } else {
+        &[
+            ("xclip", &["-selection", "clipboard", "-o"][..]),
+            ("wl-paste", &["--no-newline"][..]),
+        ]
+    };
+    let mut attempts = Vec::new();
+    for (program, args) in candidates {
+        match run_bounded(program, args, Duration::from_secs(5)) {
+            Ok((true, text)) if text.trim() == marker => {
+                return CheckResult {
+                    id: "clipboard.write_text",
+                    title: "真实写入系统剪贴板并回读",
+                    status: Status::MeasuredPass,
+                    detail: format!(
+                        "用 {program} 写入并回读到同一段文本（{} 字节）",
+                        marker.len()
+                    ),
+                    command: command.to_string(),
+                }
+            }
+            Ok((true, text)) => attempts.push(format!(
+                "{program}: 回读内容不一致（{} 字节）",
+                text.trim().len()
+            )),
+            Ok((false, _)) => attempts.push(format!("{program}: 退出码非 0")),
+            Err(reason) => attempts.push(reason),
+        }
+    }
+    CheckResult {
+        id: "clipboard.write_text",
+        title: "真实写入系统剪贴板并回读",
+        status: Status::MeasuredFail,
+        detail: format!("写入成功但回读失败（{}）", attempts.join("；")),
+        command: command.to_string(),
+    }
+}
+
+/// Linux 自动粘贴的前置条件：会话类型 + XTEST 扩展是否真的可用。
+///
+/// **不**注入真实按键：`flashcast-platform-check` 运行时前台窗口是用户的终端或编辑器，
+/// 盲发一次 Ctrl+V 会往那个窗口里粘贴用户剪贴板里的任意内容。这里只核对注入所需的条件
+/// （真实查询 XTEST 扩展），端到端粘贴由「在真实桌面里对准目标应用」的手动检查覆盖。
+#[cfg(target_os = "linux")]
+fn paste_prepare_check() -> CheckResult {
+    use flashcast_platform::linux::{LinuxPaster, WAYLAND_PASTE_REASON};
+
+    let paster = LinuxPaster::new();
+    let session = paster.session();
+    let xtest = flashcast_platform::linux::x11::xtest_available();
+    let command = "cargo run -p flashcast-platform --bin flashcast-platform-check";
+    let detail = format!(
+        "会话={}，XTEST={}，注入后端={}；未注入真实按键（会打到当前前台窗口）",
+        session.label_zh(),
+        xtest,
+        if paster.uses_x11() {
+            "X11/XTEST"
+        } else {
+            "不可用"
+        },
+    );
+    let (status, detail) = if !paster.uses_x11() {
+        (
+            Status::NotCovered,
+            format!("{detail}；{WAYLAND_PASTE_REASON}"),
+        )
+    } else if xtest {
+        (Status::MeasuredPass, detail)
+    } else {
+        (Status::MeasuredFail, detail)
+    };
+    CheckResult {
+        id: "paste.prepare",
+        title: "自动粘贴前置条件（XTEST / 会话类型）",
+        status,
+        detail,
+        command: command.to_string(),
+    }
+}
+
 /// 真实 `RegisterHotKey`、真实焦点读写），并按「实测通过 / 实测失败 / 未覆盖」如实
 /// 报告。id 与 Linux 侧对齐，另外补上 Windows 独有的 `apps.launch`、`focus.restore`
 /// 与 `win.shell`。
@@ -411,6 +656,24 @@ fn windows_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
         "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json".to_string();
     let desktop = session::desktop_session();
     let mut checks = Vec::new();
+
+    // 0. 自动粘贴前置条件（ticket 08）：SendInput 的实现随应用编译进来；本检查
+    // **不**注入真实按键（盲发一次 Ctrl+V 会往当前前台窗口粘贴用户剪贴板内容），
+    // 因此端到端粘贴在 Windows 上属于「未覆盖」，需要对准目标应用手动验证。
+    checks.push(CheckResult {
+        id: "paste.prepare",
+        title: "自动粘贴前置条件（SendInput）",
+        status: if capabilities.auto_paste.is_supported() {
+            Status::NotCovered
+        } else {
+            Status::MeasuredFail
+        },
+        detail: format!(
+            "注入后端=SendInput（Ctrl+V，带 dwExtraInfo 标记），能力={}；             本检查不注入真实按键，端到端粘贴未覆盖（受 UIPI 限制，管理员窗口收不到）",
+            capabilities.auto_paste.label_zh()
+        ),
+        command: command.clone(),
+    });
 
     // 1. 会话判定：Windows 上不存在 X11/Wayland 分类，探测本身总能给出确定答案。
     checks.push(CheckResult {
@@ -432,7 +695,13 @@ fn windows_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
     let with_icons = outcome
         .entries
         .iter()
-        .filter(|entry| entry.icon.as_ref().and_then(|icon| icon.path.as_ref()).is_some())
+        .filter(|entry| {
+            entry
+                .icon
+                .as_ref()
+                .and_then(|icon| icon.path.as_ref())
+                .is_some()
+        })
         .count();
     let (status, detail) = if outcome.start_menu_roots_present == 0
         && outcome.registry_keys_seen == 0
@@ -487,8 +756,8 @@ fn windows_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
 
     // 3. 真实启动：一个有效目标必须成功，一个失效目标必须报错（绝不静默成功）。
     let launcher = WindowsLauncher::new();
-    let comspec = std::env::var("ComSpec")
-        .unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string());
+    let comspec =
+        std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string());
     let positive = launcher.launch(&LaunchRequest::new(comspec.clone()).with_args(["/c", "exit"]));
     let missing = r"C:\Flashcast\definitely-missing\nope.exe";
     let negative = launcher.launch(&LaunchRequest::new(missing));
@@ -562,7 +831,10 @@ fn windows_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
                 id: "focus.restore",
                 title: "把焦点还给唤起前应用",
                 status: Status::MeasuredPass,
-                detail: format!("ShowWindow(SW_RESTORE)+SetForegroundWindow 把焦点还给 {} 并在回读校验中一致", app.name),
+                detail: format!(
+                    "ShowWindow(SW_RESTORE)+SetForegroundWindow 把焦点还给 {} 并在回读校验中一致",
+                    app.name
+                ),
                 command: command.clone(),
             },
             Err(error) => CheckResult {
@@ -711,10 +983,23 @@ fn windows_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
     checks
 }
 
-fn print_human(capabilities: &flashcast_platform::capability::Capabilities, checks: &[CheckResult]) {
-    println!("Flashcast v{} 平台能力检查（真实环境）", env!("CARGO_PKG_VERSION"));
+fn print_human(
+    capabilities: &flashcast_platform::capability::Capabilities,
+    checks: &[CheckResult],
+) {
+    println!(
+        "Flashcast v{} 平台能力检查（真实环境）",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("==================================================");
-    println!("系统：{} {}", capabilities.os.as_str(), capabilities.os_version.clone().unwrap_or_else(|| "<未知>".to_string()));
+    println!(
+        "系统：{} {}",
+        capabilities.os.as_str(),
+        capabilities
+            .os_version
+            .clone()
+            .unwrap_or_else(|| "<未知>".to_string())
+    );
     println!("架构：{}", capabilities.arch);
     println!("会话：{}", capabilities.session.label_zh());
     println!("桌面可用：{}", capabilities.desktop_available);
@@ -857,15 +1142,24 @@ fn print_json(
     out.push_str("  \"summary\": {\n");
     out.push_str(&format!(
         "    \"measuredPass\": {},\n",
-        checks.iter().filter(|c| c.status == Status::MeasuredPass).count()
+        checks
+            .iter()
+            .filter(|c| c.status == Status::MeasuredPass)
+            .count()
     ));
     out.push_str(&format!(
         "    \"measuredFail\": {},\n",
-        checks.iter().filter(|c| c.status == Status::MeasuredFail).count()
+        checks
+            .iter()
+            .filter(|c| c.status == Status::MeasuredFail)
+            .count()
     ));
     out.push_str(&format!(
         "    \"notCovered\": {}\n",
-        checks.iter().filter(|c| c.status == Status::NotCovered).count()
+        checks
+            .iter()
+            .filter(|c| c.status == Status::NotCovered)
+            .count()
     ));
     out.push_str("  },\n");
     out.push_str(&format!(
@@ -903,7 +1197,6 @@ fn compile_command() -> String {
     }
 }
 
-
 /// macOS 真实检查（ticket 03）。
 ///
 /// 每一项都调用真实的 macOS 实现：目录遍历与 `Info.plist` 解析、`NSWorkspace`
@@ -916,9 +1209,8 @@ fn compile_command() -> String {
 fn macos_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
     let mut checks = Vec::new();
     let plain = || "cargo run -p flashcast-platform --bin flashcast-platform-check".to_string();
-    let json = || {
-        "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json".to_string()
-    };
+    let json =
+        || "cargo run -p flashcast-platform --bin flashcast-platform-check -- --json".to_string();
 
     // 2. 桌面会话可用性。macOS 没有 X11/Wayland 会话区分。
     checks.push(CheckResult {
@@ -1088,35 +1380,51 @@ fn macos_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
         command: plain(),
     });
 
+    // 6b. 自动粘贴前置条件（ticket 08）：只核对权限与后端，不注入真实按键——
+    // 盲发一次 Cmd+V 会往当前前台应用里粘贴用户剪贴板里的任意内容。
+    let paster = flashcast_platform::macos::paste::MacosPaster::new();
+    checks.push(CheckResult {
+        id: "paste.prepare",
+        title: "自动粘贴前置条件（辅助功能权限 / CGEvent）",
+        status: if granted { Status::MeasuredPass } else { Status::NotCovered },
+        detail: format!(
+            "注入后端=CGEvent（Cmd+V），权限={}；未注入真实按键，端到端粘贴需要对准目标应用手动验证",
+            if paster.accessible() { "已授权" } else { "未授权" }
+        ),
+        command: plain(),
+    });
+
     // 7. 全局快捷键注册：真实的 Carbon RegisterEventHotKey 注册 + 注销。
     let hotkeys = MacosHotkeyManager::new();
     let spec = MacosHotkeySpec::parse("Ctrl+Alt+F12").expect("固定检查用快捷键必须可解析");
-    checks.push(match MacosHotkeyManagerTrait::register(&hotkeys, &spec, MacosArc::new(|| {})) {
-        Ok(handle) => {
-            let _ = MacosHotkeyManagerTrait::unregister(&hotkeys, &handle);
-            CheckResult {
+    checks.push(
+        match MacosHotkeyManagerTrait::register(&hotkeys, &spec, MacosArc::new(|| {})) {
+            Ok(handle) => {
+                let _ = MacosHotkeyManagerTrait::unregister(&hotkeys, &handle);
+                CheckResult {
+                    id: "hotkey.register",
+                    title: "全局快捷键注册",
+                    status: Status::MeasuredPass,
+                    detail: format!("注册并注销 {} 成功", spec.canonical()),
+                    command: plain(),
+                }
+            }
+            Err(MacosHotkeyError::BackendUnavailable { reason }) => CheckResult {
                 id: "hotkey.register",
                 title: "全局快捷键注册",
-                status: Status::MeasuredPass,
-                detail: format!("注册并注销 {} 成功", spec.canonical()),
+                status: Status::NotCovered,
+                detail: reason,
                 command: plain(),
-            }
-        }
-        Err(MacosHotkeyError::BackendUnavailable { reason }) => CheckResult {
-            id: "hotkey.register",
-            title: "全局快捷键注册",
-            status: Status::NotCovered,
-            detail: reason,
-            command: plain(),
+            },
+            Err(error) => CheckResult {
+                id: "hotkey.register",
+                title: "全局快捷键注册",
+                status: Status::MeasuredFail,
+                detail: error.to_string(),
+                command: plain(),
+            },
         },
-        Err(error) => CheckResult {
-            id: "hotkey.register",
-            title: "全局快捷键注册",
-            status: Status::MeasuredFail,
-            detail: error.to_string(),
-            command: plain(),
-        },
-    });
+    );
 
     // 8. 剪贴板与自动粘贴：适配由 ticket 08/09/10 提供，这里只报告真实前提。
     for (id, title, support) in [
