@@ -1210,16 +1210,21 @@ pub(crate) fn write_with_tool(
         .map_err(|error| {
             ClipboardError::Failed(format!("无法启动 {}：{error}", program.display()))
         })?;
-    {
+    // 标准输入写入失败（典型是工具没读完输入就退出，写端拿到 EPIPE）**不立刻返回**：
+    // 工具自己的标准错误与退出状态才是可执行的原因。ticket 18 在 Linux runner 上实测到
+    // `sh -c 'echo boom >&2; exit 3'` 会随机命中 EPIPE，把「boom」盖成「Broken pipe」；
+    // 于是先记下写入错误，等拿到退出状态后再决定用哪条原因：工具失败时以工具的原因优先，
+    // 工具成功却没能写完输入时仍然算失败（内容没有完整交给工具）。
+    let write_error = {
         let stdin = child
             .stdin
             .as_mut()
             .ok_or_else(|| ClipboardError::Failed("无法写入剪贴板工具的标准输入".to_string()))?;
         stdin
             .write_all(text.as_bytes())
-            .map_err(|error| ClipboardError::Failed(format!("写入剪贴板失败：{error}")))?;
-    }
-    // 关闭标准输入（drop 掉句柄）后再等待，工具才知道内容已经结束。
+            .err()
+            .map(|error| format!("写入剪贴板失败：{error}"))
+    };
     drop(child.stdin.take());
     let stderr = child.stderr.take();
     let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
@@ -1262,6 +1267,9 @@ pub(crate) fn write_with_tool(
         } else {
             format!("剪贴板工具 {} 失败：{stderr}", program.display())
         }));
+    }
+    if let Some(error) = write_error {
+        return Err(ClipboardError::Failed(error));
     }
     Ok(())
 }
@@ -1307,15 +1315,18 @@ pub(crate) fn write_bytes_with_tool(
         .map_err(|error| {
             ClipboardError::Failed(format!("无法启动 {}：{error}", program.display()))
         })?;
-    {
+    // 与 [`write_with_tool`] 同一套原因优先级：工具没读完输入就退出时（EPIPE）不能让
+    // 低层写入错误盖住工具自己的标准错误。
+    let write_error = {
         let stdin = child
             .stdin
             .as_mut()
             .ok_or_else(|| ClipboardError::Failed("无法写入剪贴板工具的标准输入".to_string()))?;
         stdin
             .write_all(bytes)
-            .map_err(|error| ClipboardError::Failed(format!("写入剪贴板失败：{error}")))?;
-    }
+            .err()
+            .map(|error| format!("写入剪贴板失败：{error}"))
+    };
     drop(child.stdin.take());
     let stderr = child.stderr.take();
     let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
@@ -1356,6 +1367,9 @@ pub(crate) fn write_bytes_with_tool(
         } else {
             format!("剪贴板工具 {} 失败：{stderr}", program.display())
         }));
+    }
+    if let Some(error) = write_error {
+        return Err(ClipboardError::Failed(error));
     }
     Ok(())
 }
@@ -1622,12 +1636,19 @@ mod tests {
     /// 持有者继承了标准错误管道，管道写端不关闭，`join` 读取线程永远不返回——
     /// 于是在真实 Wayland 桌面上「回车粘贴」会永久挂住。`sh` 的 `sleep 30 &` 精确复现
     /// 了「父进程退出、子进程持有管道」这一形状，不依赖任何平台替身。
+    ///
+    /// 脚本开头先 `cat >/dev/null` 读完标准输入：否则工具可能在父进程写完之前就退出，
+    /// 写入端拿到 EPIPE，这条用例就会随机失败（ticket 18 在 Linux runner 上实测到过）。
+    /// 「工具没读完就退出」本身应当报错，那由 `write_error` 分支覆盖，不该混进这条形状里。
     #[test]
     fn forked_daemon_holding_the_pipe_does_not_hang_the_writer() {
         let started = Instant::now();
         let result = write_with_tool(
             Path::new("/bin/sh"),
-            &["-c", "echo diagnostic >&2; sleep 30 & exit 0"],
+            &[
+                "-c",
+                "cat >/dev/null; echo diagnostic >&2; sleep 30 & exit 0",
+            ],
             "正文",
         );
         let elapsed = started.elapsed();
@@ -1639,6 +1660,10 @@ mod tests {
     }
 
     /// 修复不能丢掉诊断信息：失败工具的标准错误仍然要出现在中文原因里。
+    ///
+    /// 这条脚本**不读标准输入**，所以「父进程写完标准输入」与「工具已经退出」是竞态：
+    /// 慢的一方会看到 EPIPE。两种时序都必须报出工具自己的 `boom`，而不是低层的
+    /// 「Broken pipe」——原因优先级由 `write_error` 与退出状态的先后决定。
     #[test]
     fn failing_tool_still_reports_its_stderr() {
         let result = write_with_tool(
@@ -1650,6 +1675,30 @@ mod tests {
         assert!(
             error.to_string().contains("boom"),
             "必须带上工具的标准错误：{error}"
+        );
+    }
+
+    /// 工具在读完输入前就关掉标准输入时，父进程的写入端会拿到 EPIPE：中文原因仍然必须
+    /// 是工具自己的标准错误，而不是低层的「Broken pipe」。
+    ///
+    /// `exec 0<&-` 让唯一的读端在写入之前就关闭，因此这是**确定性**的 EPIPE，不靠时序；
+    /// 上一条用例在 Linux runner 上就是以竞态的形式随机命中这个分支的（ticket 18）。
+    #[test]
+    fn stdin_broken_pipe_does_not_mask_the_tool_stderr() {
+        let result = write_with_tool(
+            Path::new("/bin/sh"),
+            &["-c", "exec 0<&-; echo boom >&2; exit 3"],
+            "正文",
+        );
+        let error = result.expect_err("工具没读完输入并失败时必须报错");
+        let message = error.to_string();
+        assert!(
+            message.contains("boom"),
+            "必须以工具的标准错误为准：{message}"
+        );
+        assert!(
+            !message.contains("Broken pipe"),
+            "不能让低层写入错误盖住工具原因：{message}"
         );
     }
 
