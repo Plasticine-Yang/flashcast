@@ -152,3 +152,12 @@ HTML/RTF 的条目（载荷含 `<script>` / 远端 `<img onerror>`），但不�
 4. Windows 真机上 `CF_HTML` / `Rich Text Format` 是否被 Word / 写字板正确识别（这是本 ticket
    唯一声称「一次提供多种格式」的平台）。
 5. 复制一段含 `<script>` / 远端图片的富文本后，预览区不执行脚本、不请求远端资源。
+
+- 2026-10-01（ticket 17 更正本 ticket 的过期结论）：下面「真实 Wayland 剪贴板上的富文本读取与
+  监听：未覆盖」以及「降级结论未在真实选区上实测」**已经被推翻**。原因是平台层
+  `write_with_tool` 在工具成功退出后无条件 `join` 标准错误读取线程，`wl-copy` fork 出的选区
+  持有者继承管道导致永久挂起，于是把适配层缺陷误判成「环境拿不到选区」。修复后（提交 `7bc2ed2`）
+  本机 Wayland 上 `clipboard.rich` 为**实测通过**，并且实测确认了本 ticket 声称的降级结论：
+  「实际提供：文字；未提供：HTML、RTF（wl-copy 一次只能提供一种 MIME 类型）」，恢复时只提供
+  纯文本，富文本载荷仍保存在本机历史里。仍然未覆盖：Windows 真机上 Word / 写字板对
+  `CF_HTML` / `Rich Text Format` 的识别、真实桌面上目标应用端到端富文本粘贴。

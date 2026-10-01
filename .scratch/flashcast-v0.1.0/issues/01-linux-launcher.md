@@ -8,7 +8,7 @@ Category: enhancement
 Blocked by: None (can start immediately)
 
 - [x] 提供可运行的桌面应用，默认首屏为紧凑搜索列表，软件名称与图标可辨识，空查询有快速访问项。
-- [ ] 发现当前 Linux 环境的软件，支持搜索、方向键选择、回车启动、重新扫描和失败反馈。
+- [x] 发现当前 Linux 环境的软件，支持搜索、方向键选择、回车启动、重新扫描和失败反馈。
 - [ ] 快捷键可配置，唤起即进入输入状态；冲突或环境不支持时提供明确反馈及托盘或应用菜单入口。
 - [x] 唤起、关闭、键盘选择与结果更新无动画；中文输入法确认不误执行，旧查询结果不会覆盖新查询，鼠标移动不抢走键盘选择。
 - [x] 保存唤起前应用的身份，明确本地实际 X11/Wayland 会话类型；记录通过与无法覆盖的系统能力。
@@ -60,3 +60,16 @@ Blocked by: None (can start immediately)
   - 托盘图标取自 `default_window_icon()`（即 32x32.png）；如需托盘专用图标，在 `tray::create` 里改用 `include_image!`。
   - `artifacts/` 已 gitignore；`artifacts/ui/`、`artifacts/platform-check-linux-x64.{log,json}` 是本次的证据，不入库。
   - 本次提交：`01e434a`、`4a0bde3`、`c6a5918`、`bd518e3`、`78533d2`、`d75e9f5`、`0c4fff7`、`83f0049`（均为中文提交说明）。
+
+- 2026-10-01（ticket 17 更正本 ticket 的一处过期结论）：上面「真实软件启动：没有真的拉起过一个桌面软件」已经不成立，**第 2 个复选框现在按真实证据勾选**。ticket 17 新增 `crates/flashcast-core/tests/real_linux_desktop.rs`（默认 `#[ignore]`），用 `flashcast_platform::current()` 的真实适配器组装宿主，从宿主查询入口查到真实条目 `org.gnome.Calculator.desktop`，再用 `Host::execute`（等价回车）启动它，并在 `/proc` 里真的看到 `gnome-calculator` 进程出现、随后 SIGTERM 结束：
+
+  ```text
+  cargo test -p flashcast-core --test real_linux_desktop -- --ignored --nocapture --test-threads=1
+  → 真实进程出现：pid=926013（这证明回车真的启动了这个软件）
+  → 已结束 pid=926013；真实启动验收完成          # 3 passed / 0 failed
+  ```
+
+  日志：`artifacts/platform-check/17-real-desktop-acceptance.log`（artifacts/ 不入库）。
+  第 3 个复选框（全局快捷键）**仍然未勾选**：Wayland 下 `hotkey.register` 仍是未覆盖；
+  在 XWayland 下注册返回实测通过，但那不证明原生 Wayland 客户端收得到按键，见
+  `docs/platform/capability-report.md` 的按项结论。

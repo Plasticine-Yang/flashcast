@@ -236,3 +236,12 @@ CARGO_TARGET_DIR=$HOME/.cache/flashcast/xcheck/12-macos \
 - `pnpm ui-check` → **64 通过 / 0 失败**，含图片、富文本与文件三类检查。
 - 交叉目标：`x86_64-pc-windows-msvc` 与 `x86_64-apple-darwin` 的
   `cargo check -p flashcast-platform --all-targets` 均 0 error。
+
+- 2026-10-01（ticket 17 更正本 ticket 的过期结论）：下面「真实 Wayland 剪贴板上的文件列表读写
+  与恢复：未覆盖，ticket 17 必须在真实桌面确认」**已经完成，且结论与当时的预期相反**。
+  原因同样是平台层缺陷：`write_with_tool` 在工具成功退出后无条件 `join` 标准错误读取线程，
+  `wl-copy` fork 出的选区持有者继承管道导致永久挂起。修复后（提交 `7bc2ed2`）本机 Wayland 上
+  `clipboard.files` 为**实测通过**，并且覆盖了本 ticket 要求的难例：
+  「写入 2 个文件后读回 2 个。写=/tmp/…/flashcast 报告.txt、/tmp/…/中文 名称.txt；
+  读=…」——带空格与非 ASCII 名称的路径逐项一致。仍然未覆盖：Windows `CF_HDROP` 与 macOS
+  AppleScript 的文件列表真实读写（本机无法执行）。

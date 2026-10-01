@@ -206,3 +206,21 @@ Blocked by: 02, 03, 07
     重新查询的逻辑只针对 `command` 条目，剪贴板条目不受影响。
   - 注意每个条目的 `default_action` 必须是 `Paste`，且 `PastePlan.label` 要是人能看懂的摘要
     （粘贴成功/降级反馈都会用它）。
+
+- 2026-10-01（ticket 17 更正本 ticket 的过期结论）：上面「真实写入系统剪贴板并回读 → 未覆盖
+  （wl-copy 拿不到选区）」是**误判**，原因是平台层缺陷而不是环境限制。ticket 17 实测发现
+  `write_with_tool` / `write_bytes_with_tool` 在子进程成功退出后无条件 `join` 标准错误读取
+  线程，而 `wl-copy` fork 出的选区持有者继承了同一个管道，写端永不关闭，于是永久挂起
+  （`printf x | wl-copy 2>&1 | cat` 永不返回，而 `printf x | wl-copy` 立刻以 0 退出）。
+  修复该缺陷后（提交 `7bc2ed2`），本机 Wayland 上：
+
+  - `flashcast-platform-check --allow-clipboard-write` → **实测通过 9 / 实测失败 1 / 未覆盖 4**，
+    `clipboard.write_text`、`clipboard.watch`、`clipboard.rich`、`clipboard.image`、
+    `clipboard.files` 全部实测通过；
+  - 真实宿主入口（真实工作区 + 真实剪贴板）执行备忘录标签粘贴 →
+    `CopiedNeedsManualPaste`「已复制「验收备忘录」到剪贴板；没有记录到唤起前的应用，
+    无法确定粘贴目标；请切换到目标应用后按 Ctrl+V 手动粘贴」（0.60 秒返回，修复前是永久挂起）。
+
+  仍然未覆盖的部分没有变：Wayland 下**自动粘贴本身**不可用（没有 XDG RemoteDesktop 门户授权），
+  真实目标应用里收到的内容、以及真实桌面上的快捷键/焦点仍未验证。详见
+  `docs/platform/capability-report.md`。

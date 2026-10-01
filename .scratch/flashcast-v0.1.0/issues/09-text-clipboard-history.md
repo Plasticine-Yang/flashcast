@@ -108,3 +108,11 @@ schema 从本 ticket 起就是完整的：tickets 10（图片）、11（HTML/RTF
   真实适配层上观察到的是「第二次不产生变化」，与去重结果一致但不是同一条路径。
 - **UI 未做真机粘贴核对。** `pnpm ui-check` 只驱动浏览器里的模拟宿主，不代表 Tauri 托盘、
   全局快捷键、自动粘贴或真实软件启动可用；真正的目标应用粘贴仍需手动检查。
+
+- 2026-10-01（ticket 17 更正本 ticket 的过期结论）：下面「真实 Wayland 剪贴板读写与监听：
+  未覆盖（wl-copy 拿不到选区 / 自动化会话没有选区持有者）」是**误判**，真实原因是一个平台层
+  缺陷：`write_with_tool` 在子进程成功退出后无条件 `join` 标准错误读取线程，而 `wl-copy`
+  fork 出的选区持有者继承了同一个管道，`join` 永久挂起。修复后（提交 `7bc2ed2`）本机 Wayland 上
+  `clipboard.write_text`（写入并由 `LinuxClipboardWatcher` 读回同一段文本）与 `clipboard.watch`
+  都是**实测通过**，平台检查总览从 4 通过 / 9 未覆盖变为 **9 通过 / 1 失败 / 4 未覆盖**。
+  仍然成立的部分：Windows / macOS 的真实剪贴板读写、X11 下的来源应用推导仍未覆盖。
