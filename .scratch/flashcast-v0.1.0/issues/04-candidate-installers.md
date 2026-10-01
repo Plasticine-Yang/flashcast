@@ -130,3 +130,10 @@ Blocked by: 01
   - 若届时提供凭证：macOS 应为 `Developer ID Application` + `stapler validate` 通过 + `spctl` 接受；Windows 应为 `Authenticode Valid`。
 
   **本次提交**：`c97cd40`、`e9d0a66`（本地依赖前缀可打包）、`e4a7328`（新增 bundle/checksums job 与检查脚本）、`48b009f`、`ae801f8`（检查脚本修正）、`46aed9b`（合并 `feat/flashcast-v0.1.0` tip `4b6f76b`）、`39177f3`（ticket 置 done），以及一条「修复(CI)：修掉真实运行暴露的校验和与 Windows 签名检查问题」（记录本次 CI 结果并修 `verify-sha256sums.sh` 的相对输出路径、Windows Authenticode 的路径形式）。均为中文提交说明，未 push、未打 tag、未创建 Release。
+
+- 2026-10-01（集成后复核）：把 ticket 04 合并进 `feat/flashcast-v0.1.0` 后，CI 运行 `36785786369`（提交 `d4e75a9`）**11 个任务全部 success**，两个遗留问题都在真 runner 上得到确认：
+  - `flashcast-sha256sums` artifact 中确实出现了 `SHA256SUMS.txt`（5 行，覆盖 AppImage / deb / exe / 两份 dmg），并且 `sha256-report.txt` 显示四个平台各自的 `SHA256SUMS-<slug>.txt` 与汇总文件**逐个一致**。原先「写到 artifacts/artifacts/」的缺陷已确认修复。
+  - Windows 的签名项已从「未覆盖」变为 **未签名 + SmartScreen 说明**：`installer-check-windows-x64.json` 的 `signing` 写明「没有提供 Windows 代码签名证书……用户需选择「更多信息 → 仍要运行」」，同时 `installer.version_consistent` / `installer.nsis.present` / `installer.nsis.install` 均为实测通过。
+  - 四个打包任务（Linux AppImage+deb、Windows NSIS exe、macOS arm64 dmg、macOS x64 dmg）与 `SHA256 校验和` 在同一运行中全部通过。
+  - 一并修复的构建问题：macOS 的 x86_64 是在 arm64 runner 上交叉编译的，`git2` 的 `https` 会拉入 `openssl-sys`，那里只有 arm64 的 Homebrew OpenSSL；现改为 `vendored-openssl` 并为两条 macOS 交叉腿显式导出 `CC/CFLAGS` 的 `-arch x86_64`（verify 矩阵与 bundle 任务都加了）。Windows 侧同时断言 Perl 与 NASM 存在。
+  - 注意：`gh run download -n flashcast-sha256sums` 会报 `would result in path traversal`，需用 API 下载该 artifact 的 zip；ticket 18 直接上传产物而不经此路径即可。
