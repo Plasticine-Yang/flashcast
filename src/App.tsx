@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api";
+import { api, isBrowserMock } from "./api";
 import type {
   ActionOutcome,
   Appearance,
@@ -840,9 +840,38 @@ export default function App() {
     // 这里只显示反馈、不隐藏（真实外壳在关窗后会以最终状态更新同一块反馈区）。
   };
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+  /**
+   * 搜索界面的键盘入口：挂在 `window` 上，**不是**挂在输入框上。
+   *
+   * 鼠标点过任何一行之后焦点就落到 body（结果行不可聚焦），这时绑在输入框上的
+   * `onKeyDown` 不会再触发——↑↓ 选择、Enter 执行、Escape 关闭会一起失效，而这是
+   * 键盘优先的启动器最不该发生的事。设置页早就因为同样的原因把 Escape 挂到了
+   * `window` 上（见 `SettingsScreen` 里的注释），这里与它保持一致。
+   *
+   * 处理函数存在 ref 里：监听器只订阅一次，不会因为每次按键都重挂。
+   */
+  const keyHandlerRef = useRef<(event: KeyboardEvent) => void>(() => {});
+  keyHandlerRef.current = (event: KeyboardEvent) => {
     // 中文输入法组合期间不执行、不移动选择：回车是确认候选词。
-    if (composingRef.current || event.nativeEvent.isComposing || composing) {
+    if (composingRef.current || event.isComposing || composing) {
+      return;
+    }
+    // 设置页有自己的 window 级 Escape（返回搜索首屏），这里完全不接管。
+    if (screen !== "search") {
+      return;
+    }
+    // Ctrl+, 打开设置（与常见桌面应用一致）。
+    if (event.ctrlKey && event.key === ",") {
+      event.preventDefault();
+      openSettings();
+      return;
+    }
+    const target = event.target as HTMLElement | null;
+    // 除搜索框以外的可编辑控件自己处理按键（设置页的路径、正文等，搜索页目前没有）。
+    const editable =
+      target !== null &&
+      (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable);
+    if (editable && target !== inputRef.current) {
       return;
     }
     switch (event.key) {
@@ -855,6 +884,10 @@ export default function App() {
         void api.move_selection(-1).then(apply);
         break;
       case "Enter": {
+        // 焦点在按钮上时 Enter 是原生的「按下这个按钮」，不要再执行选中的结果。
+        if (target?.closest("button, a, [role='button']") != null) {
+          break;
+        }
         event.preventDefault();
         const item = response.items[response.selection];
         if (item) {
@@ -867,18 +900,16 @@ export default function App() {
         void handleEscape();
         break;
       }
-      case ",": {
-        // Ctrl+, 打开设置（与常见桌面应用一致）。
-        if (event.ctrlKey) {
-          event.preventDefault();
-          openSettings();
-        }
-        break;
-      }
       default:
         break;
     }
   };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => keyHandlerRef.current(event);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const handleEscape = async () => {
     // 优先级：关闭菜单 → 返回上一查询范围 → 关闭窗口。
@@ -943,6 +974,7 @@ export default function App() {
     >
       <header className="search-row">
         <input
+          ref={inputRef}
           id="search-input"
           data-testid="search-input"
           className="search-input"
@@ -956,7 +988,6 @@ export default function App() {
           aria-controls="result-list"
           aria-activedescendant={selected ? `item-${selected.id}` : undefined}
           onChange={(event) => runQuery(event.target.value)}
-          onKeyDown={handleKeyDown}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onCompositionStart={() => {
@@ -1063,6 +1094,20 @@ export default function App() {
           <ActionBar selected={selected} count={response.items.length} />
         </>
       )}
+
+      {isBrowserMock ? (
+        /* 只在浏览器替身里渲染（Tauri 内 `isBrowserMock` 为 false）。
+           真实外壳在启动软件后关窗，用户靠全局快捷键或托盘再唤起；浏览器里没有唤回
+           入口，窗口一旦隐藏就是一整页空白。这里留一条可发现的回程，方便手动检查。 */
+        <button
+          type="button"
+          className="browser-recall"
+          data-testid="browser-recall"
+          onClick={() => window.__flashcastMock?.summon()}
+        >
+          模拟全局快捷键：唤起窗口
+        </button>
+      ) : null}
     </div>
   );
 }

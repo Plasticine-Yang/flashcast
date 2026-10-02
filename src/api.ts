@@ -1499,6 +1499,28 @@ class MockHost implements HostApi {
       this.hidden = true;
       return { status: "done", message: `已粘贴「${memo.title}」到「${target.name}」` };
     }
+    // 宿主对这两条命令都有实现，而且都返回**带反馈的** done（见
+    // `crates/flashcast-core/src/host.rs` 的 `COMMAND_RESCAN` / `COMMAND_CAPABILITIES`）。
+    // 这里必须照做：落到下面的兜底会变成 done + 无 message，而 UI 把这个组合读成
+    // 「软件启动成功、外壳关窗」——在浏览器里就是点一下整页变白。
+    if (itemId === "flashcast.command.rescan") {
+      const response = await this.rescan();
+      return {
+        status: "done",
+        message: `已重新扫描软件列表，当前结果 ${response.items.length} 条`,
+      };
+    }
+    if (itemId === "flashcast.command.capabilities") {
+      const capabilities = await this.get_capabilities();
+      // 与设置页的能力区同一口径：未覆盖表示本环境无法判定，不等于不支持。
+      return {
+        status: "done",
+        message:
+          `浏览器模拟宿主：系统 ${capabilities.os} ${capabilities.arch}，` +
+          `会话 ${capabilities.session}；全局快捷键、剪贴板与自动粘贴在本环境未覆盖，` +
+          `不代表真实桌面行为。`,
+      };
+    }
     const app = MOCK_APPS.find((candidate) => itemId === `app:${candidate.id}`);
     if (app?.failsToLaunch) {
       return {
@@ -1506,7 +1528,13 @@ class MockHost implements HostApi {
         message: `无法启动「${app.title}」：浏览器模拟宿主中的失败样例`,
       };
     }
-    return { status: "done", message: null };
+    if (app) {
+      // 启动成功且没有反馈语：外壳负责关窗（浏览器里表现为整页隐藏，由替身入口唤起）。
+      return { status: "done", message: null };
+    }
+    // 与宿主一致：不认识的条目要如实失败。这里**绝不能**返回 done + 无 message，
+    // 那会被 UI 当成一次成功的软件启动。
+    return { status: "failed", message: `未知条目：${itemId}` };
   }
 
   /** 从结果标识还原备忘录（`memo:<id>`）。 */

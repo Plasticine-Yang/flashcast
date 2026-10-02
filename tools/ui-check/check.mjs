@@ -605,6 +605,56 @@ async function main() {
       return `${items.length} 项（${commands} 命令 + ${applications} 软件），截图 ${file}`;
     });
 
+    // 1a. 唤起后输入框自动获得焦点（用户故事 6「窗口打开后立即输入查询」）。
+    //     这条曾经是坏的：`inputRef` 没有绑到输入框上，`focusInput()` 一直在对 null 调
+    //     focus()，因此必须先点一下搜索框才能打字。旧用例都先 page.click(INPUT)，
+    //     所以一直没被发现——这里刻意**不点**输入框，直接打字。
+    await check("唤起后输入框已聚焦，可直接输入", async () => {
+      const focused = await page.evaluate(
+        () => document.activeElement?.getAttribute("data-testid") ?? null,
+      );
+      assert(focused === "search-input", `唤起后焦点不在搜索框：${focused}`);
+      const before = (await rows(page)).length;
+      await page.keyboard.type("终端");
+      await waitForRowCount(page, 1);
+      const items = await rows(page);
+      assert(items[0].title.includes("终端"), `直接输入没有过滤：${items[0]?.title}`);
+      // 复原首屏，避免影响后续用例。
+      await page.keyboard.press("Control+A");
+      await page.keyboard.press("Backspace");
+      await waitForRowCount(page, before);
+      return `activeElement=search-input，未点击即可输入并过滤，已复原 ${before} 项首屏`;
+    });
+
+    // 1b. 首屏命令项：宿主对命令返回的是**带反馈的** done，所以执行后必须给出反馈并且
+    //     不隐藏窗口。这条路径曾经是漏的：模拟宿主落到兜底 done + 无 message，被 UI 读成
+    //     「启动成功、外壳关窗」，在浏览器里点一下整页就变白。
+    await check("执行首屏命令给出反馈且不隐藏窗口", async () => {
+      await page.click('[data-item-id="flashcast.command.rescan"]');
+      await page.waitForSelector(NOTICE);
+      const notice = (await page.textContent(NOTICE))?.trim() ?? "";
+      assert(notice.includes("已重新扫描"), `命令反馈文案不对：${notice}`);
+      const visible = await page.getAttribute(
+        '[data-testid="app-root"]',
+        "data-window-visible",
+      );
+      assert(visible === "true", `执行命令后窗口被隐藏了：${visible}`);
+      const file = await shot(page, "01b-command-feedback.png");
+
+      // 反馈还在时 Escape 只清反馈，不能把窗口关掉（Escape 的优先级）。
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(
+        (selector) => document.querySelector(selector) === null,
+        NOTICE,
+      );
+      const afterEscape = await page.getAttribute(
+        '[data-testid="app-root"]',
+        "data-window-visible",
+      );
+      assert(afterEscape === "true", `清反馈时窗口被关闭了：${afterEscape}`);
+      return `反馈「${notice}」且窗口保持可见；Escape 只清反馈，截图 ${file}`;
+    });
+
     // 2. 输入过滤列表。
     await check("输入过滤列表", async () => {
       const before = (await rows(page)).length;

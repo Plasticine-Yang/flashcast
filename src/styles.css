@@ -5,8 +5,7 @@
  * - 窗口基准宽约 640px，约 14px 圆角，中性背景、细边框、轻阴影；
  * - 搜索输入约 16px；结果列表标题 15px/500、副标题 12px，行高 48px、图标 30px
  *   （窗口很矮时收敛回 44px / 24px）；其余正文约 14px，辅助信息约 12px；
- * - 焦点由窗口表达（`.app[data-screen="search"][data-focused="true"]`），搜索输入框行内
- *   不画焦点环；
+ * - 焦点由窗口表达（`.app[data-screen="search"]`），搜索输入框行内不画焦点环；
  * - 唤起、关闭、键盘选择、查询更新**无动画**：这些元素统一 `transition: none`；
  * - 选中、焦点与错误状态视觉可区分；
  * - 低分辨率与系统缩放下保持可用（列表滚动，极小高度下压缩内边距）。
@@ -115,19 +114,55 @@ body {
 }
 
 /*
+ * 浏览器替身专用（只有 `isBrowserMock` 时才渲染这个按钮）。
+ *
+ * 真实外壳在启动软件后关窗，用户靠全局快捷键或托盘再唤起；浏览器里没有任何唤回
+ * 入口，窗口一旦隐藏就是一整页空白。这个按钮只在窗口隐藏时出现，给手动检查留一条
+ * 可发现的路。放在 `.app` 内部是为了不改变应用结构，靠 `position: fixed` 与显式的
+ * `visibility: visible` 脱离父元素的隐藏。
+ */
+.browser-recall {
+  display: none;
+}
+
+.app[data-window-visible="false"] .browser-recall {
+  display: block;
+  visibility: visible;
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: var(--fc-font-aux);
+  color: var(--fc-text);
+  background: var(--fc-surface);
+  border: 1px solid var(--fc-border-strong);
+  border-radius: var(--fc-radius-control);
+  box-shadow: var(--fc-shadow-overlay);
+  cursor: pointer;
+}
+
+.browser-recall:focus-visible {
+  outline: 2px solid var(--fc-focus-ring);
+  outline-offset: 2px;
+}
+
+/*
  * 窗口级焦点。
  *
  * 搜索输入框就是这扇窗口的主表面，所以在输入框行内画焦点环看起来像原生 HTML 控件
  * ——一个蓝色方框套在文字上。焦点改由窗口表达：外框拾取强调色，外面再叠一层极轻的
  * 光环。
  *
- * 条件同时要求 `data-screen="search"`：在设置页里搜索行不是焦点表面（而且不同平台
- * 上点按钮是否抢走输入框焦点并不一致），所以光环只在搜索界面出现。设置页里的每个
- * 可聚焦控件仍然保留自己的 `:focus-visible` 焦点环。
+ * 条件只看 `data-screen="search"`，不看输入框是否聚焦：键盘入口挂在 window 上
+ * （见 `App.tsx`），鼠标点过结果行之后焦点会落到 body 但键盘依然可用，此时外框不该
+ * 暗下去。设置页里搜索行不是焦点表面，所以光环只在搜索界面出现；设置页里每个可聚焦
+ * 控件仍然保留自己的 `:focus-visible` 焦点环。
  *
  * 不做过渡：唤起与关闭是最高频的动作，状态必须立刻到位。
  */
-.app[data-screen="search"][data-focused="true"] {
+.app[data-screen="search"] {
   border-color: var(--fc-selection-border);
   box-shadow:
     var(--fc-shadow),
@@ -152,8 +187,7 @@ body {
   font-size: var(--fc-font-input);
   font-family: inherit;
   padding: 4px 2px;
-  /* 焦点状态可辨识，但不用动画；焦点指示由窗口承担，见
-     `.app[data-screen="search"][data-focused="true"]`。 */
+  /* 焦点状态可辨识，但不用动画；焦点指示由窗口承担，见 `.app[data-screen="search"]`。 */
   transition: none;
   caret-color: var(--fc-accent);
 }
