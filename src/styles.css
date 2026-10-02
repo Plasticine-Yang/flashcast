@@ -3,7 +3,7 @@
  *
  * 约定（ADR §7 / spec §Implementation Decisions）：
  * - 窗口基准宽约 640px，约 14px 圆角，中性背景、细边框、轻阴影；
- * - 搜索输入约 16px；结果列表标题 15px/500、副标题 12px，行高 52px、图标 30px
+ * - 搜索输入约 16px；结果列表标题 15px/500、副标题 12px，行高 48px、图标 30px
  *   （窗口很矮时收敛回 44px / 24px）；其余正文约 14px，辅助信息约 12px；
  * - 焦点由窗口表达（`.app[data-screen="search"][data-focused="true"]`），搜索输入框行内
  *   不画焦点环；
@@ -62,8 +62,10 @@
   --fc-row-height: 44px;
   /* 结果列表自己的节奏。这是 UI 自有几何，不是主题令牌：主题的间距与字号是钉死的
      规范值，不允许改布局几何（见 `crates/flashcast-core/src/theme.rs`）。
-     舒展方向：行更高、图标更大，层次靠排版与呼吸感建立，而不是靠容器堆叠。 */
-  --fc-result-row-height: 52px;
+     舒展方向：层次靠排版与呼吸感建立，而不是靠容器堆叠。
+     行高定在 48px：15px 标题 + 12px 副标题约占 42px，再矮就只剩 1px 余量会挤；
+     固定 640x420 的窗口下列表区约 325px，48px + 4px 行距正好完整显示 6 条。 */
+  --fc-result-row-height: 48px;
   --fc-result-row-gap: 14px;
   --fc-result-icon: 30px;
   --fc-result-radius: 10px;
@@ -782,7 +784,9 @@ kbd {
 @media (max-height: 380px) {
   :root {
     --fc-row-height: 36px;
-    /* 舒展方向要在这里收敛：窗口很矮时行高与图标回到接近基线的尺度。 */
+    /* 舒展方向要在这里收敛：窗口很矮时行高与图标回到接近基线的尺度。
+       窗口目前固定 640x420（不可缩放），所以这个分支不会触发，留作窗口尺寸
+       变化时的兜底。 */
     --fc-result-row-height: 44px;
     --fc-result-icon: 24px;
     --fc-result-row-gap: 10px;
