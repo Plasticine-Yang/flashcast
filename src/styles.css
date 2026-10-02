@@ -3,7 +3,10 @@
  *
  * 约定（ADR §7 / spec §Implementation Decisions）：
  * - 窗口基准宽约 640px，约 14px 圆角，中性背景、细边框、轻阴影；
- * - 搜索输入约 16px，正文约 14px，辅助信息约 12px；
+ * - 搜索输入约 16px；结果列表标题 15px/500、副标题 12px，行高 52px、图标 30px
+ *   （窗口很矮时收敛回 44px / 24px）；其余正文约 14px，辅助信息约 12px；
+ * - 焦点由窗口表达（`.app[data-screen="search"][data-focused="true"]`），搜索输入框行内
+ *   不画焦点环；
  * - 唤起、关闭、键盘选择、查询更新**无动画**：这些元素统一 `transition: none`；
  * - 选中、焦点与错误状态视觉可区分；
  * - 低分辨率与系统缩放下保持可用（列表滚动，极小高度下压缩内边距）。
@@ -57,6 +60,13 @@
   --fc-space-row-gap: 10px;
   --fc-space-section-gap: 8px;
   --fc-row-height: 44px;
+  /* 结果列表自己的节奏。这是 UI 自有几何，不是主题令牌：主题的间距与字号是钉死的
+     规范值，不允许改布局几何（见 `crates/flashcast-core/src/theme.rs`）。
+     舒展方向：行更高、图标更大，层次靠排版与呼吸感建立，而不是靠容器堆叠。 */
+  --fc-result-row-height: 52px;
+  --fc-result-row-gap: 14px;
+  --fc-result-icon: 30px;
+  --fc-result-radius: 10px;
 }
 
 * {
@@ -102,6 +112,26 @@ body {
   visibility: hidden;
 }
 
+/*
+ * 窗口级焦点。
+ *
+ * 搜索输入框就是这扇窗口的主表面，所以在输入框行内画焦点环看起来像原生 HTML 控件
+ * ——一个蓝色方框套在文字上。焦点改由窗口表达：外框拾取强调色，外面再叠一层极轻的
+ * 光环。
+ *
+ * 条件同时要求 `data-screen="search"`：在设置页里搜索行不是焦点表面（而且不同平台
+ * 上点按钮是否抢走输入框焦点并不一致），所以光环只在搜索界面出现。设置页里的每个
+ * 可聚焦控件仍然保留自己的 `:focus-visible` 焦点环。
+ *
+ * 不做过渡：唤起与关闭是最高频的动作，状态必须立刻到位。
+ */
+.app[data-screen="search"][data-focused="true"] {
+  border-color: var(--fc-selection-border);
+  box-shadow:
+    var(--fc-shadow),
+    0 0 0 4px var(--fc-selection-bg);
+}
+
 .search-row {
   display: flex;
   align-items: center;
@@ -120,19 +150,18 @@ body {
   font-size: var(--fc-font-input);
   font-family: inherit;
   padding: 4px 2px;
-  /* 焦点状态可辨识，但不用动画。 */
+  /* 焦点状态可辨识，但不用动画；焦点指示由窗口承担，见
+     `.app[data-screen="search"][data-focused="true"]`。 */
   transition: none;
+  caret-color: var(--fc-accent);
 }
 
 .search-input::placeholder {
   color: var(--fc-text-muted);
 }
 
-.search-input:focus-visible {
-  outline: 2px solid var(--fc-focus-ring);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
+/* 这里刻意不画焦点环：行内蓝框看起来像原生控件，与「简约」的窗口表面冲突。
+   输入光标本身是可见的焦点指示，窗口外框同时给出全局的焦点状态。 */
 
 .scope-label {
   flex: none;
@@ -454,7 +483,10 @@ body {
 .result-list {
   list-style: none;
   margin: 0;
-  padding: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   flex: 1 1 auto;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -482,10 +514,10 @@ body {
 .result-item {
   display: flex;
   align-items: center;
-  gap: var(--fc-space-row-gap);
-  min-height: var(--fc-row-height);
-  padding: var(--fc-space-row-padding) 10px;
-  border-radius: var(--fc-radius-item);
+  gap: var(--fc-result-row-gap);
+  min-height: var(--fc-result-row-height);
+  padding: 0 14px;
+  border-radius: var(--fc-result-radius);
   border: 1px solid transparent;
   cursor: default;
   user-select: none;
@@ -510,6 +542,14 @@ body {
   object-fit: contain;
 }
 
+/* 结果列表里的图标跟着舒展方向的节奏放大。缩略图有更具体的规则（`.icon.thumbnail`），
+   它在本规则之后，仍然保持 32px。 */
+.result-item .icon {
+  width: var(--fc-result-icon);
+  height: var(--fc-result-icon);
+  border-radius: 9px;
+}
+
 .icon-fallback {
   display: inline-flex;
   align-items: center;
@@ -532,11 +572,14 @@ body {
 .result-text {
   display: flex;
   flex-direction: column;
+  gap: 3px;
   min-width: 0;
 }
 
 .result-title {
-  font-size: var(--fc-font-body);
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -544,6 +587,7 @@ body {
 
 .result-subtitle {
   font-size: var(--fc-font-aux);
+  letter-spacing: 0.01em;
   color: var(--fc-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -738,6 +782,10 @@ kbd {
 @media (max-height: 380px) {
   :root {
     --fc-row-height: 36px;
+    /* 舒展方向要在这里收敛：窗口很矮时行高与图标回到接近基线的尺度。 */
+    --fc-result-row-height: 44px;
+    --fc-result-icon: 24px;
+    --fc-result-row-gap: 10px;
   }
 
   .search-row {
