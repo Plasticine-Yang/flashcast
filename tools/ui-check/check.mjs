@@ -226,6 +226,26 @@ async function shot(page, name) {
   return name;
 }
 
+/**
+ * 打开设置页的某个区块。
+ *
+ * 设置页从「10 个区块平铺在一个滚动列里」改成「左侧分组目录 + 右侧内容区」之后，同一
+ * 时刻只有当前区块可见（其余是 `hidden`，见 `styles.css` 的 `.settings-body > [hidden]`）。
+ * 所以每个用例都必须先导航到自己要操作的区块，不能再靠「滚下去就能看到」。
+ *
+ * 区块始终留在 DOM 里，所以进入设置页之后只需点一下目录项。
+ */
+async function openSection(page, id) {
+  await page.click(`[data-testid="settings-nav-${id}"]`);
+  await page.waitForFunction(
+    (sectionId) => {
+      const node = document.querySelector(`[data-section="${sectionId}"]`);
+      return node !== null && node.offsetParent !== null;
+    },
+    id,
+  );
+}
+
 /** 读取根元素上一个主题 CSS 自定义属性的当前值。 */
 async function themeVar(page, name) {
   return page.evaluate(
@@ -576,17 +596,20 @@ async function main() {
         })),
       );
 
-    /** 进入设置页并关联浏览器模拟宿主的工作区（每次 goto 后模拟宿主会重置）。 */
+    /** 进入设置页并关联浏览器模拟宿主的工作区（每次 goto 后模拟宿主会重置）。
+     *  结束时停在「配置工作区」区块，调用方若要操作别的区块需自行 `openSection`。 */
     const linkMockWorkspace = async () => {
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "workspace");
       await page.fill(WORKSPACE_PATH_INPUT, MOCK_REPO);
       await page.click('[data-testid="workspace-select"]');
       await page.waitForFunction(
         ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
         { sel: WORKSPACE_VALIDITY, expected: "已关联 Git 仓库" },
       );
-      await page.waitForSelector(CHANGE_ROW);
+      // 变更行现在属于「变更与提交」区块（隐藏时仍在 DOM 里），所以只等它出现、不等它可见。
+      await page.waitForSelector(CHANGE_ROW, { state: "attached" });
     };
 
     // 1. 空查询显示快速访问项。
@@ -808,6 +831,7 @@ async function main() {
       await page.waitForSelector(ROW);
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "workspace");
 
       const before = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
       assert(
@@ -880,6 +904,7 @@ async function main() {
 
     // 10. 编辑快捷键：立即生效；无效写法被拒绝并保留上次有效值。
     await check("修改快捷键立即生效，无效写法被拒绝", async () => {
+      await openSection(page, "hotkey");
       await page.fill(HOTKEY_INPUT, "Ctrl+Shift+F1");
       await page.click('[data-testid="hotkey-save"]');
       await page.waitForFunction(
@@ -949,6 +974,7 @@ async function main() {
       // 上一项检查用 Escape 回到了首屏，这里重新进入设置页。
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "workspace");
       const before = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
       await page.fill(WORKSPACE_PATH_INPUT, MOCK_CLONE_TARGET);
       await page.fill(CLONE_URL_INPUT, MOCK_CLONE_URL);
@@ -1059,24 +1085,21 @@ async function main() {
     });
 
     // 12. 真实窗口尺寸（640×420）下设置页仍可操作。
+    //
+    // 设置页改成侧栏之后，「滚下去就能看到下一个区块」不再成立，所以这个用例改成逐个
+    // 导航到区块再断言控件可见、且不超出真实窗口宽度；顺带把新外壳的主要收益
+    // ——「10 个区块在侧栏里一屏内全部可见」——钉住。
     await check("设置页在 640×420 窗口内可操作", async () => {
       await page.setViewportSize({ width: 640, height: 420 });
-      await page.click(SETTINGS_BUTTON);
+      // 上一个用例结束时通常已经在设置页里（此时搜索行是隐藏的），所以按需进入。
+      if (await page.isVisible(SETTINGS_BUTTON)) {
+        await page.click(SETTINGS_BUTTON);
+      }
       await page.waitForSelector(SETTINGS_SCREEN);
-      assert(await page.isVisible('[data-testid="workspace-section"]'), "工作区区段不可见");
+
+      // 工作区：路径输入框、初始化与克隆入口。
+      await openSection(page, "workspace");
       assert(await page.isVisible(WORKSPACE_PATH_INPUT), "路径输入框不可见");
-
-      // 快捷键区段可能在折叠内容下方：滚动后仍必须可见、可点击。
-      await page.locator(HOTKEY_INPUT).scrollIntoViewIfNeeded();
-      assert(await page.isVisible(HOTKEY_INPUT), "快捷键输入框不可见");
-      assert(await page.isVisible('[data-testid="hotkey-save"]'), "保存按钮不可见");
-      const box = await page.locator('[data-testid="hotkey-save"]').boundingBox();
-      assert(
-        box && box.x >= 0 && box.x + box.width <= 640,
-        `保存按钮超出窗口宽度：${JSON.stringify(box)}`,
-      );
-
-      // 克隆区段同样必须可用：滚动到克隆按钮，检查可见且不超出窗口宽度。
       await page.locator(CLONE_URL_INPUT).scrollIntoViewIfNeeded();
       assert(await page.isVisible(CLONE_URL_INPUT), "克隆远端地址输入框不可见");
       assert(await page.isVisible(CLONE_BUTTON), "克隆按钮不可见");
@@ -1086,8 +1109,18 @@ async function main() {
         `克隆按钮超出窗口宽度：${JSON.stringify(cloneBox)}`,
       );
 
-      // 变更与提交区段同样必须在真实窗口尺寸下可见、可操作。
-      await page.locator('[data-testid="changes-section"]').scrollIntoViewIfNeeded();
+      // 快捷键：输入框与保存按钮。
+      await openSection(page, "hotkey");
+      assert(await page.isVisible(HOTKEY_INPUT), "快捷键输入框不可见");
+      assert(await page.isVisible('[data-testid="hotkey-save"]'), "保存按钮不可见");
+      const box = await page.locator('[data-testid="hotkey-save"]').boundingBox();
+      assert(
+        box && box.x >= 0 && box.x + box.width <= 640,
+        `保存按钮超出窗口宽度：${JSON.stringify(box)}`,
+      );
+
+      // 变更与提交：变更列表与提交入口。
+      await openSection(page, "changes");
       assert(await page.isVisible('[data-testid="changes-section"]'), "变更区段不可见");
       assert(await page.isVisible(CHANGE_ROW), "变更列表不可见");
       await page.locator(COMMIT_MESSAGE).scrollIntoViewIfNeeded();
@@ -1098,8 +1131,8 @@ async function main() {
         `创建提交按钮超出窗口宽度：${JSON.stringify(commitButton)}`,
       );
 
-      // 同步区段同样必须在真实窗口尺寸下可见、可操作。
-      await page.locator(SYNC_SECTION).scrollIntoViewIfNeeded();
+      // 同步：拉取与重新检测。
+      await openSection(page, "sync");
       assert(await page.isVisible(SYNC_SECTION), "同步区段不可见");
       assert(await page.isVisible(SYNC_PULL), "拉取按钮不可见");
       assert(await page.isVisible(SYNC_REDETECT), "重新检测按钮不可见");
@@ -1108,9 +1141,119 @@ async function main() {
         pullBox && pullBox.x >= 0 && pullBox.x + pullBox.width <= 640,
         `拉取按钮超出窗口宽度：${JSON.stringify(pullBox)}`,
       );
+
+      // 侧栏：10 个区块在真实窗口里必须一屏内全部可见、不被裁切。
+      // 这是「10 个区块平铺 = 10.57 屏」那个问题的直接回归断言。
+      const nav = await page.evaluate(() => {
+        const el = document.querySelector(".settings-nav");
+        const items = [...document.querySelectorAll('[data-testid^="settings-nav-"]')];
+        const navBox = el.getBoundingClientRect();
+        const clipped = items
+          .filter((item) => {
+            const itemBox = item.getBoundingClientRect();
+            return itemBox.top < navBox.top - 0.5 || itemBox.bottom > navBox.bottom + 0.5;
+          })
+          .map((item) => item.textContent.trim());
+        return {
+          count: items.length,
+          clipped,
+          overflow: el.scrollHeight - el.clientHeight,
+        };
+      });
+      assert(nav.count === 10, `侧栏应有 10 个区块，实际 ${nav.count}`);
+      assert(
+        nav.clipped.length === 0 && nav.overflow <= 0,
+        `640×420 下侧栏不得被裁切：${nav.clipped.join("/")}（溢出 ${nav.overflow}px）`,
+      );
+
       const file = await shot(page, "13-settings-compact-window.png");
       await page.setViewportSize({ width: 900, height: 620 });
-      return `640×420 下工作区、快捷键、克隆与同步区段均可见可操作，截图 ${file}`;
+      return `640×420 下工作区、快捷键、变更与同步四个区块逐个可达且控件不超出窗口；侧栏 10 个区块一屏内全部可见（溢出 ${nav.overflow}px），截图 ${file}`;
+    });
+
+    // 12b. 设置页外壳的行为契约：侧栏分组、一次只看一个区块、会话内记住上次区块、
+    //      提示条常驻头部。这几条是「10 个区块平铺」那轮改动的直接产物。
+    await check("设置页侧栏一次只显示一个区块并记住上次区块", async () => {
+      await page.setViewportSize({ width: 640, height: 420 });
+      const visibleSections = () =>
+        page.evaluate(() =>
+          [...document.querySelectorAll("[data-section]")]
+            .filter((node) => node.offsetParent !== null)
+            .map((node) => node.dataset.section),
+        );
+
+      await openSection(page, "theme");
+      const only = await visibleSections();
+      assert(
+        JSON.stringify(only) === JSON.stringify(["theme"]),
+        `同一时刻只应显示当前区块，实际 ${JSON.stringify(only)}`,
+      );
+      assert(
+        (await page.getAttribute('[data-testid="settings-nav-theme"]', "data-current")) === "true",
+        "目录必须标记当前区块",
+      );
+      assert(
+        (await page.getAttribute('[data-testid="settings-nav-memos"]', "data-current")) === "false",
+        "非当前区块不得被标记为当前",
+      );
+
+      // ↑↓ 在目录里移动（键盘优先，与首屏一致）。
+      await page.keyboard.press("ArrowDown");
+      await page.waitForFunction(
+        () =>
+          document.querySelector('[data-testid="settings-nav-plugins"]')?.dataset.current ===
+          "true",
+        undefined,
+        { timeout: 5000 },
+      );
+      const afterDown = await visibleSections();
+      assert(
+        JSON.stringify(afterDown) === JSON.stringify(["plugins"]),
+        `↓ 之后应只显示下一个区块，实际 ${JSON.stringify(afterDown)}`,
+      );
+
+      // 切走再回来：会话内记住上次访问的区块。
+      await page.click('[data-testid="settings-back"]');
+      await page.waitForFunction(
+        () =>
+          document.querySelector('[data-testid="app-root"]')?.dataset.screen === "search",
+        undefined,
+        { timeout: 10_000 },
+      );
+      await page.click(SETTINGS_BUTTON);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      const restored = await visibleSections();
+      assert(
+        JSON.stringify(restored) === JSON.stringify(["plugins"]),
+        `回到设置页应停在上次区块，实际 ${JSON.stringify(restored)}`,
+      );
+
+      // 提示条常驻头部：原来它在整页最底部，靠前区块操作完看不到反馈。
+      await openSection(page, "hotkey");
+      await page.fill(HOTKEY_INPUT, "Ctrl+Shift+F2");
+      await page.click('[data-testid="hotkey-save"]');
+      await page.waitForFunction(
+        (sel) => document.querySelector(sel)?.textContent?.includes("立即生效"),
+        SETTINGS_MESSAGE,
+      );
+      const bannerBox = await page.locator(SETTINGS_MESSAGE).boundingBox();
+      const screenBox = await page.locator(SETTINGS_SCREEN).boundingBox();
+      assert(
+        bannerBox && screenBox && bannerBox.y < screenBox.y + screenBox.height / 2,
+        `提示条必须在窗口上半部可见：${JSON.stringify(bannerBox)}`,
+      );
+      const file = await shot(page, "12b-settings-nav.png");
+
+      // 复原快捷键，避免影响后续用例。
+      await page.fill(HOTKEY_INPUT, "Ctrl+Shift+F1");
+      await page.click('[data-testid="hotkey-save"]');
+      await page.waitForFunction(
+        (sel) => document.querySelector(sel)?.textContent?.includes("Ctrl+Shift+F1"),
+        HOTKEY_STATUS,
+      );
+      await page.setViewportSize({ width: 900, height: 620 });
+
+      return `一次只显示 ${only.join("/")} 一个区块、目录标记当前项、↑↓ 可移动、切走再回来记住上次区块；提示条在窗口上半部可见，截图 ${file}`;
     });
 
     // -----------------------------------------------------------------------
@@ -1156,6 +1299,7 @@ async function main() {
 
     // 10b. 运行环境与能力：如实区分「未覆盖」与「不支持」。
     await check("设置页显示运行环境与能力状态，未覆盖不等于支持", async () => {
+      await openSection(page, "capabilities");
       await page.locator(CAPABILITY_SECTION).scrollIntoViewIfNeeded();
       assert(await page.isVisible(CAPABILITY_SECTION), "能力区段不可见");
       const panel = await readCapabilityPanel();
@@ -1191,6 +1335,7 @@ async function main() {
       await page.click('[data-testid="settings-back"]');
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "capabilities");
       await page.waitForFunction(
         (sel) =>
           document.querySelector(`${sel} [data-testid="capability-auto-paste"]`)?.dataset
@@ -1228,8 +1373,11 @@ async function main() {
     /** 把设置页滚回顶部，保证跨主题测量的是同一滚动位置。 */
     const resetSettingsScroll = async () => {
       await page.evaluate(() => {
-        const el = document.querySelector(".settings");
+        // 滚动容器现在是内容区（`.settings` 本身只做 Grid 布局，不再滚动）。
+        const el = document.querySelector(".settings-body");
         if (el) el.scrollTop = 0;
+        const nav = document.querySelector(".settings-nav");
+        if (nav) nav.scrollTop = 0;
       });
     };
 
@@ -1239,6 +1387,8 @@ async function main() {
       await page.waitForSelector(ROW);
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      // 设置页现在一次只显示一个区块，关联工作区必须先导航到工作区块。
+      await openSection(page, "workspace");
       const current = (await page.textContent(WORKSPACE_PATH_VALUE)).trim();
       if (!current.includes(MOCK_REPO)) {
         await page.fill(WORKSPACE_PATH_INPUT, MOCK_REPO);
@@ -1302,8 +1452,16 @@ async function main() {
       await page.setViewportSize({ width: 900, height: 620 });
       await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
       await openSettingsWithWorkspace();
+      await openSection(page, "theme");
 
-      const settingsSelectors = [WORKSPACE_PATH_INPUT, HOTKEY_INPUT, THEME_SECTION];
+      // 设置页一次只显示一个区块，所以跨主题比较的是「侧栏 + 当前区块」，不能再拿
+      // 来自不同区块的控件（工作区输入框 / 快捷键输入框）来比较——它们现在不同屏。
+      const settingsSelectors = [
+        THEME_SECTION,
+        '[data-testid="theme-item"]',
+        '[data-testid="settings-nav-theme"]',
+        '[data-testid="settings-nav-workspace"]',
+      ];
       const searchSelectors = [INPUT, SETTINGS_BUTTON, ROW, '[data-testid="action-bar"]'];
       const themes = [
         { id: THEME_LIGHT, appearance: "light", surface: SURFACE_LIGHT, settings: "14-theme-light.png", list: "15-theme-light-list.png" },
@@ -1379,7 +1537,8 @@ async function main() {
         shots.push(await shot(page, theme.list));
         details.push(`${theme.id}=${facts.appearance}/${facts.surface}`);
         await page.click(SETTINGS_BUTTON);
-        await page.waitForSelector(THEME_SECTION);
+        await page.waitForSelector(SETTINGS_SCREEN);
+        await openSection(page, "theme");
       }
 
       return `${details.join("，")}；布局与几何在所有主题下一致；截图 ${shots.join(" / ")}`;
@@ -1387,6 +1546,7 @@ async function main() {
 
     // 15. 跟随系统：OS 外观在运行时变化时立即切换，无需重启。
     await check("跟随系统在运行时响应系统外观变化", async () => {
+      await openSection(page, "theme");
       // 上一项检查已经选中「跟随系统」，此时它的选择按钮是禁用的。
       const alreadySystem = await page.evaluate(
         (id) => document.querySelector(`[data-theme-id="${id}"]`)?.dataset.selected === "true",
@@ -1431,7 +1591,8 @@ async function main() {
     await check("尊重减少动态效果设置且高频操作无动画", async () => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.click(SETTINGS_BUTTON);
-      await page.waitForSelector(THEME_SECTION);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "theme");
       await assertThemeIsUsable("reduced-motion（设置页）");
       await backToSearch();
       const facts = await assertThemeIsUsable("reduced-motion（首屏）");
@@ -1443,6 +1604,7 @@ async function main() {
     // 17. 本地主题包：无效包给出中文原因并保留外观，有效包可安装、选择、移除。
     await check("安装、选择与移除本地主题包；无效包保留外观", async () => {
       await openSettingsWithWorkspace();
+      await openSection(page, "theme");
       const before = await themeFacts(page);
 
       await page.fill(THEME_PACKAGE_INPUT, MOCK_BROKEN_THEME_PACKAGE);
@@ -1480,7 +1642,8 @@ async function main() {
 
       // 移除：回退到浅色并说明原因。
       await page.click(SETTINGS_BUTTON);
-      await page.waitForSelector(THEME_SECTION);
+      await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "theme");
       await page.click(`[data-theme-id="${INSTALLED_THEME}"] ${THEME_REMOVE}`);
       await page.waitForFunction(
         (id) => !document.querySelector(`[data-theme-id="${id}"]`),
@@ -1506,7 +1669,8 @@ async function main() {
         await scaledPage.goto(url, { waitUntil: "load" });
         await scaledPage.waitForSelector(ROW);
         await scaledPage.click(SETTINGS_BUTTON);
-        await scaledPage.waitForSelector(THEME_SECTION);
+        await scaledPage.waitForSelector(SETTINGS_SCREEN);
+        await openSection(scaledPage, "theme");
         assert(await scaledPage.isVisible(THEME_SECTION), "缩放下主题区不可见");
         await scaledPage.locator(`[data-theme-id="${THEME_DARK}"] ${THEME_SELECT}`).scrollIntoViewIfNeeded();
         assert(
@@ -1538,6 +1702,7 @@ async function main() {
       await page.goto(url, { waitUntil: "load" });
       await page.waitForSelector(ROW);
       await linkMockWorkspace();
+      await openSection(page, "changes");
 
       const branch = (await page.textContent('[data-testid="changes-branch"]')).trim();
       assert(branch === "main", `必须显示当前分支，实际 ${branch}`);
@@ -1737,6 +1902,7 @@ async function main() {
       await page.goto(url, { waitUntil: "load" });
       await page.waitForSelector(ROW);
       await linkMockWorkspace();
+      await openSection(page, "sync");
       await page.waitForSelector(SYNC_BRANCH);
 
       const branch = await text(SYNC_BRANCH);
@@ -1830,6 +1996,7 @@ async function main() {
       assert(results.length > 0, "离线时本地搜索仍必须可用");
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "sync");
       return `鉴权「${auth.slice(0, 24)}…」与离线「${offline.slice(0, 24)}…」不同，本地搜索仍返回 ${results.length} 条，截图 ${authShot} / ${offlineShot}`;
     });
 
@@ -2077,6 +2244,7 @@ async function main() {
       await page.goto(url, { waitUntil: "load" });
       await page.waitForSelector(ROW);
       await linkMockWorkspace();
+      await openSection(page, "memos");
       await page.locator(MEMO_SECTION).scrollIntoViewIfNeeded();
       await page.waitForSelector(MEMO_ITEM);
       const seed = await page.$$eval(MEMO_ITEM, (nodes) => nodes.length);
@@ -2146,6 +2314,7 @@ async function main() {
       await page.goto(url, { waitUntil: "load" });
       await page.waitForSelector(ROW);
       await linkMockWorkspace();
+      await openSection(page, "plugins");
       await page.locator(PLUGIN_SECTION).scrollIntoViewIfNeeded();
       await page.waitForSelector(PLUGIN_ITEM);
       const state = await text(PLUGIN_STATE);
@@ -2159,6 +2328,7 @@ async function main() {
       const disabledShot = await shot(page, "51-settings-plugin-disabled.png");
 
       // 管理入口如实说明并拒绝写入。
+      await openSection(page, "memos");
       await page.locator(MEMO_SECTION).scrollIntoViewIfNeeded();
       assert(await page.isVisible(MEMO_DISABLED), "停用后必须说明备忘录不可用");
       assert(await page.locator(MEMO_SAVE).isDisabled(), "停用后不得创建备忘录");
@@ -2179,6 +2349,7 @@ async function main() {
       // 重新启用后恢复（状态记录在清单里，可以再切换回来）。
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "plugins");
       await page.locator(PLUGIN_SECTION).scrollIntoViewIfNeeded();
       await page.click(PLUGIN_TOGGLE);
       await page.waitForFunction(
@@ -2334,6 +2505,7 @@ async function main() {
       await page.waitForSelector(ROW);
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "chrome");
       await page.locator(CHROME_SECTION).scrollIntoViewIfNeeded();
 
       const availability = await text(CHROME_AVAILABILITY);
@@ -2394,6 +2566,7 @@ async function main() {
       await page.evaluate(() => window.__flashcastMock.simulateChromeStatus("corrupt"));
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "chrome");
       await page.locator(CHROME_SECTION).scrollIntoViewIfNeeded();
       await page.click(CHROME_REFRESH);
       await page.waitForFunction(
@@ -2454,6 +2627,7 @@ async function main() {
       await page.waitForSelector(ROW);
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "plugins");
       await page.locator(PLUGIN_SECTION).scrollIntoViewIfNeeded();
       const chromeItem = page.locator(
         `${PLUGIN_ITEM}[data-plugin-id="chrome-bookmarks"]`,
@@ -2574,6 +2748,7 @@ async function main() {
       await page.goto(url, { waitUntil: "load" });
       await page.waitForSelector(ROW);
       await linkMockWorkspace();
+      await openSection(page, "memos");
       // 建一条标签与插件关键词（memo）完全相同的备忘录。
       await page.locator(MEMO_SECTION).scrollIntoViewIfNeeded();
       await page.waitForSelector(MEMO_ITEM);
@@ -2672,6 +2847,7 @@ async function main() {
       // 默认关闭：经设置页的插件开关显式启用（真实宿主同样要求用户先启用）。
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "plugins");
       const pluginState = page.locator(
         '[data-plugin-id="clipboard"] [data-testid="plugin-state"]',
       );
@@ -2792,6 +2968,7 @@ async function main() {
       );
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "clipboard");
       await page.waitForSelector('[data-testid="clipboard-section"]');
       await page.waitForSelector('[data-testid="clipboard-item"]');
 
@@ -2877,6 +3054,7 @@ async function main() {
 
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "clipboard");
       await page.waitForSelector('[data-testid="clipboard-section"]');
       const summary = await page.textContent('[data-testid="clipboard-state-summary"]');
       assert(
@@ -3060,6 +3238,7 @@ async function main() {
       );
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "clipboard");
       await page.waitForSelector('[data-testid="clipboard-item"]');
 
       const thumbnails = await page.$$eval('[data-testid="clipboard-thumbnail"]', (nodes) =>
@@ -3265,6 +3444,7 @@ async function main() {
       );
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "clipboard");
       const entry = '[data-testid="clipboard-item"][data-files="3"]';
       await page.waitForSelector(entry);
 
@@ -3323,6 +3503,7 @@ async function main() {
       );
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
+      await openSection(page, "clipboard");
       const entry = '[data-testid="clipboard-item"][data-files="3"]';
       await page.waitForSelector(entry);
 

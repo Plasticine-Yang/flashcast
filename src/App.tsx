@@ -25,7 +25,11 @@ import type {
 import { ActionBar } from "./components/ActionBar";
 import { MemoPreview } from "./components/MemoPreview";
 import { ResultList } from "./components/ResultList";
-import { SettingsScreen, type SettingsMessage } from "./components/SettingsScreen";
+import {
+  SettingsScreen,
+  type SettingsMessage,
+  type SettingsSectionId,
+} from "./components/SettingsScreen";
 import { StatusBanner } from "./components/StatusBanner";
 
 /** 把宿主下发的语义 token 写成根元素上的 CSS 自定义属性。
@@ -84,6 +88,9 @@ export default function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [theme, setTheme] = useState<ThemeState | null>(null);
   const [settingsMessage, setSettingsMessage] = useState<SettingsMessage | null>(null);
+  /** 当前显示的设置区块。放在 App 里，所以在会话内切走再回来会回到同一区块
+   * （SettingsScreen 每次进设置页都会重新挂载，放它内部就记不住）。 */
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("hotkey");
   const [workspaceAlert, setWorkspaceAlert] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
@@ -1068,6 +1075,8 @@ export default function App() {
           onDeleteClipboardEntry={handleDeleteClipboardEntry}
           onClearClipboardHistory={handleClearClipboardHistory}
           onSaveClipboardFileCopy={handleSaveClipboardFileCopy}
+          current={settingsSection}
+          onSectionChange={setSettingsSection}
         />
       ) : (
         <>

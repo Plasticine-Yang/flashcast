@@ -216,10 +216,74 @@ interface Props {
   onClearClipboardHistory: () => void;
   /** 显式为某个文件引用保存本机副本（ticket 12）。 */
   onSaveClipboardFileCopy: (id: string, attachmentId: string) => void;
+  /** 当前显示的区块。由 App 持有，所以在会话内切走再回来会回到同一区块。 */
+  current: SettingsSectionId;
+  onSectionChange: (section: SettingsSectionId) => void;
 }
 
+/** 设置页的区块标识。App 持有「当前区块」以便在会话内记住它。 */
+export type SettingsSectionId =
+  | "hotkey"
+  | "theme"
+  | "plugins"
+  | "clipboard"
+  | "memos"
+  | "chrome"
+  | "workspace"
+  | "sync"
+  | "changes"
+  | "capabilities";
+
 /**
- * 设置页：显示当前配置工作区、关联现有仓库或初始化新目录、显示校验失败原因，
+ * 设置页的分组与区块。
+ *
+ * 分组按**使用频率**排，而不是按原来的平铺顺序：常用 → 数据与内容 → 配置与同步 → 关于。
+ * 原来的平铺把低频运维放在最前面（配置工作区 414px + 远端同步 327px + 变更与提交 117px
+ * 占掉 640x420 窗口里最前面的 2.4 屏），而「全局快捷键」排第 4、「外观主题」排第 6。
+ *
+ * 区块在 DOM 里始终存在、只按当前项切换 `hidden`（见 `.settings-body` 的规则）：
+ * 切走再切回不会丢掉正在编辑的内容（备忘录正文、剪贴板确认态等）。
+ */
+export const SETTINGS_GROUPS: {
+  id: string;
+  label: string;
+  sections: { id: SettingsSectionId; title: string }[];
+}[] = [
+  {
+    id: "common",
+    label: "常用",
+    sections: [
+      { id: "hotkey", title: "全局快捷键" },
+      { id: "theme", title: "外观主题" },
+    ],
+  },
+  {
+    id: "content",
+    label: "数据与内容",
+    sections: [
+      { id: "plugins", title: "功能插件" },
+      { id: "clipboard", title: "剪贴板历史" },
+      { id: "memos", title: "备忘录" },
+      { id: "chrome", title: "Chrome 书签" },
+    ],
+  },
+  {
+    id: "config",
+    label: "配置与同步",
+    sections: [
+      { id: "workspace", title: "配置工作区" },
+      { id: "sync", title: "远端同步" },
+      { id: "changes", title: "变更与提交" },
+    ],
+  },
+  {
+    id: "about",
+    label: "关于",
+    sections: [{ id: "capabilities", title: "运行环境与能力" }],
+  },
+];
+
+/** 设置页：显示当前配置工作区、关联现有仓库或初始化新目录、显示校验失败原因，
  * 编辑全局快捷键，并管理主题（内置浅色 / 深色 / 跟随系统与已安装的本地主题包）。
  *
  * 延续紧凑列表的视觉语言（`styles.css` 的设计令牌，无 CSS 框架、无动画）：
@@ -278,6 +342,8 @@ export function SettingsScreen({
   onDeleteClipboardEntry,
   onClearClipboardHistory,
   onSaveClipboardFileCopy,
+  current,
+  onSectionChange,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
@@ -312,6 +378,36 @@ export function SettingsScreen({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onBack]);
 
+  // ↑↓ 在侧栏里移动区块。同样挂在 window 上：点过按钮后焦点会落到 body。
+  // 输入框与多行文本自己处理方向键，所以可编辑控件上不接管（←→ 与数字键另有用途）。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      const flat = SETTINGS_GROUPS.flatMap((group) => group.sections);
+      const index = flat.findIndex((section) => section.id === current);
+      const next =
+        event.key === "ArrowDown"
+          ? Math.min(index + 1, flat.length - 1)
+          : Math.max(index - 1, 0);
+      onSectionChange(flat[next].id);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [current, onSectionChange]);
+
   const linked = workspace?.path != null;
 
   return (
@@ -328,8 +424,46 @@ export function SettingsScreen({
         </button>
       </header>
 
+      {/* 提示条紧贴头部、常驻可见。它原本在整个设置页的最底部：内容总高 3837px 时，
+          在靠前的区块里操作完根本看不到反馈。 */}
+      {message ? (
+        <div
+          className={`banner banner-${message.level}`}
+          data-testid="settings-message"
+          role={message.level === "error" ? "alert" : "status"}
+        >
+          {message.text}
+        </div>
+      ) : null}
+
+      <nav className="settings-nav" data-testid="settings-nav" aria-label="设置分组">
+        {SETTINGS_GROUPS.map((group) => (
+          <div className="settings-nav-group" key={group.id}>
+            <div className="settings-nav-label">{group.label}</div>
+            {group.sections.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                className="settings-nav-item"
+                data-testid={`settings-nav-${section.id}`}
+                data-current={section.id === current ? "true" : "false"}
+                aria-current={section.id === current ? "true" : undefined}
+                onClick={() => onSectionChange(section.id)}
+              >
+                {section.title}
+              </button>
+            ))}
+          </div>
+        ))}
+      </nav>
+
       <div className="settings-body">
-        <section className="settings-section" data-testid="workspace-section">
+        <section
+          className="settings-section"
+          data-section="workspace"
+          hidden={current !== "workspace"}
+          data-testid="workspace-section"
+        >
           <h2 className="settings-section-title">配置工作区</h2>
 
           <dl className="settings-facts">
@@ -495,7 +629,12 @@ export function SettingsScreen({
           </p>
         </section>
 
-        <section className="settings-section" data-testid="sync-section">
+        <section
+          className="settings-section"
+          data-section="sync"
+          hidden={current !== "sync"}
+          data-testid="sync-section"
+        >
           <h2 className="settings-section-title">远端同步</h2>
 
           {sync ? (
@@ -621,21 +760,28 @@ export function SettingsScreen({
           )}
         </section>
 
-        <ChangesPanel
-          changes={changes}
-          message={commitMessage}
-          selected={selectedPaths}
-          diffPath={diffPath}
-          busy={busy}
-          onToggle={onTogglePath}
-          onToggleAll={onToggleAllPaths}
-          onSelectDiff={onSelectDiff}
-          onMessageChange={onCommitMessageChange}
-          onCommit={onCommit}
-          onRefresh={onRefreshChanges}
-        />
+        <div data-section="changes" hidden={current !== "changes"}>
+          <ChangesPanel
+            changes={changes}
+            message={commitMessage}
+            selected={selectedPaths}
+            diffPath={diffPath}
+            busy={busy}
+            onToggle={onTogglePath}
+            onToggleAll={onToggleAllPaths}
+            onSelectDiff={onSelectDiff}
+            onMessageChange={onCommitMessageChange}
+            onCommit={onCommit}
+            onRefresh={onRefreshChanges}
+          />
+        </div>
 
-        <section className="settings-section" data-testid="hotkey-section">
+        <section
+          className="settings-section"
+          data-section="hotkey"
+          hidden={current !== "hotkey"}
+          data-testid="hotkey-section"
+        >
           <h2 className="settings-section-title">全局快捷键</h2>
           <div className="settings-row">
             <input
@@ -668,7 +814,12 @@ export function SettingsScreen({
           </p>
         </section>
 
-        <section className="settings-section" data-testid="capability-section">
+        <section
+          className="settings-section"
+          data-section="capabilities"
+          hidden={current !== "capabilities"}
+          data-testid="capability-section"
+        >
           <h2 className="settings-section-title">运行环境与能力</h2>
           <dl className="settings-facts">
             <div className="settings-fact">
@@ -722,7 +873,12 @@ export function SettingsScreen({
           </p>
         </section>
 
-        <section className="settings-section" data-testid="theme-section">
+        <section
+          className="settings-section"
+          data-section="theme"
+          hidden={current !== "theme"}
+          data-testid="theme-section"
+        >
           <h2 className="settings-section-title">外观主题</h2>
 
           <dl className="settings-facts">
@@ -846,50 +1002,48 @@ export function SettingsScreen({
           </p>
         </section>
 
-        <FeaturePluginsPanel
-          plugins={plugins}
-          busy={busy}
-          onToggle={onToggleFeaturePlugin}
-        />
+        <div data-section="plugins" hidden={current !== "plugins"}>
+          <FeaturePluginsPanel
+            plugins={plugins}
+            busy={busy}
+            onToggle={onToggleFeaturePlugin}
+          />
+        </div>
 
-        <ChromePanel
-          chrome={chrome}
-          busy={busy}
-          onAssociate={onAssociateChromeProfile}
-          onRefresh={onRefreshChromeBookmarks}
-        />
+        <div data-section="chrome" hidden={current !== "chrome"}>
+          <ChromePanel
+            chrome={chrome}
+            busy={busy}
+            onAssociate={onAssociateChromeProfile}
+            onRefresh={onRefreshChromeBookmarks}
+          />
+        </div>
 
-        <ClipboardPanel
-          clipboard={clipboard}
-          busy={busy}
-          onTogglePaused={onToggleClipboardPaused}
-          onSaveLimits={onSaveClipboardLimits}
-          onPin={onPinClipboardEntry}
-          onDelete={onDeleteClipboardEntry}
-          onClear={onClearClipboardHistory}
-          onSaveCopy={onSaveClipboardFileCopy}
-        />
+        <div data-section="clipboard" hidden={current !== "clipboard"}>
+          <ClipboardPanel
+            clipboard={clipboard}
+            busy={busy}
+            onTogglePaused={onToggleClipboardPaused}
+            onSaveLimits={onSaveClipboardLimits}
+            onPin={onPinClipboardEntry}
+            onDelete={onDeleteClipboardEntry}
+            onClear={onClearClipboardHistory}
+            onSaveCopy={onSaveClipboardFileCopy}
+          />
+        </div>
 
-        <MemoPanel
-          linked={linked}
-          enabled={memoEnabled}
-          memos={memos}
-          problems={memoProblems}
-          busy={busy}
-          onCreate={onCreateMemo}
-          onUpdate={onUpdateMemo}
-          onDelete={onDeleteMemo}
-        />
-
-        {message ? (
-          <div
-            className={`banner banner-${message.level}`}
-            data-testid="settings-message"
-            role={message.level === "error" ? "alert" : "status"}
-          >
-            {message.text}
-          </div>
-        ) : null}
+        <div data-section="memos" hidden={current !== "memos"}>
+          <MemoPanel
+            linked={linked}
+            enabled={memoEnabled}
+            memos={memos}
+            problems={memoProblems}
+            busy={busy}
+            onCreate={onCreateMemo}
+            onUpdate={onUpdateMemo}
+            onDelete={onDeleteMemo}
+          />
+        </div>
       </div>
     </div>
   );

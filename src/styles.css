@@ -262,16 +262,29 @@ body {
   color: var(--fc-text-disabled);
 }
 
+/*
+ * 设置页：左侧常驻分组目录 + 右侧内容区。
+ *
+ * 用 CSS Grid 而不是多包一层 DOM：`.settings-body` 与 10 个区块的结构与缩进都不用动，
+ * 新增的只有目录与提示条两个节点。第 3 行是「目录 + 内容区」，两者各自滚动。
+ *
+ * 为什么值得改（实测）：原来 10 个区块平铺，内容总高 3837px、可视区 363px = **10.57 屏**，
+ * 而且低频运维排在最前（配置工作区 414 + 远端同步 327 + 变更与提交 117 = 2.4 屏），
+ * 「全局快捷键」却排第 4。改后目录与内容区各 1.00 屏，10 个区块全部可见。
+ */
 .settings {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 168px 1fr;
+  grid-template-rows: auto auto 1fr;
   min-height: 0;
   flex: 1 1 auto;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  /* 滚动交给目录与内容区各自处理。 */
+  overflow: hidden;
 }
 
 .settings-header {
+  grid-column: 1 / -1;
+  grid-row: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -286,21 +299,127 @@ body {
   font-weight: 600;
 }
 
+/* 提示条只占右侧内容区那一列，不跨左列。 */
+.settings > .banner {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.settings-nav {
+  grid-column: 1;
+  /* 跨过第 2 行（提示条那一行）：提示条出现时只压缩右侧内容区——它本来就会滚动——
+     而不是把常驻目录挤到装不下最后一个区块。实测不跨行时会溢出 7px，
+     「运行环境与能力」被裁切。 */
+  grid-row: 2 / 4;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-right: 1px solid var(--fc-border);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/*
+ * 分组标题必须一眼看出是**标签**而不是可点的设置项。
+ *
+ * 原型第一版只靠 1px 字号差区分（11px vs 12px、同色、同缩进），评审当场指出分不清。
+ * 现在六个维度同时分开：字号、字距、颜色、缩进、光标、悬停与选中反馈。
+ */
+.settings-nav-label {
+  padding: 0 7px 2px;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  color: var(--fc-text-disabled);
+}
+
+/* 组与组之间用空间分隔（第一组不需要），组内项之间只有 1px。 */
+.settings-nav-group + .settings-nav-group .settings-nav-label {
+  padding-top: 7px;
+}
+
+.settings-nav-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: var(--fc-font-aux);
+  padding: 2px 7px 2px 14px;
+  border: 0;
+  border-radius: var(--fc-radius-control);
+  background: transparent;
+  color: var(--fc-text-muted);
+  cursor: pointer;
+}
+
+.settings-nav-item:hover {
+  background: var(--fc-hover-bg);
+  color: var(--fc-text);
+}
+
+.settings-nav-item[data-current="true"] {
+  background: var(--fc-selection-bg);
+  color: var(--fc-text);
+  font-weight: 500;
+}
+
+.settings-nav-item:focus-visible {
+  outline: 2px solid var(--fc-focus-ring);
+  outline-offset: 1px;
+}
+
 .settings-body {
+  grid-column: 2;
+  grid-row: 3;
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 12px var(--fc-space-window-padding) 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
-.settings-section {
+/* 内容区本身就是容器，区块不再各是一张卡片——卡片套卡片会显得很重。
+   区块内部的纵向排布与间距沿用原来的值。 */
+.settings-body .settings-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--fc-border);
-  border-radius: var(--fc-radius-item);
-  background: var(--fc-surface);
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+}
+
+/*
+ * 只显示当前区块。区块全部留在 DOM 里、只切 `hidden`：切走再回来不会丢掉正在编辑的
+ * 内容（备忘录正文、剪贴板的「确认清空」态等）。
+ *
+ * 这条必须写在上面那条**之后**：两者特异性相同（都是 0,2,0），后写的赢。
+ * `hidden` 也必须显式处理——`.settings-section` 的 `display: flex` 会盖掉浏览器默认的
+ * `[hidden] { display: none }`。
+ */
+.settings-body > [hidden] {
+  display: none;
+}
+
+/* 区块自己的标题是内容区的标题（14px/600）；区块内的子标题（h3）保持小号次色。 */
+.settings-body .settings-section > .settings-section-title:first-child {
+  font-size: var(--fc-font-body);
+  font-weight: 600;
+  color: var(--fc-text);
+}
+
+/* 设置页里不显示搜索行：它在设置页里不是搜索表面，而侧栏要让 10 个区块全部可见，
+   这 48px 是必需的（原型实测：目录内容 325px / 可用 342px）。 */
+.app[data-screen="settings"] .search-row {
+  display: none;
 }
 
 .settings-section-title {
