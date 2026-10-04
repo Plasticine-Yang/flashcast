@@ -6,24 +6,27 @@
 - Rust stable（`rustup`）
 - Tauri 2 所需的系统库
 
-### Linux（无 sudo 的开发机）
+### Linux
 
-本机通常已随桌面环境安装 GTK 3 与 WebKit2GTK 4.1 的运行库，缺少的只是开发用头文件与 `.pc` 文件。
-`scripts/dev/linux-native-deps.sh` 会用非 root 权限把这些 `-dev` 软件包下载并解压到本地前缀，
-并改写前缀内的 `.pc` 路径，使 `pkg-config` 与链接器都能正常工作。
-
-```bash
-eval "$(scripts/dev/linux-native-deps.sh)"   # 首次会下载并解压约 110 个 .deb
-```
-
-脚本是幂等的；重复执行只做检查。若 Rust 安装在 `~/.local/share/cargo`，脚本同时会把 `cargo` 加入 `PATH`。
-
-有 root 权限的机器（含 CI runner）直接使用发行版包管理器：
+Tauri 2 需要 GTK 3 与 WebKit2GTK 4.1（libsoup 3）的开发包。桌面环境通常已随系统安装这些库的
+运行库，缺的只是开发用头文件与 `.pc` 文件；用发行版包管理器装上即可（需要 sudo）：
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
-  libayatana-appindicator3-dev libxdo-dev libssl-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev
+sudo apt-get install -y \
+  build-essential pkg-config \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
+  librsvg2-dev libayatana-appindicator3-dev libxdo-dev libssl-dev libdbus-1-dev \
+  patchelf xdg-utils
+```
+
+- `libdbus-1-dev` 提供 `dbus-1.pc`：缺了会在编译 `libdbus-sys` 时报「Package dbus-1 was not found」。
+- `patchelf` 只在 `pnpm tauri build` 打包 AppImage 时需要，`pnpm tauri dev` 用不到。
+
+安装后自查 `pkg-config` 解析到的是 4.1（不是 4.0，误链 4.0 能编译、只在运行时出问题）：
+
+```bash
+pkg-config --modversion webkit2gtk-4.1
 ```
 
 ### macOS / Windows
@@ -83,8 +86,6 @@ CARGO_TARGET_DIR=$HOME/.cache/flashcast/xcheck/macos \
 - 提交身份同理：测试仓库要在仓库本地写入 `user.name` / `user.email`。
 - `/tmp` 是 16 GB 的 tmpfs，交叉检查的 target 目录请放在 `$HOME/.cache/flashcast/xcheck/` 下，否则会以
   `Disk quota exceeded (os error 122)` 的形式在无关 crate 上失败。
-- 平台原生依赖前缀 `~/.local/share/flashcast/linux-native-deps` 由多个 worktree 共享。同时只用一个版本时无碍；
-  并行开发时用 `FLASHCAST_NATIVE_DEPS_PREFIX=$HOME/.cache/flashcast/<ticket>-native-deps` 隔离。
 
 
 ## 浏览器交互检查（UI）

@@ -241,7 +241,7 @@ pub fn set_settings(
     if applied.hotkey != previous.hotkey {
         crate::hotkey::apply(&app, &state, &applied.hotkey);
     }
-    Ok(hotkey_status(&state))
+    Ok(crate::hotkey::status(&state))
 }
 
 /// 当前主题状态：选中主题、CSS 自定义属性与可选主题列表。
@@ -860,7 +860,7 @@ pub fn get_status(state: State<'_, AppState>) -> StatusView {
         .collect();
     StatusView {
         previous_app: state.previous_app(),
-        hotkey: hotkey_status(&state),
+        hotkey: crate::hotkey::status(&state),
         capabilities: state.host.capabilities(),
         plugins,
     }
@@ -874,15 +874,6 @@ pub fn get_status(state: State<'_, AppState>) -> StatusView {
 pub fn hide_window(app: AppHandle, state: State<'_, AppState>) {
     state.host.cancel_paste();
     summon::hide(&app);
-}
-
-fn hotkey_status(state: &AppState) -> HotkeyStatusView {
-    let hotkey = lock(&state.hotkey);
-    HotkeyStatusView {
-        label: hotkey.label.clone(),
-        error: hotkey.error.clone(),
-        registered: hotkey.handle.is_some(),
-    }
 }
 
 /// 供托盘「重新扫描软件」使用：扫描后把新状态推送给 UI。
