@@ -31,6 +31,7 @@ import {
   type SettingsSectionId,
 } from "./components/SettingsScreen";
 import { StatusBanner } from "./components/StatusBanner";
+import { StageInfo } from "./components/StageInfo";
 
 /** 把宿主下发的语义 token 写成根元素上的 CSS 自定义属性。
  *
@@ -989,7 +990,7 @@ export default function App() {
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          placeholder="搜索软件…"
+          placeholder="搜索软件、备忘录、剪贴板…"
           value={input}
           aria-label="搜索"
           aria-controls="result-list"
@@ -1087,18 +1088,30 @@ export default function App() {
             workspaceAlert={workspaceAlert}
           />
 
-          <ResultList
-            items={response.items}
-            selection={response.selection}
-            onActivate={(item) => void runExecute(item)}
-          />
+          <div className="search-body">
+            <ResultList
+              items={response.items}
+              selection={response.selection}
+              query={response.input}
+              onActivate={(item) => void runExecute(item)}
+            />
 
-          <MemoPreview
-            item={selected}
-            preview={preview}
-            open={previewOpen}
-            onToggle={() => setPreviewOpen((current) => !current)}
-          />
+            <aside className="stage" data-testid="stage">
+              {selected &&
+              (selected.kind === "memo" ||
+                selected.kind === "bookmark" ||
+                selected.kind === "clipboardEntry") ? (
+                <MemoPreview
+                  item={selected}
+                  preview={preview}
+                  open={previewOpen}
+                  onToggle={() => setPreviewOpen((current) => !current)}
+                />
+              ) : (
+                <StageInfo item={selected} />
+              )}
+            </aside>
+          </div>
 
           <ActionBar selected={selected} count={response.items.length} />
         </>

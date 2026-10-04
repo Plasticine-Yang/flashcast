@@ -1104,50 +1104,54 @@ pub fn builtin_themes() -> Vec<ThemeDocument> {
 }
 
 /// 内置浅色主题的 token（与 `src/styles.css` 的默认值一致）。
+///
+/// 这套浅色是「棱镜」视觉方向的基准：冷白表面、钴蓝强调、荧光黄命中标记由 UI 自己
+/// 承担；语义 token 仍只描述颜色 / 字体 / 间距 / 圆角 / 阴影与状态，不含动画。
 pub fn light_tokens() -> ThemeTokens {
     ThemeTokens {
         color: ColorTokens {
-            page_background: "rgba(250, 250, 251, 0.98)".to_string(),
+            page_background: "#ffffff".to_string(),
             surface: "#ffffff".to_string(),
-            hover: "rgba(15, 23, 42, 0.04)".to_string(),
-            border: "rgba(15, 23, 42, 0.12)".to_string(),
-            border_strong: "rgba(15, 23, 42, 0.24)".to_string(),
-            text: "#16181d".to_string(),
-            text_muted: "#6b7280".to_string(),
-            text_disabled: "#8b919c".to_string(),
-            accent: "#2563eb".to_string(),
-            info_background: "rgba(15, 23, 42, 0.05)".to_string(),
-            warning_background: "rgba(217, 119, 6, 0.12)".to_string(),
-            warning_border: "rgba(217, 119, 6, 0.45)".to_string(),
-            warning_text: "#92400e".to_string(),
-            icon_fallback_background: "rgba(15, 23, 42, 0.08)".to_string(),
+            hover: "rgba(13, 15, 20, 0.045)".to_string(),
+            border: "rgba(13, 15, 20, 0.10)".to_string(),
+            border_strong: "rgba(13, 15, 20, 0.20)".to_string(),
+            text: "#0d0f14".to_string(),
+            text_muted: "#5f6673".to_string(),
+            text_disabled: "#838a96".to_string(),
+            accent: "#2b62ff".to_string(),
+            info_background: "rgba(13, 15, 20, 0.045)".to_string(),
+            warning_background: "rgba(176, 118, 12, 0.12)".to_string(),
+            warning_border: "rgba(176, 118, 12, 0.42)".to_string(),
+            warning_text: "#7a4f08".to_string(),
+            icon_fallback_background: "rgba(13, 15, 20, 0.06)".to_string(),
         },
         font: ThemeTokens::canonical_font(),
         space: ThemeTokens::canonical_space(),
         radius: RadiusTokens {
             window: "14px".to_string(),
             item: "8px".to_string(),
-            control: "6px".to_string(),
+            control: "8px".to_string(),
         },
         shadow: ShadowTokens {
-            window: "0 8px 28px rgba(15, 23, 42, 0.16)".to_string(),
-            overlay: "0 12px 32px rgba(15, 23, 42, 0.22)".to_string(),
+            window: "0 24px 56px rgba(18, 28, 55, 0.18), 0 2px 6px rgba(18, 28, 55, 0.08)"
+                .to_string(),
+            overlay: "0 14px 30px rgba(18, 28, 55, 0.26)".to_string(),
         },
         state: StateTokens {
             selected: SelectedState {
-                background: "rgba(37, 99, 235, 0.12)".to_string(),
-                border: "rgba(37, 99, 235, 0.55)".to_string(),
+                background: "rgba(43, 98, 255, 0.09)".to_string(),
+                border: "rgba(43, 98, 255, 0.45)".to_string(),
             },
             focus: FocusState {
-                ring: "rgba(37, 99, 235, 0.65)".to_string(),
+                ring: "rgba(43, 98, 255, 0.95)".to_string(),
             },
             error: ErrorState {
-                background: "rgba(220, 38, 38, 0.1)".to_string(),
+                background: "rgba(220, 38, 38, 0.10)".to_string(),
                 border: "rgba(220, 38, 38, 0.5)".to_string(),
-                text: "#991b1b".to_string(),
+                text: "#a11313".to_string(),
             },
             disabled: DisabledState {
-                text: "#8b919c".to_string(),
+                text: "#838a96".to_string(),
                 opacity: 0.5,
             },
         },

@@ -1,47 +1,51 @@
 /*
- * Flashcast 设计令牌与紧凑列表样式。
+ * Flashcast「棱镜」视觉与交互。
+ *
+ * 设计北极星：不用回车才知道是什么——选中的那一刻，内容已经在旁边展开。
+ * 搜索首屏是「结果 | 常驻现场预览」两栏；命中字符用荧光黄标出；选中行由一块会移动的
+ * 底板指示。设置页沿用左侧分组目录 + 右侧内容区。
  *
  * 约定（ADR §7 / spec §Implementation Decisions）：
- * - 窗口基准宽约 640px，约 14px 圆角，中性背景、细边框、轻阴影；
- * - 搜索输入约 16px；结果列表标题 15px/500、副标题 12px，行高 48px、图标 30px
- *   （窗口很矮时收敛回 44px / 24px）；其余正文约 14px，辅助信息约 12px；
- * - 焦点由窗口表达（`.app[data-screen="search"]`），搜索输入框行内不画焦点环；
- * - 唤起、关闭、键盘选择、查询更新**无动画**：这些元素统一 `transition: none`；
- * - 选中、焦点与错误状态视觉可区分；
- * - 低分辨率与系统缩放下保持可用（列表滚动，极小高度下压缩内边距）。
+ * - 窗口基准宽 640px、约 14px 圆角；冷白中性面、细边框、柔和阴影；
+ * - 搜索输入约 16px；结果标题 14px/500、副标题 11.5px，行高 44px、图标 26px；
+ *   其余正文约 14px，辅助信息约 12px；
+ * - 高频操作元素（窗口、搜索框、结果行、操作栏、设置项）**无动画**：统一 `transition:none`
+ *   （由 `tools/ui-check` 的 animationFacts 断言）。唯一的动效是结果选中底板、面板展开与
+ *   首次进入，它们都是独立元素，不影响控件本身；
+ * - 选中、焦点与错误状态视觉可区分；低分辨率与系统缩放下保持可用。
  *
- * 这里的 `:root` 只是**兜底默认值**（与内置浅色主题一致），宿主在启动时会用所选
- * 主题的语义 token 覆盖这些自定义属性（见 `src/App.tsx` 的 `applyThemeVars`）。
- * UI 不认识任何具体主题，只消费属性；主题不得改变布局几何（宿主校验时钉住
- * 间距与字号），因此切换主题不会移动控件。
+ * 这里的 `:root` 是**兜底默认值**（与内置浅色主题一致），宿主在启动时用所选主题的
+ * 语义 token 覆盖这些自定义属性（见 `src/App.tsx` 的 `applyThemeVars`）。
+ * `--fc-highlight`、`--fc-result-*` 属于 UI 自有几何 / 语义，不由主题提供：
+ * 主题只管颜色、字体、间距、圆角、阴影与状态，不得改变布局几何。
  */
 
 :root {
   --fc-radius-window: 14px;
   --fc-radius-item: 8px;
-  --fc-radius-control: 6px;
-  --fc-page-bg: rgba(250, 250, 251, 0.98);
+  --fc-radius-control: 8px;
+  --fc-page-bg: #ffffff;
   --fc-surface: #ffffff;
-  --fc-hover-bg: rgba(15, 23, 42, 0.04);
-  --fc-border: rgba(15, 23, 42, 0.12);
-  --fc-border-strong: rgba(15, 23, 42, 0.24);
-  --fc-text: #16181d;
-  --fc-text-muted: #6b7280;
-  --fc-text-disabled: #8b919c;
-  --fc-accent: #2563eb;
-  --fc-selection-bg: rgba(37, 99, 235, 0.12);
-  --fc-selection-border: rgba(37, 99, 235, 0.55);
-  --fc-focus-ring: rgba(37, 99, 235, 0.65);
+  --fc-hover-bg: rgba(13, 15, 20, 0.045);
+  --fc-border: rgba(13, 15, 20, 0.1);
+  --fc-border-strong: rgba(13, 15, 20, 0.2);
+  --fc-text: #0d0f14;
+  --fc-text-muted: #5f6673;
+  --fc-text-disabled: #838a96;
+  --fc-accent: #2b62ff;
+  --fc-selection-bg: rgba(43, 98, 255, 0.09);
+  --fc-selection-border: rgba(43, 98, 255, 0.45);
+  --fc-focus-ring: rgba(43, 98, 255, 0.95);
   --fc-error-bg: rgba(220, 38, 38, 0.1);
   --fc-error-border: rgba(220, 38, 38, 0.5);
-  --fc-error-text: #991b1b;
-  --fc-warning-bg: rgba(217, 119, 6, 0.12);
-  --fc-warning-border: rgba(217, 119, 6, 0.45);
-  --fc-warning-text: #92400e;
-  --fc-info-bg: rgba(15, 23, 42, 0.05);
-  --fc-icon-fallback-bg: rgba(15, 23, 42, 0.08);
-  --fc-shadow: 0 8px 28px rgba(15, 23, 42, 0.16);
-  --fc-shadow-overlay: 0 12px 32px rgba(15, 23, 42, 0.22);
+  --fc-error-text: #a11313;
+  --fc-warning-bg: rgba(176, 118, 12, 0.12);
+  --fc-warning-border: rgba(176, 118, 12, 0.42);
+  --fc-warning-text: #7a4f08;
+  --fc-info-bg: rgba(13, 15, 20, 0.045);
+  --fc-icon-fallback-bg: rgba(13, 15, 20, 0.06);
+  --fc-shadow: 0 24px 56px rgba(18, 28, 55, 0.18), 0 2px 6px rgba(18, 28, 55, 0.08);
+  --fc-shadow-overlay: 0 14px 30px rgba(18, 28, 55, 0.26);
   --fc-disabled-opacity: 0.5;
   --fc-font-family:
     system-ui,
@@ -59,15 +63,14 @@
   --fc-space-row-gap: 10px;
   --fc-space-section-gap: 8px;
   --fc-row-height: 44px;
-  /* 结果列表自己的节奏。这是 UI 自有几何，不是主题令牌：主题的间距与字号是钉死的
-     规范值，不允许改布局几何（见 `crates/flashcast-core/src/theme.rs`）。
-     舒展方向：层次靠排版与呼吸感建立，而不是靠容器堆叠。
-     行高定在 48px：15px 标题 + 12px 副标题约占 42px，再矮就只剩 1px 余量会挤；
-     固定 640x420 的窗口下列表区约 325px，48px + 4px 行距正好完整显示 6 条。 */
-  --fc-result-row-height: 48px;
-  --fc-result-row-gap: 14px;
-  --fc-result-icon: 30px;
+  /* UI 自有：结果列表的节奏与命中标记。不属于主题令牌。 */
+  --fc-result-row-height: 44px;
+  --fc-result-row-gap: 2px;
+  --fc-result-icon: 26px;
   --fc-result-radius: 10px;
+  /* 「棱镜」签名：搜索命中字符的荧光黄标记；自带深色前景，两种外观都可读。 */
+  --fc-highlight: #ffe45c;
+  --fc-highlight-ink: #1a1500;
 }
 
 * {
@@ -84,7 +87,7 @@ body {
   color: var(--fc-text);
   font-family: var(--fc-font-family);
   font-size: var(--fc-font-body);
-  line-height: 1.45;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -115,11 +118,7 @@ body {
 
 /*
  * 浏览器替身专用（只有 `isBrowserMock` 时才渲染这个按钮）。
- *
- * 真实外壳在启动软件后关窗，用户靠全局快捷键或托盘再唤起；浏览器里没有任何唤回
- * 入口，窗口一旦隐藏就是一整页空白。这个按钮只在窗口隐藏时出现，给手动检查留一条
- * 可发现的路。放在 `.app` 内部是为了不改变应用结构，靠 `position: fixed` 与显式的
- * `visibility: visible` 脱离父元素的隐藏。
+ * 真实外壳在启动软件后关窗；浏览器里没有唤回入口，这里留一条可发现的路。
  */
 .browser-recall {
   display: none;
@@ -149,31 +148,28 @@ body {
 }
 
 /*
- * 窗口级焦点。
- *
- * 搜索输入框就是这扇窗口的主表面，所以在输入框行内画焦点环看起来像原生 HTML 控件
- * ——一个蓝色方框套在文字上。焦点改由窗口表达：外框拾取强调色，外面再叠一层极轻的
- * 光环。
- *
- * 条件只看 `data-screen="search"`，不看输入框是否聚焦：键盘入口挂在 window 上
- * （见 `App.tsx`），鼠标点过结果行之后焦点会落到 body 但键盘依然可用，此时外框不该
- * 暗下去。设置页里搜索行不是焦点表面，所以光环只在搜索界面出现；设置页里每个可聚焦
- * 控件仍然保留自己的 `:focus-visible` 焦点环。
- *
+ * 窗口级焦点：搜索输入框就是这扇窗口的主表面，焦点由窗口表达——外框拾取强调色。
+ * 条件只看 `data-screen="search"`，不看输入框是否聚焦：键盘入口挂在 window 上，
+ * 鼠标点过结果行之后焦点会落到 body 但键盘依然可用，此时外框不该暗下去。
  * 不做过渡：唤起与关闭是最高频的动作，状态必须立刻到位。
  */
 .app[data-screen="search"] {
   border-color: var(--fc-selection-border);
   box-shadow:
     var(--fc-shadow),
-    0 0 0 4px var(--fc-selection-bg);
+    0 0 0 3px var(--fc-selection-bg);
 }
 
+/* ---------------------------------------------------------------------------
+ * 搜索行
+ * ------------------------------------------------------------------------- */
+
 .search-row {
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--fc-space-section-gap);
-  padding: 12px var(--fc-space-window-padding) 10px;
+  padding: 11px var(--fc-space-window-padding) 10px;
   border-bottom: 1px solid var(--fc-border);
 }
 
@@ -186,31 +182,409 @@ body {
   color: inherit;
   font-size: var(--fc-font-input);
   font-family: inherit;
-  padding: 4px 2px;
-  /* 焦点状态可辨识，但不用动画；焦点指示由窗口承担，见 `.app[data-screen="search"]`。 */
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  padding: 3px 2px;
   transition: none;
   caret-color: var(--fc-accent);
 }
 
 .search-input::placeholder {
   color: var(--fc-text-muted);
+  font-weight: 400;
 }
 
-/* 这里刻意不画焦点环：行内蓝框看起来像原生控件，与「简约」的窗口表面冲突。
-   输入光标本身是可见的焦点指示，窗口外框同时给出全局的焦点状态。 */
+/* 焦点由窗口承担，输入框行内不画焦点环。 */
 
 .scope-label {
   flex: none;
-  font-size: var(--fc-font-aux);
-  color: var(--fc-text-muted);
-  padding: 2px 8px;
-  border: 1px solid var(--fc-border);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fc-accent);
+  padding: 3px 9px;
+  border: 1px solid var(--fc-selection-border);
+  background: var(--fc-selection-bg);
   border-radius: 999px;
   white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------------------
- * 设置页与通用小按钮。沿用同一组设计令牌：无 CSS 框架、无动画。
+ * 搜索主体：结果 | 常驻现场预览
+ * ------------------------------------------------------------------------- */
+
+.search-body {
+  display: grid;
+  grid-template-columns: minmax(0, 42%) minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * 结果列表
+ * ------------------------------------------------------------------------- */
+
+.result-list {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--fc-result-row-gap);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.result-list.empty {
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--fc-text-muted);
+  text-align: center;
+  padding: 20px;
+}
+
+.empty-title {
+  margin: 0;
+  font-size: var(--fc-font-body);
+  font-weight: 600;
+  color: var(--fc-text);
+}
+
+.empty-hint {
+  margin: 0;
+  font-size: var(--fc-font-aux);
+}
+
+/* 选中底板：一块在行之间滑动的色块 + 左侧强调竖条。 */
+.result-band {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 0;
+  height: var(--fc-result-row-height);
+  border-radius: var(--fc-result-radius);
+  background: var(--fc-selection-bg);
+  z-index: 0;
+  pointer-events: none;
+  transform: translateY(var(--band-y, 0));
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.result-band::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 20px;
+  margin-top: -10px;
+  border-radius: 3px;
+  background: var(--fc-accent);
+}
+
+.result-item {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--fc-result-row-gap);
+  min-height: var(--fc-result-row-height);
+  padding: 6px 10px;
+  border-radius: var(--fc-result-radius);
+  border: 1px solid transparent;
+  cursor: default;
+  user-select: none;
+  transition: none;
+}
+
+/* 鼠标悬停只做视觉反馈，绝不改变宿主持有的键盘选择。 */
+.result-item:hover {
+  background: var(--fc-hover-bg);
+}
+
+/* 选中行本身不画底色（底板承担），悬停也不覆盖它。 */
+.result-item[data-selected="true"],
+.result-item[data-selected="true"]:hover {
+  background: transparent;
+}
+
+.result-item[data-selected="true"] .result-title {
+  color: var(--fc-text);
+}
+
+/* 命中字符：荧光黄标记，像马克笔划过。始终配深色前景，两种外观都可读。 */
+.result-title mark {
+  background: var(--fc-highlight);
+  color: var(--fc-highlight-ink);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.result-item .icon {
+  width: var(--fc-result-icon);
+  height: var(--fc-result-icon);
+  border-radius: 8px;
+}
+
+.icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--fc-icon-fallback-bg);
+  color: var(--fc-text);
+  font-size: var(--fc-font-aux);
+  font-weight: 600;
+}
+
+/* 书签结果的浏览器图标：内联 SVG + 主题文字色，不引入图片或图标字体。 */
+.icon-browser {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--fc-icon-fallback-bg);
+  color: var(--fc-text);
+}
+
+.result-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.result-title {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--fc-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.result-subtitle {
+  font-size: 11.5px;
+  letter-spacing: 0.005em;
+  color: var(--fc-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------------------------------------------------------------------
+ * 常驻现场预览（右栏）
+ * ------------------------------------------------------------------------- */
+
+.stage {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--fc-border);
+  background: var(--fc-info-bg);
+}
+
+/* 选中项不是「有完整内容」的条目（软件、命令）时的现场信息。 */
+.stage-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 20px 18px;
+}
+
+.stage-info .stage-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--fc-surface);
+  border: 1px solid var(--fc-border);
+  color: var(--fc-text-muted);
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.stage-info .stage-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.stage-kind {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fc-accent);
+}
+
+.stage-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fc-text);
+  word-break: break-word;
+}
+
+.stage-sub {
+  font-size: 12.5px;
+  color: var(--fc-text-muted);
+  word-break: break-word;
+}
+
+.stage-action {
+  margin-top: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--fc-text-muted);
+}
+
+.stage-action kbd {
+  font-size: 10px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 内容预览（从右栏展开的完整正文 / 图片）
+ * ------------------------------------------------------------------------- */
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  background: var(--fc-info-bg);
+  transition: none;
+}
+
+.preview-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--fc-border);
+}
+
+.preview-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fc-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-meta {
+  font-size: 11px;
+  color: var(--fc-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-header .ghost-button {
+  margin-left: auto;
+}
+
+.preview-body {
+  margin: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--fc-font-family);
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--fc-text);
+  padding: 14px;
+}
+
+/*
+ * 图片剪贴板历史的缩略图（ticket 10）。等比缩放不裁切，边框跟随主题。
+ */
+.icon.thumbnail {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--fc-border);
+  background: var(--fc-surface);
+  object-fit: contain;
+}
+
+/* 按需展开的完整图片：限制尺寸，不撑破浮窗。 */
+.preview-image {
+  max-width: calc(100% - 28px);
+  max-height: 260px;
+  align-self: flex-start;
+  object-fit: contain;
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-item);
+  background: var(--fc-surface);
+  margin: 14px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 操作栏
+ * ------------------------------------------------------------------------- */
+
+.action-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px var(--fc-space-window-padding);
+  border-top: 1px solid var(--fc-border);
+  font-size: 11.5px;
+  color: var(--fc-text-muted);
+  transition: none;
+}
+
+.action-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.action-count {
+  margin-left: auto;
+  color: var(--fc-text-disabled);
+  font-variant-numeric: tabular-nums;
+}
+
+kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 2px 5px;
+  min-width: 18px;
+  text-align: center;
+  border: 1px solid var(--fc-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--fc-surface);
+  color: var(--fc-text);
+}
+
+/* ---------------------------------------------------------------------------
+ * 设置页与通用小按钮
  * ------------------------------------------------------------------------- */
 
 .ghost-button,
@@ -220,7 +594,7 @@ body {
   font-family: inherit;
   font-size: var(--fc-font-aux);
   border-radius: var(--fc-radius-control);
-  padding: 4px 10px;
+  padding: 5px 11px;
   cursor: default;
   transition: none;
 }
@@ -234,12 +608,13 @@ body {
 .ghost-button:hover {
   color: var(--fc-text);
   border-color: var(--fc-border-strong);
+  background: var(--fc-hover-bg);
 }
 
 .primary-button {
-  background: var(--fc-selection-bg);
-  color: var(--fc-text);
-  border: 1px solid var(--fc-selection-border);
+  background: var(--fc-accent);
+  color: #ffffff;
+  border: 1px solid var(--fc-accent);
 }
 
 .secondary-button {
@@ -252,25 +627,17 @@ body {
 .primary-button:focus-visible,
 .secondary-button:focus-visible {
   outline: 2px solid var(--fc-focus-ring);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
 .primary-button:disabled,
 .secondary-button:disabled {
-  /* 禁用状态语义：透明度 + 专用文字色，任何主题下都可辨识。 */
   opacity: var(--fc-disabled-opacity);
   color: var(--fc-text-disabled);
 }
 
 /*
- * 设置页：左侧常驻分组目录 + 右侧内容区。
- *
- * 用 CSS Grid 而不是多包一层 DOM：`.settings-body` 与 10 个区块的结构与缩进都不用动，
- * 新增的只有目录与提示条两个节点。第 3 行是「目录 + 内容区」，两者各自滚动。
- *
- * 为什么值得改（实测）：原来 10 个区块平铺，内容总高 3837px、可视区 363px = **10.57 屏**，
- * 而且低频运维排在最前（配置工作区 414 + 远端同步 327 + 变更与提交 117 = 2.4 屏），
- * 「全局快捷键」却排第 4。改后目录与内容区各 1.00 屏，10 个区块全部可见。
+ * 设置页：左侧常驻分组目录 + 右侧内容区。目录与内容区各自滚动。
  */
 .settings {
   display: grid;
@@ -278,8 +645,8 @@ body {
   grid-template-rows: auto auto 1fr;
   min-height: 0;
   flex: 1 1 auto;
-  /* 滚动交给目录与内容区各自处理。 */
   overflow: hidden;
+  transition: none;
 }
 
 .settings-header {
@@ -299,7 +666,6 @@ body {
   font-weight: 600;
 }
 
-/* 提示条只占右侧内容区那一列，不跨左列。 */
 .settings > .banner {
   grid-column: 2;
   grid-row: 2;
@@ -307,9 +673,6 @@ body {
 
 .settings-nav {
   grid-column: 1;
-  /* 跨过第 2 行（提示条那一行）：提示条出现时只压缩右侧内容区——它本来就会滚动——
-     而不是把常驻目录挤到装不下最后一个区块。实测不跨行时会溢出 7px，
-     「运行环境与能力」被裁切。 */
   grid-row: 2 / 4;
   display: flex;
   flex-direction: column;
@@ -326,12 +689,6 @@ body {
   gap: 1px;
 }
 
-/*
- * 分组标题必须一眼看出是**标签**而不是可点的设置项。
- *
- * 原型第一版只靠 1px 字号差区分（11px vs 12px、同色、同缩进），评审当场指出分不清。
- * 现在六个维度同时分开：字号、字距、颜色、缩进、光标、悬停与选中反馈。
- */
 .settings-nav-label {
   padding: 0 7px 2px;
   font-size: 10px;
@@ -339,7 +696,6 @@ body {
   color: var(--fc-text-disabled);
 }
 
-/* 组与组之间用空间分隔（第一组不需要），组内项之间只有 1px。 */
 .settings-nav-group + .settings-nav-group .settings-nav-label {
   padding-top: 7px;
 }
@@ -350,7 +706,7 @@ body {
   text-align: left;
   font-family: inherit;
   font-size: var(--fc-font-aux);
-  padding: 2px 7px 2px 14px;
+  padding: 3px 7px 3px 12px;
   border: 0;
   border-radius: var(--fc-radius-control);
   background: transparent;
@@ -365,8 +721,8 @@ body {
 
 .settings-nav-item[data-current="true"] {
   background: var(--fc-selection-bg);
-  color: var(--fc-text);
-  font-weight: 500;
+  color: var(--fc-accent);
+  font-weight: 600;
 }
 
 .settings-nav-item:focus-visible {
@@ -385,8 +741,6 @@ body {
   overscroll-behavior: contain;
 }
 
-/* 内容区本身就是容器，区块不再各是一张卡片——卡片套卡片会显得很重。
-   区块内部的纵向排布与间距沿用原来的值。 */
 .settings-body .settings-section {
   display: flex;
   flex-direction: column;
@@ -397,27 +751,20 @@ body {
   padding: 0;
 }
 
-/*
- * 只显示当前区块。区块全部留在 DOM 里、只切 `hidden`：切走再回来不会丢掉正在编辑的
- * 内容（备忘录正文、剪贴板的「确认清空」态等）。
- *
- * 这条必须写在上面那条**之后**：两者特异性相同（都是 0,2,0），后写的赢。
- * `hidden` 也必须显式处理——`.settings-section` 的 `display: flex` 会盖掉浏览器默认的
- * `[hidden] { display: none }`。
- */
+/* 只显示当前区块：其余留在 DOM 里、只切 `hidden`，切走再回来不丢编辑内容。
+   这条必须写在上面那条之后，且显式处理 `hidden`（display:flex 会盖掉默认的 none）。 */
 .settings-body > [hidden] {
   display: none;
 }
 
-/* 区块自己的标题是内容区的标题（14px/600）；区块内的子标题（h3）保持小号次色。 */
 .settings-body .settings-section > .settings-section-title:first-child {
-  font-size: var(--fc-font-body);
+  font-size: 15px;
   font-weight: 600;
   color: var(--fc-text);
+  letter-spacing: -0.01em;
 }
 
-/* 设置页里不显示搜索行：它在设置页里不是搜索表面，而侧栏要让 10 个区块全部可见，
-   这 48px 是必需的（原型实测：目录内容 325px / 可用 342px）。 */
+/* 设置页里不显示搜索行：侧栏要让 10 个区块全部可见，这 48px 是必需的。 */
 .app[data-screen="settings"] .search-row {
   display: none;
 }
@@ -470,10 +817,11 @@ body {
   margin: 0;
   font-size: var(--fc-font-aux);
   color: var(--fc-text-muted);
+  line-height: 1.5;
 }
 
 /* ---------------------------------------------------------------------------
- * 外观主题列表。与结果列表同一套令牌：无动画、选中可辨识。
+ * 外观主题列表
  * ------------------------------------------------------------------------- */
 
 .theme-list {
@@ -535,10 +883,7 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * 剪贴板文件条目（ticket 12）。
- *
- * 文件行嵌在紧凑的条目行里：条目在文件条目时允许换行，文件列表占满下一整行。
- * 与结果列表共用同一套令牌；这是键盘高频操作的界面，因此一律不加动画。
+ * 剪贴板文件条目（ticket 12）
  * ------------------------------------------------------------------------- */
 
 .clipboard-item-files {
@@ -571,7 +916,6 @@ body {
   font-size: var(--fc-font-aux);
 }
 
-/* 引用已经失效：整行按错误色呈现，与「不可恢复」徽标一起，不靠颜色单独传达状态。 */
 .clipboard-file[data-recoverable="false"] {
   border-color: var(--fc-error-border);
   background: var(--fc-error-bg);
@@ -587,10 +931,10 @@ body {
   font-family: inherit;
   font-size: var(--fc-font-body);
   color: inherit;
-  background: var(--fc-page-bg);
+  background: var(--fc-surface);
   border: 1px solid var(--fc-border);
   border-radius: var(--fc-radius-control);
-  padding: 4px 8px;
+  padding: 5px 8px;
   transition: none;
 }
 
@@ -599,9 +943,14 @@ body {
   outline-offset: 1px;
 }
 
+/* ---------------------------------------------------------------------------
+ * 提示条
+ * ------------------------------------------------------------------------- */
+
 .banners {
   display: flex;
   flex-direction: column;
+  flex: none;
 }
 
 .banner {
@@ -635,218 +984,10 @@ body {
   opacity: 0.85;
 }
 
-.result-list {
-  list-style: none;
-  margin: 0;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1 1 auto;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
+/* ---------------------------------------------------------------------------
+ * 设置页的备忘录管理
+ * ------------------------------------------------------------------------- */
 
-.result-list.empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  color: var(--fc-text-muted);
-}
-
-.empty-title {
-  margin: 0;
-  font-size: var(--fc-font-body);
-}
-
-.empty-hint {
-  margin: 0;
-  font-size: var(--fc-font-aux);
-}
-
-.result-item {
-  display: flex;
-  align-items: center;
-  gap: var(--fc-result-row-gap);
-  min-height: var(--fc-result-row-height);
-  padding: 0 14px;
-  border-radius: var(--fc-result-radius);
-  border: 1px solid transparent;
-  cursor: default;
-  user-select: none;
-  transition: none;
-}
-
-/* 鼠标悬停只做视觉反馈，绝不改变宿主持有的键盘选择。 */
-.result-item:hover {
-  background: var(--fc-hover-bg);
-}
-
-.result-item[data-selected="true"] {
-  background: var(--fc-selection-bg);
-  border-color: var(--fc-selection-border);
-}
-
-.icon {
-  flex: none;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  object-fit: contain;
-}
-
-/* 结果列表里的图标跟着舒展方向的节奏放大。缩略图有更具体的规则（`.icon.thumbnail`），
-   它在本规则之后，仍然保持 32px。 */
-.result-item .icon {
-  width: var(--fc-result-icon);
-  height: var(--fc-result-icon);
-  border-radius: 9px;
-}
-
-.icon-fallback {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--fc-icon-fallback-bg);
-  color: var(--fc-text);
-  font-size: var(--fc-font-aux);
-  font-weight: 600;
-}
-
-/* 书签结果的浏览器图标：内联 SVG + 主题文字色，不引入图片或图标字体。 */
-.icon-browser {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--fc-icon-fallback-bg);
-  color: var(--fc-text);
-}
-
-.result-text {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.result-title {
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.result-subtitle {
-  font-size: var(--fc-font-aux);
-  letter-spacing: 0.01em;
-  color: var(--fc-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.action-bar {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 8px var(--fc-space-window-padding);
-  border-top: 1px solid var(--fc-border);
-  font-size: var(--fc-font-aux);
-  color: var(--fc-text-muted);
-  transition: none;
-}
-
-.action-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.action-count {
-  margin-left: auto;
-}
-
-/* 内容预览：紧凑列表下方的按需展开区。展开 / 收起不做动画（高频键盘操作），
-   高度有上限，长正文在内部滚动，窗口尺寸保持稳定。 */
-.preview {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 40%;
-  padding: 8px var(--fc-space-window-padding) 10px;
-  border-top: 1px solid var(--fc-border);
-  background: var(--fc-surface);
-  transition: none;
-}
-
-.preview-header {
-  display: flex;
-  align-items: center;
-  gap: var(--fc-space-section-gap);
-}
-
-.preview-title {
-  font-size: var(--fc-font-aux);
-  font-weight: 600;
-  color: var(--fc-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.preview-meta {
-  font-size: var(--fc-font-aux);
-  color: var(--fc-text-muted);
-  white-space: nowrap;
-}
-
-.preview-header .ghost-button {
-  margin-left: auto;
-}
-
-.preview-body {
-  margin: 0;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--fc-font-family);
-  font-size: var(--fc-font-body);
-  color: var(--fc-text);
-}
-
-/*
- * 图片剪贴板历史的缩略图（ticket 10）。
- *
- * 与图标同一条左列，稍大一点让用户能认出内容；等比缩放不裁切，边框跟随主题。
- */
-.icon.thumbnail {
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--fc-border);
-  background: var(--fc-surface);
-  object-fit: contain;
-}
-
-/*
- * 按需展开的完整图片：限制高度，不撑破浮窗，也不做动画（高频键盘操作）。
- */
-.preview-image {
-  max-width: 100%;
-  max-height: 220px;
-  align-self: flex-start;
-  object-fit: contain;
-  border: 1px solid var(--fc-border);
-  border-radius: var(--fc-radius-item);
-  background: var(--fc-surface);
-}
-
-/* 设置页的备忘录管理：沿用与主题列表相同的紧凑行。 */
 .memo-list {
   list-style: none;
   margin: 0 0 var(--fc-space-section-gap);
@@ -924,55 +1065,9 @@ body {
   border-radius: var(--fc-radius-control);
 }
 
-kbd {
-  font-family: inherit;
-  font-size: var(--fc-font-aux);
-  padding: 1px 5px;
-  border: 1px solid var(--fc-border-strong);
-  border-radius: var(--fc-radius-control);
-  background: var(--fc-surface);
-}
-
-/* 系统缩放与低分辨率：窗口很矮时压缩行高与内边距，保证仍可操作。 */
-@media (max-height: 380px) {
-  :root {
-    --fc-row-height: 36px;
-    /* 舒展方向要在这里收敛：窗口很矮时行高与图标回到接近基线的尺度。
-       窗口目前固定 640x420（不可缩放），所以这个分支不会触发，留作窗口尺寸
-       变化时的兜底。 */
-    --fc-result-row-height: 44px;
-    --fc-result-icon: 24px;
-    --fc-result-row-gap: 10px;
-  }
-
-  .search-row {
-    padding: 8px 12px 6px;
-  }
-
-  .action-bar {
-    padding: 6px 12px;
-  }
-}
-
-@media (max-width: 520px) {
-  :root {
-    --fc-radius-window: 10px;
-  }
-
-  .scope-label {
-    display: none;
-  }
-}
-
-/* 尊重系统的「减少动态效果」设置；本版本高频操作本来就没有动画。 */
-@media (prefers-reduced-motion: reduce) {
-  * {
-    transition: none !important;
-    animation: none !important;
-  }
-}
-
-/* 变更与提交区段（ticket 15）：状态列表、真实差异与提交范围。 */
+/* ---------------------------------------------------------------------------
+ * 变更与提交（ticket 15）
+ * ------------------------------------------------------------------------- */
 
 .changes-list {
   display: flex;
@@ -1067,4 +1162,54 @@ kbd {
 .commit-message {
   resize: vertical;
   font-family: inherit;
+}
+
+/* ---------------------------------------------------------------------------
+ * 响应式与动态效果
+ * ------------------------------------------------------------------------- */
+
+/* 系统缩放与低分辨率：窗口很矮时压缩行高与内边距，保证仍可操作。 */
+@media (max-height: 380px) {
+  :root {
+    --fc-row-height: 36px;
+    --fc-result-row-height: 40px;
+    --fc-result-icon: 22px;
+  }
+
+  .search-row {
+    padding: 8px 12px 6px;
+  }
+
+  .action-bar {
+    padding: 6px 12px;
+  }
+}
+
+@media (max-width: 520px) {
+  :root {
+    --fc-radius-window: 10px;
+  }
+
+  .scope-label {
+    display: none;
+  }
+
+  /* 窄屏：预览退到列表下方，避免两栏把结果挤到不可读。 */
+  .search-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 40%);
+  }
+
+  .stage {
+    border-left: none;
+    border-top: 1px solid var(--fc-border);
+  }
+}
+
+/* 尊重系统的「减少动态效果」设置。 */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
 }

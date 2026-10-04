@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "project": "Flashcast",
+  "brief": "键盘优先的桌面启动器首屏：输入即搜、↑↓ 选择、回车打开软件 / 粘贴备忘录与剪贴板 / 在 Chrome 打开书签。四个方向共用同一批真实内容与主要任务，只改构图、信息组织、字体气质、色彩关系与交互手感。",
+  "round": "01",
+  "candidates": [
+    {
+      "id": "baseline",
+      "name": "现状",
+      "concept": "当前实现：浅色中性底、蓝色整块选区、首字符占位图标，层次与选中反馈都偏平。",
+      "typography": "系统无衬线，标题 15/500，副标题 12",
+      "palette": ["#fafafb", "#2563eb", "#16181d"],
+      "traits": ["纯蓝整块选区", "首字符占位图标", "无动效"],
+      "kind": "image",
+      "source": "baseline/page.png",
+      "baseline": true
+    },
+    {
+      "id": "night-watch",
+      "name": "01 夜航",
+      "concept": "像深夜值班室里随手擦亮的一块磨砂玻璃，安静，但被选中的那一行有温度。",
+      "typography": "无衬线（OPPO Sans / Noto Sans CJK）；标题 14.5/500，副标题 12",
+      "palette": ["#0b0c0f", "#1b1d23", "#f2a76b"],
+      "traits": ["深色玻璃浮窗 + 炉火橙", "会滑动的暖色选中指示条", "底部内容预览条"],
+      "kind": "html",
+      "source": "a-night-watch.html",
+      "interactive": true
+    },
+    {
+      "id": "paper-index",
+      "name": "02 纸页",
+      "concept": "像翻一本属于自己的索引册，安静、可读、有书卷气。",
+      "typography": "衬线标题（Noto Serif CJK）+ 无衬线正文 + 等宽编号；标题 15.5",
+      "palette": ["#f6f1e7", "#fffdf8", "#b4472f"],
+      "traits": ["暖纸 + 赭红墨线", "结果按来源分节编号", "带横线的索引卡预览"],
+      "kind": "html",
+      "source": "b-paper-index.html",
+      "interactive": true
+    },
+    {
+      "id": "signal",
+      "name": "03 信号",
+      "concept": "像调准频率——输入时结果一台一台被锁定，回车把信号发出去。",
+      "typography": "全等宽（Noto Sans Mono CJK）；正文 13.5，状态 10.5",
+      "palette": ["#0e1416", "#4fd1b5", "#f0b45a"],
+      "traits": ["深石板 + 荧光青绿", "等宽字符与类型字形", "扫描线动效 + 仪器状态栏"],
+      "kind": "html",
+      "source": "c-signal.html",
+      "interactive": true
+    },
+    {
+      "id": "prism",
+      "name": "04 棱镜",
+      "concept": "不用回车才知道是什么——选中的那一刻，内容已经在旁边展开。",
+      "typography": "无衬线（OPPO Sans）；标题 13.5/500，预览正文 13/1.62",
+      "palette": ["#ffffff", "#2b62ff", "#ffe45c"],
+      "traits": ["亮白 + 钴蓝", "结果与常驻现场预览左右分栏", "命中字符荧光黄高亮"],
+      "kind": "html",
+      "source": "d-prism.html",
+      "interactive": true
+    }
+  ]
+}
