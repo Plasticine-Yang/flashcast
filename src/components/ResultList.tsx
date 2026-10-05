@@ -1,20 +1,20 @@
-import { useLayoutEffect, useRef, useState } from "react";
 import type { ItemView } from "../types";
+import { Glyph } from "./Glyph";
 
 interface Props {
   items: ItemView[];
   selection: number;
   onActivate: (item: ItemView) => void;
-  /** 当前查询：用于把命中字符标成荧光黄。 */
+  /** 当前查询：用于突出命中的字符。 */
   query?: string;
 }
 
-/** 首字符占位图标。真实图标由宿主以 data URL 提供。 */
-function FallbackIcon({ title }: { title: string }) {
-  const initial = Array.from(title.trim())[0] ?? "?";
+/** 语义占位图标。真实图标由宿主以 data URL 提供。 */
+function FallbackIcon({ kind, title }: { kind: string; title: string }) {
+  const glyph = kind !== "application" ? kind : /终端|terminal/i.test(title) ? "command" : /文件|files|finder/i.test(title) ? "workspace" : /浏览器|firefox|chrome|safari/i.test(title) ? "browser" : /code|编辑器/i.test(title) ? "editor" : /计算器|calculator/i.test(title) ? "calculator" : kind;
   return (
     <span className="icon icon-fallback" aria-hidden="true">
-      {initial}
+      <Glyph name={glyph} />
     </span>
   );
 }
@@ -64,22 +64,6 @@ function highlight(title: string, query: string | undefined) {
 }
 
 export function ResultList({ items, selection, onActivate, query }: Props) {
-  const listRef = useRef<HTMLUListElement>(null);
-  const [band, setBand] = useState({ y: 0, h: 44 });
-
-  // 选中底板：一块在行之间滑动的色块。位置在布局阶段直接读到，避免先闪一帧。
-  useLayoutEffect(() => {
-    const list = listRef.current;
-    if (!list) {
-      return;
-    }
-    const row = list.querySelectorAll<HTMLElement>(".result-item")[selection];
-    if (!row) {
-      return;
-    }
-    setBand({ y: row.offsetTop, h: row.offsetHeight });
-  }, [selection, items, query]);
-
   if (items.length === 0) {
     return (
       <div className="result-list empty" data-testid="empty-state" role="listbox" aria-label="结果">
@@ -91,18 +75,11 @@ export function ResultList({ items, selection, onActivate, query }: Props) {
   return (
     <ul
       id="result-list"
-      ref={listRef}
       className="result-list"
       data-testid="result-list"
       role="listbox"
       aria-label="结果"
     >
-      <li
-        className="result-band"
-        aria-hidden="true"
-        role="presentation"
-        style={{ "--band-y": `${band.y}px`, height: `${band.h}px` } as React.CSSProperties}
-      />
       {items.map((item, index) => {
         const selected = index === selection;
         return (
@@ -134,12 +111,14 @@ export function ResultList({ items, selection, onActivate, query }: Props) {
               /* 书签结果必须有浏览器图标：它来自哪个浏览器是用户要认出的信息。 */
               <BrowserIcon />
             ) : (
-              <FallbackIcon title={item.title} />
+              <FallbackIcon kind={item.kind} title={item.title} />
             )}
             <span className="result-text">
               <span className="result-title">{highlight(item.title, query)}</span>
               {item.subtitle ? <span className="result-subtitle">{item.subtitle}</span> : null}
             </span>
+            <span className="result-kind">{{ application: "软件", command: "命令", memo: "备忘录", clipboardEntry: "剪贴板", bookmark: "书签" }[item.kind]}</span>
+            <span className="result-enter" aria-hidden="true">↵</span>
           </li>
         );
       })}

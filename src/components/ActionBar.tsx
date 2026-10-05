@@ -9,6 +9,7 @@ interface Props {
 export function ActionBar({ selected, count }: Props) {
   return (
     <footer className="action-bar" data-testid="action-bar">
+      <span className="product-signature"><svg viewBox="0 0 16 20" width="12" height="15" fill="currentColor" aria-hidden="true"><path d="M9 0 1 11h6l-1 9 9-12H9z"/></svg> FLASHCAST</span>
       <span className="action-hint">
         <kbd>↑</kbd>
         <kbd>↓</kbd> 选择

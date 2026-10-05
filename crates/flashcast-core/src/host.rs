@@ -51,8 +51,8 @@ use crate::sync::{
     self, PullOutcome, PushOutcome, SyncControl, SyncError, SyncProgress, SyncStatus,
 };
 use crate::theme::{
-    Appearance, ThemeDocument, ThemeEntry, ThemeError, ThemeLibrary, ThemeSelection, ThemeState,
-    ThemeTokens, THEME_LIGHT,
+    Appearance, SurfaceRecipe, SurfaceRenderer, SurfaceStyle, ThemeAppearance, ThemeDocument,
+    ThemeEntry, ThemeError, ThemeLibrary, ThemeSelection, ThemeState, ThemeTokens, THEME_ARC,
 };
 use crate::watch::{hash_bytes, WatchEventTrace, WorkspaceWatcher};
 use crate::workspace::{
@@ -125,7 +125,9 @@ struct HostInner {
     /// 主题库：内置主题 + 从工作区 `themes/` 读入的本地主题包。
     theme_library: ThemeLibrary,
     /// 当前选中的主题 id。
-    selected_theme: String,
+    theme_selection: ThemeSelection,
+    theme_styles: Vec<SurfaceStyle>,
+    theme_style: SurfaceStyle,
     /// 当前系统外观。「跟随系统」的主题据此解析。
     system_appearance: Appearance,
     /// 最近一次成功解析出的 token：无效主题时保留它，即「上一次可用外观」。
@@ -298,7 +300,9 @@ impl Host {
                 // 默认清单 = 浅色 / 深色 / 跟随系统三个默认主题。
                 manifest: PluginManifestFile::defaults(),
                 theme_library: ThemeLibrary::with_builtins(),
-                selected_theme: THEME_LIGHT.to_string(),
+                theme_selection: ThemeSelection::new(THEME_ARC),
+                theme_styles: vec![SurfaceStyle::solid()],
+                theme_style: SurfaceStyle::solid(),
                 system_appearance: Appearance::Light,
                 theme_tokens: crate::theme::light_tokens(),
                 theme_appearance: Appearance::Light,
@@ -330,6 +334,14 @@ impl Host {
             paste: Mutex::new(PasteState::default()),
             paste_epoch: AtomicU64::new(0),
         };
+        if let Ok(text) = std::fs::read_to_string(host.deps.device_dir.join("appearance.json")) {
+            if let Ok(selection) = ThemeSelection::from_json(&text) {
+                let mut inner = lock(&host.inner);
+                if Self::validate_theme_selection(&inner, &selection).is_ok() {
+                    inner.theme_selection = selection;
+                }
+            }
+        }
         host.rescan_catalog();
         host.restore_workspace();
         // Chrome 关联是设备本地数据：启动时恢复，重启后仍然能直接检索与打开。
@@ -1117,44 +1129,31 @@ impl Host {
         }
 
         // 3. 当前选中的主题。不可用时不切换，保留上一次可用外观。
-        let target: Option<String> = match workspace.read_config_text(&workspace.theme_path()) {
+        let target = match workspace.read_config_text(&workspace.theme_path()) {
             Ok(Some(text)) => match ThemeSelection::from_json(&text) {
-                Ok(selection) => Some(selection.selected),
+                Ok(selection) => Some(selection),
                 Err(error) => {
                     reason = Some(error.to_string());
                     None
                 }
             },
-            // 目标工作区没有主题配置：切换工作区时回到默认主题。
-            Ok(None) if activation => Some(THEME_LIGHT.to_string()),
+            Ok(None) if activation => Some(ThemeSelection::new(THEME_ARC)),
             Ok(None) => None,
             Err(error) => {
                 reason = Some(format!("无法读取主题配置：{error}"));
                 None
             }
         };
-        if let Some(target) = target {
-            match () {
-                () if target == inner.selected_theme => {}
-                () => {
-                    let usable = inner
-                        .manifest
-                        .get(&target)
-                        .filter(|entry| entry.is_theme() && entry.enabled)
-                        .and_then(|_| inner.theme_library.document(&target).ok())
-                        .map(|document| document.resolve(inner.system_appearance).is_ok())
-                        .unwrap_or(false);
-                    if usable {
-                        inner.selected_theme = target.clone();
-                        inner.theme_error = None;
-                        inner.theme_notice = None;
-                        changed = true;
-                    } else {
-                        reason = Some(format!(
-                            "主题「{target}」不可用（不存在、已停用或无法解析），继续使用上一次可用外观"
-                        ));
-                    }
+        if let Some(selection) = target {
+            match Self::validate_theme_selection(inner, &selection) {
+                Ok(()) if selection != inner.theme_selection => {
+                    inner.theme_selection = selection;
+                    inner.theme_error = None;
+                    inner.theme_notice = None;
+                    changed = true;
                 }
+                Ok(()) => {}
+                Err(error) => reason = Some(format!("{error}，继续使用上一次可用外观")),
             }
         }
 
@@ -1352,8 +1351,8 @@ impl Host {
 
         let theme_path = workspace.theme_path();
         if let Ok(None) = workspace.read_config_text(&theme_path) {
-            let selected = lock(&self.inner).selected_theme.clone();
-            if let Ok(selection) = ThemeSelection::new(selected).to_json() {
+            let selection = lock(&self.inner).theme_selection.clone();
+            if let Ok(selection) = selection.to_json() {
                 let _ = self.persist_workspace_file(|_| theme_path.clone(), selection.as_bytes());
             }
         }
@@ -2166,29 +2165,66 @@ impl Host {
 
     /// 选择主题。主题不存在、已停用或无法解析时不切换，只返回中文原因。
     pub fn select_theme(&self, id: &str) -> Result<ThemeState, ThemeError> {
-        {
-            let inner = lock(&self.inner);
-            let entry = inner
-                .manifest
-                .get(id)
-                .filter(|entry| entry.is_theme())
-                .ok_or_else(|| ThemeError::Unknown(id.to_string()))?;
-            if !entry.enabled {
-                return Err(ThemeError::Disabled(entry.name.clone()));
-            }
-            inner
-                .theme_library
-                .document(id)?
-                .resolve(inner.system_appearance)?;
+        let mut selection = lock(&self.inner).theme_selection.clone();
+        selection.selected = id.into();
+        self.save_theme_selection(selection)
+    }
+
+    pub fn set_appearance_preferences(
+        &self,
+        appearance: ThemeAppearance,
+        style: String,
+        reduce_transparency: bool,
+    ) -> Result<ThemeState, ThemeError> {
+        let mut selection = lock(&self.inner).theme_selection.clone();
+        selection.appearance = appearance;
+        selection.styles.insert(selection.selected.clone(), style);
+        selection.reduce_transparency = reduce_transparency;
+        self.save_theme_selection(selection)
+    }
+
+    fn validate_theme_selection(
+        inner: &HostInner,
+        selection: &ThemeSelection,
+    ) -> Result<(), ThemeError> {
+        let entry = inner
+            .manifest
+            .get(&selection.selected)
+            .filter(|e| e.is_theme())
+            .ok_or_else(|| ThemeError::Unknown(selection.selected.clone()))?;
+        if !entry.enabled {
+            return Err(ThemeError::Disabled(entry.name.clone()));
         }
-        // 先落盘再改生效状态：写入失败时保持原有主题可用。
-        let selection = ThemeSelection::new(id);
+        let document = inner.theme_library.document(&selection.selected)?;
+        document.validate()?;
+        for (theme, style) in &selection.styles {
+            if !crate::theme::is_valid_theme_id(theme) || !crate::theme::is_valid_theme_id(style) {
+                return Err(ThemeError::invalid("主题风格偏好标识无效"));
+            }
+        }
+        if let Some(style) = selection.styles.get(&selection.selected) {
+            if !document.surface_styles().iter().any(|s| &s.id == style) {
+                return Err(ThemeError::invalid(format!("主题没有提供风格「{style}」")));
+            }
+        }
+        Ok(())
+    }
+
+    fn save_theme_selection(&self, selection: ThemeSelection) -> Result<ThemeState, ThemeError> {
+        Self::validate_theme_selection(&lock(&self.inner), &selection)?;
         let bytes = selection.to_json()?.into_bytes();
-        self.persist_workspace_file(|workspace| workspace.theme_path(), &bytes)
-            .map_err(|error| ThemeError::Workspace(error.to_string()))?;
+        if lock(&self.inner).workspace.is_some() {
+            self.persist_workspace_file(|w| w.theme_path(), &bytes)
+                .map_err(|e| ThemeError::Workspace(e.to_string()))?;
+        } else {
+            std::fs::create_dir_all(&self.deps.device_dir)
+                .map_err(|e| ThemeError::Workspace(e.to_string()))?;
+            write_atomic(&self.deps.device_dir.join("appearance.json"), &bytes)
+                .map_err(|e| ThemeError::Workspace(e.to_string()))?;
+        }
         {
             let mut inner = lock(&self.inner);
-            inner.selected_theme = id.to_string();
+            inner.theme_selection = selection;
             inner.theme_error = None;
             inner.theme_notice = None;
         }
@@ -2201,29 +2237,58 @@ impl Host {
     /// 校验失败返回可读的中文原因，并且不改动任何已安装内容与当前外观。
     pub fn install_theme_package(&self, path: &Path) -> Result<ThemeState, ThemeError> {
         let document = ThemeDocument::from_package_path(path)?;
+        if document.schema_version != 2 {
+            return Err(ThemeError::invalid(
+                "新安装或更新的主题必须使用 v2 规范并提供深浅两套配色；旧主题仅兼容已有工作区",
+            ));
+        }
         if document.is_builtin() {
             return Err(ThemeError::Builtin("覆盖", document.id.clone()));
         }
         let workspace = self.workspace()?.ok_or(ThemeError::NoWorkspace("安装"))?;
+        if let Some(saved) = lock(&self.inner).theme_selection.styles.get(&document.id) {
+            if !document
+                .surface_styles()
+                .iter()
+                .any(|style| &style.id == saved)
+            {
+                return Err(ThemeError::invalid(format!(
+                    "更新删除了已保存的风格 {saved}；请先选择仍受支持的风格再更新"
+                )));
+            }
+        }
         let package = workspace.theme_package_path(&document.id);
         let bytes = document.to_json()?.into_bytes();
+        let previous = match std::fs::read(&package) {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(ThemeError::Workspace(format!(
+                    "无法读取原主题包以便恢复：{error}"
+                )))
+            }
+        };
+        let mut manifest = lock(&self.inner).manifest.clone();
+        manifest.upsert(ManifestEntry::from_theme(&document, true));
         self.persist_workspace_file(|_| package.clone(), &bytes)
             .map_err(|error| ThemeError::Workspace(error.to_string()))?;
-
-        let (manifest, entry) = {
+        if let Err(error) = self.persist_manifest(&manifest) {
+            let rollback = if let Some(previous) = previous {
+                self.persist_workspace_file(|_| package.clone(), &previous)
+                    .map_err(|e| e.to_string())
+            } else {
+                std::fs::remove_file(&package).map_err(|e| e.to_string())
+            };
+            return Err(ThemeError::Workspace(match rollback {
+                Ok(()) => error.to_string(),
+                Err(rollback) => format!("{error}；主题文件恢复失败：{rollback}"),
+            }));
+        }
+        {
             let mut inner = lock(&self.inner);
             inner.theme_library.install(document.clone());
-            inner
-                .manifest
-                .upsert(ManifestEntry::from_theme(&document, true));
-            (
-                inner.manifest.clone(),
-                inner.manifest.get(&document.id).cloned(),
-            )
-        };
-        let _ = entry;
-        self.persist_manifest(&manifest)
-            .map_err(|error| ThemeError::Workspace(error.to_string()))?;
+            inner.manifest = manifest;
+        }
         Ok(self.theme_state())
     }
 
@@ -2257,10 +2322,10 @@ impl Host {
             let mut inner = lock(&self.inner);
             inner.theme_library.remove(id);
             inner.manifest.remove(id);
-            let fallback = if inner.selected_theme == id {
-                inner.selected_theme = THEME_LIGHT.to_string();
+            let fallback = if inner.theme_selection.selected == id {
+                inner.theme_selection.selected = THEME_ARC.to_string();
                 inner.theme_error = None;
-                Some(ThemeSelection::new(THEME_LIGHT))
+                Some(inner.theme_selection.clone())
             } else {
                 None
             };
@@ -2270,7 +2335,7 @@ impl Host {
             .map_err(|error| ThemeError::Workspace(error.to_string()))?;
         let notice = fallback
             .as_ref()
-            .map(|_| format!("主题「{}」已移除，已切换回「浅色」", entry.name));
+            .map(|_| format!("主题「{}」已移除，已切换回「电弧」", entry.name));
         if let Some(selection) = fallback {
             let bytes = selection.to_json()?.into_bytes();
             self.persist_workspace_file(|workspace| workspace.theme_path(), &bytes)
@@ -2289,6 +2354,9 @@ impl Host {
     /// 同时丢掉它的范围对象：如果用户正停在该插件的范围里，直接回到首屏，并按当前
     /// 输入重算一次结果——列表里不会留着已停用插件的结果。
     pub fn set_plugin_enabled(&self, id: &str, enabled: bool) -> Result<(), ManifestError> {
+        if id == THEME_ARC && !enabled {
+            return Err(ManifestError::invalid("内置电弧是恢复基线，不能停用"));
+        }
         let (manifest, selection, notice, feature_changed) = {
             let mut inner = lock(&self.inner);
             let entry =
@@ -2309,15 +2377,17 @@ impl Host {
                 }
             }
             let mut notice = None;
-            let selection =
-                if entry.kind == PluginKind::Theme && !enabled && inner.selected_theme == id {
-                    inner.selected_theme = THEME_LIGHT.to_string();
-                    inner.theme_error = None;
-                    notice = Some(format!("主题「{}」已停用，已切换回「浅色」", entry.name));
-                    Some(ThemeSelection::new(THEME_LIGHT))
-                } else {
-                    None
-                };
+            let selection = if entry.kind == PluginKind::Theme
+                && !enabled
+                && inner.theme_selection.selected == id
+            {
+                inner.theme_selection.selected = THEME_ARC.to_string();
+                inner.theme_error = None;
+                notice = Some(format!("主题「{}」已停用，已切换回「电弧」", entry.name));
+                Some(inner.theme_selection.clone())
+            } else {
+                None
+            };
             (inner.manifest.clone(), selection, notice, feature_changed)
         };
         self.persist_manifest(&manifest)?;
@@ -2363,9 +2433,17 @@ impl Host {
         Ok(lock(&self.inner).workspace.clone())
     }
 
+    fn requested_appearance(inner: &HostInner) -> Appearance {
+        match inner.theme_selection.appearance {
+            ThemeAppearance::Light => Appearance::Light,
+            ThemeAppearance::Dark => Appearance::Dark,
+            ThemeAppearance::System => inner.system_appearance,
+        }
+    }
+
     /// 解析主题状态。成功时更新「上一次可用外观」，失败时保留它。
     fn resolve_theme_state(inner: &mut HostInner) -> ThemeState {
-        let selected = inner.selected_theme.clone();
+        let selected = inner.theme_selection.selected.clone();
         let entry = inner.manifest.get(&selected).cloned();
         let mut error: Option<String> = None;
         match entry {
@@ -2392,13 +2470,21 @@ impl Host {
                     .document(&selected)
                     .and_then(|document| {
                         document
-                            .resolve(inner.system_appearance)
+                            .resolve(Self::requested_appearance(inner))
                             .map(|tokens| (document.clone(), tokens))
                     });
                 match resolved {
                     Ok((document, tokens)) => {
                         inner.theme_appearance =
-                            document.resolved_appearance(inner.system_appearance);
+                            document.resolved_appearance(Self::requested_appearance(inner));
+                        inner.theme_styles = document.surface_styles();
+                        inner.theme_style = document.surface_style(
+                            inner
+                                .theme_selection
+                                .styles
+                                .get(&selected)
+                                .map(String::as_str),
+                        );
                         inner.theme_tokens = tokens;
                     }
                     Err(failure) => error = Some(failure.to_string()),
@@ -2412,8 +2498,8 @@ impl Host {
         // 解析成功即清掉「选中主题不可用」的原因；配置层问题保留到配置修好为止。
         inner.theme_error = if inner
             .theme_library
-            .document(&inner.selected_theme)
-            .map(|document| document.resolve(inner.system_appearance).is_ok())
+            .document(&inner.theme_selection.selected)
+            .map(|document| document.resolve(Self::requested_appearance(inner)).is_ok())
             .unwrap_or(false)
         {
             None
@@ -2428,7 +2514,10 @@ impl Host {
             .filter(|entry| entry.is_theme())
             .map(|entry| {
                 let (usable, theme_error) = match inner.theme_library.document(&entry.id) {
-                    Ok(document) => (document.resolve(inner.system_appearance).is_ok(), None),
+                    Ok(document) => (
+                        document.resolve(Self::requested_appearance(inner)).is_ok(),
+                        None,
+                    ),
                     Err(failure) => (false, Some(failure.to_string())),
                 };
                 ThemeEntry {
@@ -2443,6 +2532,12 @@ impl Host {
                         .unwrap_or(crate::theme::ThemeAppearance::Light),
                     usable,
                     error: theme_error,
+                    legacy: inner
+                        .theme_library
+                        .document(&entry.id)
+                        .map(|d| d.schema_version == 1)
+                        .unwrap_or(false),
+                    can_disable: entry.id != THEME_ARC,
                 }
             })
             .collect();
@@ -2453,9 +2548,18 @@ impl Host {
             selected_name: selected_entry
                 .map(|entry| entry.name.clone())
                 .unwrap_or_else(|| selected.clone()),
-            preference: selected_entry
-                .and_then(|entry| entry.appearance)
-                .unwrap_or(crate::theme::ThemeAppearance::Light),
+            preference: if inner
+                .theme_library
+                .document(&selected)
+                .map(|d| d.schema_version == 1)
+                .unwrap_or(false)
+            {
+                selected_entry
+                    .and_then(|e| e.appearance)
+                    .unwrap_or_default()
+            } else {
+                inner.theme_selection.appearance
+            },
             appearance: inner.theme_appearance,
             system_appearance: inner.system_appearance,
             tokens: inner.theme_tokens.clone(),
@@ -2463,6 +2567,19 @@ impl Host {
             themes,
             // 解析失败原因与配置层问题合并后的结果。
             error: error.clone(),
+            styles: inner.theme_styles.clone(),
+            style: inner.theme_style.id.clone(),
+            renderer: if inner.theme_selection.reduce_transparency {
+                SurfaceRenderer::Solid
+            } else {
+                inner.theme_style.renderer
+            },
+            surface: if inner.theme_selection.reduce_transparency {
+                SurfaceRecipe::default()
+            } else {
+                inner.theme_style.recipe(inner.theme_appearance)
+            },
+            reduce_transparency: inner.theme_selection.reduce_transparency,
         }
     }
 
@@ -3266,12 +3383,12 @@ impl Host {
         let mut source_order = 0usize;
 
         if query.is_empty() {
-            // 空查询：先给出有限数量的快速访问项（宿主命令），再给软件。
+            // 空查询：软件优先，维护命令仍可在列表末尾访问。
             for item in quick_access_commands() {
                 ranked.push(RankedItem {
                     item,
                     source_order,
-                    source_priority: 0,
+                    source_priority: 1,
                 });
                 source_order += 1;
             }
@@ -3281,7 +3398,7 @@ impl Host {
                 ranked.push(RankedItem {
                     item: application_item(entry, Score::unordered()),
                     source_order,
-                    source_priority: 1,
+                    source_priority: 0,
                 });
                 source_order += 1;
             }

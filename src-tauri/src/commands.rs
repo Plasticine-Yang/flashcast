@@ -116,7 +116,11 @@ fn item_view(state: &AppState, item: &SearchItem) -> ItemView {
         source: item.source.clone(),
         kind: item.kind,
         default_action: item.default_action,
-        default_action_label: item.default_action.label_zh().to_string(),
+        default_action_label: if item.kind == flashcast_core::ItemKind::Command {
+            "执行".to_string()
+        } else {
+            item.default_action.label_zh().to_string()
+        },
         score: item.score,
     }
 }
@@ -257,6 +261,27 @@ pub fn select_theme(state: State<'_, AppState>, id: String) -> Result<ThemeState
         .host
         .select_theme(&id)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_appearance_preferences(
+    state: State<'_, AppState>,
+    appearance: flashcast_core::ThemeAppearance,
+    style: String,
+    reduce_transparency: bool,
+) -> Result<ThemeState, String> {
+    state
+        .host
+        .set_appearance_preferences(appearance, style, reduce_transparency)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sync_window_material(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> crate::material::MaterialStatus {
+    crate::material::apply(&app, state.host.theme_state().renderer)
 }
 
 /// 启用或停用插件（功能插件与主题插件共用同一张清单）。
@@ -810,13 +835,8 @@ pub fn refresh_chrome_bookmarks(state: State<'_, AppState>) -> ChromeState {
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum PreviewView {
     None,
-    Text {
-        title: Option<String>,
-        body: String,
-    },
-    Image {
-        data_url: String,
-    },
+    Text { title: Option<String>, body: String },
+    Image { data_url: String },
 }
 
 /// 把宿主的预览转换成 UI 可直接渲染的形式。

@@ -6,6 +6,7 @@
 mod commands;
 mod hotkey;
 mod icon;
+mod material;
 mod state;
 mod summon;
 mod tray;
@@ -40,6 +41,8 @@ pub fn run() {
             commands::get_status,
             commands::get_theme,
             commands::select_theme,
+            commands::set_appearance_preferences,
+            commands::sync_window_material,
             commands::set_plugin_enabled,
             commands::set_system_appearance,
             commands::install_theme,

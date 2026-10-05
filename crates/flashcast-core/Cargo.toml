@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+semver = "1"
 flashcast-platform = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -47,11 +47,27 @@ impl PluginRegistry {
     /// 初始启用状态来自 [`FeaturePlugin::default_enabled`]：剪贴板历史据此默认关闭，
     /// 只有用户显式启用后才开始后台捕获。
     pub fn register(&self, plugin: Arc<dyn FeaturePlugin>) {
+        self.try_register(plugin)
+            .expect("注册的功能插件必须满足契约");
+    }
+
+    /// 动态调用者可取得明确的兼容失败；无效插件不会加入注册表。
+    pub fn try_register(&self, plugin: Arc<dyn FeaturePlugin>) -> Result<(), String> {
         let manifest = plugin.manifest();
+        manifest.contract.validate()?;
+        if !crate::plugin::is_valid_plugin_id(&manifest.id)
+            || manifest.name.trim().is_empty()
+            || manifest.version.trim().is_empty()
+            || manifest.kind != crate::plugin::PluginKind::Feature
+        {
+            return Err("功能插件标识、名称、版本或种类无效".into());
+        }
+        semver::Version::parse(&manifest.version)
+            .map_err(|_| "插件包版本必须符合 SemVer".to_string())?;
         let default_enabled = plugin.default_enabled();
         let mut plugins = lock(&self.plugins);
         if plugins.iter().any(|p| p.manifest.id == manifest.id) {
-            return;
+            return Ok(());
         }
         let mut order = lock(&self.order);
         let next = order.len() as u32;
@@ -61,6 +77,7 @@ impl PluginRegistry {
             manifest,
             enabled: default_enabled,
         });
+        Ok(())
     }
 
     /// 启用或停用插件。停用后不参与搜索、不产生后台活动。

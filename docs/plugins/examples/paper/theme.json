@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 2,
+  "id": "example.paper",
+  "name": "纸面",
+  "version": "1.0.0",
+  "appearance": "system",
+  "palettes": {
+    "light": {
+      "color": {
+        "pageBackground": "#f2f5f8",
+        "surface": "#e8edf3",
+        "hover": "rgba(13, 15, 20, 0.045)",
+        "border": "rgba(13, 15, 20, 0.10)",
+        "borderStrong": "rgba(13, 15, 20, 0.20)",
+        "text": "#202c3b",
+        "textMuted": "#536479",
+        "textDisabled": "#657489",
+        "accent": "#265b9d",
+        "infoBackground": "rgba(13, 15, 20, 0.045)",
+        "warningBackground": "rgba(176, 118, 12, 0.12)",
+        "warningBorder": "rgba(176, 118, 12, 0.42)",
+        "warningText": "#7a4f08",
+        "iconFallbackBackground": "rgba(13, 15, 20, 0.06)"
+      },
+      "font": {
+        "family": "system-ui, -apple-system, \"Noto Sans CJK SC\", \"Source Han Sans SC\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+        "body": "14px",
+        "input": "16px",
+        "aux": "12px"
+      },
+      "space": {
+        "windowPadding": "14px",
+        "rowPadding": "6px",
+        "rowGap": "10px",
+        "sectionGap": "8px",
+        "rowHeight": "44px"
+      },
+      "radius": {
+        "window": "16px",
+        "item": "7px",
+        "control": "7px"
+      },
+      "shadow": {
+        "window": "0 24px 56px rgba(18, 28, 55, 0.18), 0 2px 6px rgba(18, 28, 55, 0.08)",
+        "overlay": "0 14px 30px rgba(18, 28, 55, 0.26)"
+      },
+      "state": {
+        "selected": {
+          "background": "rgba(38,91,157,0.13)",
+          "border": "rgba(38,91,157,0.5)"
+        },
+        "focus": {
+          "ring": "#265b9d"
+        },
+        "error": {
+          "background": "rgba(220, 38, 38, 0.10)",
+          "border": "rgba(220, 38, 38, 0.5)",
+          "text": "#a11313"
+        },
+        "disabled": {
+          "text": "#657489",
+          "opacity": 0.5
+        }
+      }
+    },
+    "dark": {
+      "color": {
+        "pageBackground": "#19212b",
+        "surface": "#222c39",
+        "hover": "rgba(255, 255, 255, 0.06)",
+        "border": "rgba(255, 255, 255, 0.14)",
+        "borderStrong": "rgba(255, 255, 255, 0.28)",
+        "text": "#edf3fb",
+        "textMuted": "#a8b7cb",
+        "textDisabled": "#8797aa",
+        "accent": "#a2c4ff",
+        "infoBackground": "rgba(255, 255, 255, 0.06)",
+        "warningBackground": "rgba(245, 158, 11, 0.18)",
+        "warningBorder": "rgba(245, 158, 11, 0.5)",
+        "warningText": "#fcd34d",
+        "iconFallbackBackground": "rgba(255, 255, 255, 0.1)"
+      },
+      "font": {
+        "family": "system-ui, -apple-system, \"Noto Sans CJK SC\", \"Source Han Sans SC\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+        "body": "14px",
+        "input": "16px",
+        "aux": "12px"
+      },
+      "space": {
+        "windowPadding": "14px",
+        "rowPadding": "6px",
+        "rowGap": "10px",
+        "sectionGap": "8px",
+        "rowHeight": "44px"
+      },
+      "radius": {
+        "window": "16px",
+        "item": "7px",
+        "control": "7px"
+      },
+      "shadow": {
+        "window": "0 8px 28px rgba(0, 0, 0, 0.45)",
+        "overlay": "0 12px 32px rgba(0, 0, 0, 0.55)"
+      },
+      "state": {
+        "selected": {
+          "background": "rgba(162,196,255,0.16)",
+          "border": "rgba(162,196,255,0.55)"
+        },
+        "focus": {
+          "ring": "#a2c4ff"
+        },
+        "error": {
+          "background": "rgba(248, 113, 113, 0.16)",
+          "border": "rgba(248, 113, 113, 0.6)",
+          "text": "#fecaca"
+        },
+        "disabled": {
+          "text": "#8797aa",
+          "opacity": 0.5
+        }
+      }
+    }
+  },
+  "contract": {
+    "apiVersion": 1,
+    "hostVersion": ">=0.3.0, <0.4.0",
+    "configVersion": 1
+  },
+  "styles": [
+    {
+      "id": "paper",
+      "name": "纸面",
+      "renderer": "solid",
+      "light": {
+        "fillOpacity": 1.0,
+        "blur": 0.0,
+        "saturation": 1.0,
+        "rim": 0.0
+      },
+      "dark": {
+        "fillOpacity": 1.0,
+        "blur": 0.0,
+        "saturation": 1.0,
+        "rim": 0.0
+      }
+    }
+  ],
+  "defaultStyle": "paper"
+}

@@ -16,7 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::plugin::{is_valid_plugin_id, PluginKind, PluginManifest};
+use crate::plugin::{is_valid_plugin_id, PluginContract, PluginKind, PluginManifest};
 use crate::theme::{ThemeAppearance, ThemeDocument};
 
 /// 清单文件的格式版本。
@@ -82,6 +82,8 @@ pub struct ManifestEntry {
     /// 主题插件专有：声明的外观偏好。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<ThemeAppearance>,
+    #[serde(default)]
+    pub contract: PluginContract,
 }
 
 impl ManifestEntry {
@@ -97,6 +99,7 @@ impl ManifestEntry {
             capabilities: manifest.capabilities.clone(),
             origin: PluginOrigin::Registered,
             appearance: None,
+            contract: manifest.contract.clone(),
         }
     }
 
@@ -116,6 +119,7 @@ impl ManifestEntry {
                 PluginOrigin::Installed
             },
             appearance: Some(document.appearance),
+            contract: document.contract.clone().unwrap_or_default(),
         }
     }
 
@@ -132,10 +136,15 @@ impl ManifestEntry {
             version: self.version.clone(),
             keywords: self.keywords.clone(),
             capabilities: self.capabilities.clone(),
+            contract: self.contract.clone(),
         }
     }
 
     fn validate(&self) -> Result<(), ManifestError> {
+        self.contract.validate().map_err(ManifestError::invalid)?;
+        if self.id == crate::theme::THEME_ARC && !self.enabled {
+            return Err(ManifestError::invalid("内置电弧是恢复基线，不能停用"));
+        }
         if !is_valid_plugin_id(&self.id) {
             return Err(ManifestError::invalid(format!(
                 "插件标识不合法（{}）：只能使用小写字母、数字、点、下划线与连字符，最长 64 个字符",

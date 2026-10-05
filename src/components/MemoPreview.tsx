@@ -43,7 +43,7 @@ export function MemoPreview({ item, preview, open, onToggle }: Props) {
           {text?.title ?? item.title}
         </span>
         <span className="preview-meta" data-testid="memo-preview-action">
-          默认操作：{item.defaultActionLabel} · {image ? "完整图片" : "完整内容"}
+          {item.defaultActionLabel}{image ? "完整图片" : "完整内容"}
         </span>
         <button
           type="button"

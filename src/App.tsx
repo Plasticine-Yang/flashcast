@@ -31,7 +31,7 @@ import {
   type SettingsSectionId,
 } from "./components/SettingsScreen";
 import { StatusBanner } from "./components/StatusBanner";
-import { StageInfo } from "./components/StageInfo";
+
 
 /** 把宿主下发的语义 token 写成根元素上的 CSS 自定义属性。
  *
@@ -45,6 +45,11 @@ export function applyThemeVars(theme: ThemeState) {
   // 供浏览器交互检查与 CSS 读取当前实际外观。
   root.dataset.themeAppearance = theme.appearance;
   root.dataset.themeSelected = theme.selected;
+  root.dataset.surfaceRenderer = theme.renderer;
+  root.style.setProperty("--fc-fill-opacity", String(theme.surface.fillOpacity));
+  root.style.setProperty("--fc-blur", `${theme.surface.blur}px`);
+  root.style.setProperty("--fc-saturation", String(theme.surface.saturation));
+  root.style.setProperty("--fc-rim", `${theme.surface.rim}px`);
 }
 
 /** 系统外观：`prefers-color-scheme` 是 OS 外观在 webview 里的可靠信号。 */
@@ -88,6 +93,7 @@ export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceStatus | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [theme, setTheme] = useState<ThemeState | null>(null);
+  const [materialNotice, setMaterialNotice] = useState<string | null>(null);
   const [settingsMessage, setSettingsMessage] = useState<SettingsMessage | null>(null);
   /** 当前显示的设置区块。放在 App 里，所以在会话内切走再回来会回到同一区块
    * （SettingsScreen 每次进设置页都会重新挂载，放它内部就记不住）。 */
@@ -224,9 +230,18 @@ export default function App() {
 
   // 主题只通过 CSS 自定义属性生效：切换主题不改变任何布局。
   useEffect(() => {
-    if (theme) {
-      applyThemeVars(theme);
-    }
+    if (!theme) return;
+    applyThemeVars(theme);
+    let cancelled = false;
+    document.documentElement.dataset.surfaceEffective = "solid";
+    void api.sync_window_material().then(result => {
+      if (cancelled) return;
+      document.documentElement.dataset.surfaceEffective = result.supported ? theme.renderer : "solid";
+      setMaterialNotice(result.reason);
+    }).catch(() => {
+      if (!cancelled) setMaterialNotice("透明材质暂不可用，已使用实底");
+    });
+    return () => { cancelled = true; };
   }, [theme]);
 
   function focusInput() {
@@ -643,13 +658,15 @@ export default function App() {
   };
 
   /** 设置页的入口动作：进入前先建立一次基线。 */
-  const runSettingsAction = async <T,>(action: () => Promise<T>, done: (result: T) => void) => {
+  const runSettingsAction = async <T,>(action: () => Promise<T>, done: (result: T) => void | Promise<void>): Promise<boolean> => {
     setSettingsBusy(true);
     try {
-      done(await action());
+      await done(await action());
+      return true;
     } catch (error) {
       // 宿主返回的中文原因直接展示；不吞掉、不改写。
       setSettingsMessage({ level: "error", text: String(error) });
+      return false;
     } finally {
       setSettingsBusy(false);
     }
@@ -747,6 +764,13 @@ export default function App() {
     void api.cancel_clone();
   };
 
+  const handleAppearanceChange = (appearance: import("./types").ThemeAppearance, style: string, reduce: boolean) => {
+    void runSettingsAction(() => api.set_appearance_preferences(appearance, style, reduce), next => {
+      setTheme(next);
+      setSettingsMessage({ level: "info", text: "外观已保存" });
+    });
+  };
+
   const handleSelectTheme = (id: string) => {
     void runSettingsAction(
       () => api.select_theme(id),
@@ -782,7 +806,7 @@ export default function App() {
         setTheme(next);
         setSettingsMessage({
           level: "info",
-          text: `已安装主题包：${next.themes.map((entry) => entry.name).join("、")}`,
+          text: "主题包已安装",
         });
       },
     );
@@ -979,8 +1003,10 @@ export default function App() {
       data-window-visible={visible ? "true" : "false"}
       data-focused={focused ? "true" : "false"}
       data-screen={screen}
+      data-browser-preview={isBrowserMock ? "true" : "false"}
     >
       <header className="search-row">
+        <svg className="search-symbol" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
         <input
           ref={inputRef}
           id="search-input"
@@ -1018,7 +1044,7 @@ export default function App() {
           title="设置（Ctrl+,）"
           onClick={openSettings}
         >
-          设置
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m9 3-1 3-3 1v4l-2 1 2 1v4l3 1 1 3h6l1-3 3-1v-4l2-1-2-1V7l-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </header>
 
@@ -1027,6 +1053,8 @@ export default function App() {
           workspace={workspace}
           settings={settings}
           theme={theme}
+          materialNotice={materialNotice}
+          onAppearanceChange={handleAppearanceChange}
           hotkey={status?.hotkey ?? null}
           capabilities={capabilities}
           message={settingsMessage}
@@ -1088,7 +1116,13 @@ export default function App() {
             workspaceAlert={workspaceAlert}
           />
 
-          <div className="search-body">
+          <div className="scope-strip" aria-label="查询范围">
+            <button type="button" aria-pressed={response.scope.kind === "home"} onClick={() => void runQuery("")}>快速访问</button>
+            {(status?.plugins ?? plugins).filter(plugin => plugin.enabled).map(plugin => <button key={plugin.id} type="button"
+              aria-pressed={response.scope.kind === "plugin" && response.scope.id === plugin.id}
+              onClick={() => void runQuery(plugin.keywords[0] ?? plugin.name)}>{plugin.name}</button>)}
+          </div>
+          <div className="search-body" data-has-preview={selected && ["memo", "bookmark", "clipboardEntry"].includes(selected.kind) ? "true" : "false"}>
             <ResultList
               items={response.items}
               selection={response.selection}
@@ -1107,9 +1141,7 @@ export default function App() {
                   open={previewOpen}
                   onToggle={() => setPreviewOpen((current) => !current)}
                 />
-              ) : (
-                <StageInfo item={selected} />
-              )}
+              ) : null}
             </aside>
           </div>
 

@@ -100,7 +100,7 @@ export function ClipboardPanel({
         状态：
         {clipboard.enabled ? "已启用" : "未启用（默认关闭，启用后才会后台记录）"}
         {" · "}
-        {clipboard.paused ? "已暂停记录" : "正在记录"}
+        {clipboard.enabled ? (clipboard.paused ? "已暂停记录" : (clipboard.captureActive ? "正在记录" : "等待后台捕获")) : "未记录"}
         {" · "}
         {clipboard.captureActive ? "后台捕获运行中" : "后台捕获未运行"}
         {" · "}

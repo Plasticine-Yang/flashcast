@@ -19,7 +19,7 @@ flashcast-core = { workspace = true }
 flashcast-platform = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tauri = { version = "2.12.0", features = ["tray-icon", "image-png"] }
+tauri = { version = "2.12.0", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-single-instance = "2.5.1"
 base64 = "0.22.1"
 

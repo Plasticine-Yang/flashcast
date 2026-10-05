@@ -64,6 +64,8 @@ export interface HostApi {
   get_theme(): Promise<ThemeState>;
   /** 选择主题。失败时 reject，原因为中文，且当前外观不变。 */
   select_theme(id: string): Promise<ThemeState>;
+  set_appearance_preferences(appearance: import("./types").ThemeAppearance, style: string, reduceTransparency: boolean): Promise<ThemeState>;
+  sync_window_material(): Promise<{ supported: boolean; reason: string | null }>;
   /** 启用或停用插件（功能插件与主题插件共用）。 */
   set_plugin_enabled(id: string, enabled: boolean): Promise<ThemeState>;
   /** 校验并安装一个本地主题包（目录或 JSON 文件）。 */
@@ -171,6 +173,8 @@ const tauriApi: HostApi = {
   get_status: () => tauriInvoke("get_status"),
   get_theme: () => tauriInvoke("get_theme"),
   select_theme: (id) => tauriInvoke("select_theme", { id }),
+  set_appearance_preferences: (appearance, style, reduceTransparency) => tauriInvoke("set_appearance_preferences", { appearance, style, reduceTransparency }),
+  sync_window_material: () => tauriInvoke("sync_window_material"),
   set_plugin_enabled: (id, enabled) =>
     tauriInvoke("set_plugin_enabled", { id, enabled }).then(() => tauriInvoke("get_theme")),
   install_theme: (path) => tauriInvoke("install_theme", { path }),
@@ -759,7 +763,10 @@ class MockHost implements HostApi {
   static readonly THEME_PACKAGE = "/home/user/themes/solarized";
   static readonly BROKEN_THEME_PACKAGE = "/home/user/themes/broken";
   private mockThemes = MOCK_THEMES.map((theme) => ({ ...theme }));
-  private selectedTheme = "flashcast.theme.light";
+  private selectedTheme = "flashcast.theme.arc";
+  private appearancePreference: import("./types").ThemeAppearance = "system";
+  private themeStyles: Record<string, string> = {};
+  private reduceTransparency = false;
   private systemAppearance: Appearance = "light";
   private themeError: string | null = null;
 
@@ -769,6 +776,7 @@ class MockHost implements HostApi {
       selected: this.selectedTheme,
       system: this.systemAppearance,
       error: this.themeError,
+      preference: this.appearancePreference, styles: this.themeStyles, reduce: this.reduceTransparency,
     });
   }
   // ---- Git 变更与提交（浏览器模拟） ----
@@ -888,7 +896,7 @@ class MockHost implements HostApi {
         source: "flashcast",
         kind: "command",
         defaultAction: "open",
-        defaultActionLabel: "打开",
+        defaultActionLabel: "执行",
         score: { tier: "titlePrefix", relevance: 0 },
       },
       {
@@ -900,7 +908,7 @@ class MockHost implements HostApi {
         source: "flashcast",
         kind: "command",
         defaultAction: "open",
-        defaultActionLabel: "打开",
+        defaultActionLabel: "执行",
         score: { tier: "titlePrefix", relevance: 0 },
       },
     ];
@@ -908,7 +916,7 @@ class MockHost implements HostApi {
       const quick = MOCK_APPS.slice(0, this.settings.quickAccessLimit).map((app) =>
         this.toItem(app, { tier: "titlePrefix", relevance: 0 }),
       );
-      return [...commandItems, ...quick];
+      return [...quick, ...commandItems];
     }
     const scored = MOCK_APPS.map((app) => {
       const title = app.title.toLowerCase();
@@ -1743,6 +1751,8 @@ class MockHost implements HostApi {
 
   async create_memo(title: string, tags: string[], body: string): Promise<Memo> {
     this.requireMemoWritable();
+    if (!title.trim()) throw "备忘录标题不能为空";
+    if (!body.trim()) throw "备忘录正文不能为空";
     this.memoCounter += 1;
     const memo: Memo = {
       id: `memo-${this.memoCounter}`,
@@ -1756,6 +1766,8 @@ class MockHost implements HostApi {
 
   async update_memo(id: string, title: string, tags: string[], body: string): Promise<Memo> {
     this.requireMemoWritable();
+    if (!title.trim()) throw "备忘录标题不能为空";
+    if (!body.trim()) throw "备忘录正文不能为空";
     const existing = this.memoEntries.find((memo) => memo.id === id);
     if (!existing) {
       throw `找不到这条备忘录：${id}`;
@@ -1947,6 +1959,7 @@ class MockHost implements HostApi {
   }
 
   async set_plugin_enabled(id: string, enabled: boolean): Promise<ThemeState> {
+    if (id === "flashcast.theme.arc" && !enabled) throw new Error("内置电弧是恢复基线，不能停用");
     const theme = this.mockThemes.find((candidate) => candidate.id === id);
     if (!theme) {
       // 功能插件（备忘录 / Chrome 书签）：走与真实宿主相同的入口，外观保持不变。
@@ -1958,8 +1971,8 @@ class MockHost implements HostApi {
     }
     theme.enabled = enabled;
     if (!enabled && this.selectedTheme === id) {
-      this.selectedTheme = "flashcast.theme.light";
-      this.themeError = `主题「${theme.name}」已停用，已切换回「浅色」`;
+      this.selectedTheme = "flashcast.theme.arc";
+      this.themeError = `主题「${theme.name}」已停用，已切换回「电弧」`;
     }
     return this.themeState();
   }
@@ -1998,11 +2011,21 @@ class MockHost implements HostApi {
     }
     this.mockThemes = this.mockThemes.filter((candidate) => candidate.id !== id);
     if (this.selectedTheme === id) {
-      this.selectedTheme = "flashcast.theme.light";
-      this.themeError = `主题「${theme.name}」已移除，已切换回「浅色」`;
+      this.selectedTheme = "flashcast.theme.arc";
+      this.themeError = `主题「${theme.name}」已移除，已切换回「电弧」`;
     }
     return this.themeState();
   }
+
+  async set_appearance_preferences(appearance: import("./types").ThemeAppearance, style: string, reduceTransparency: boolean): Promise<ThemeState> {
+    const state = this.themeState();
+    if (!state.styles.some(s => s.id === style)) throw new Error("主题没有提供该表面风格");
+    this.appearancePreference = appearance;
+    this.themeStyles[this.selectedTheme] = style;
+    this.reduceTransparency = reduceTransparency;
+    return this.themeState();
+  }
+  async sync_window_material() { return { supported: true, reason: null }; }
 
   async set_system_appearance(appearance: Appearance): Promise<ThemeState> {
     this.systemAppearance = appearance;

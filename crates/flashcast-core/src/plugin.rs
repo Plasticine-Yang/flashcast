@@ -44,6 +44,40 @@ pub enum PluginKind {
     Theme,
 }
 
+/// 所有插件共用的版本与配置契约。包版本与 API/配置版本彼此独立。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginContract {
+    pub api_version: u32,
+    pub host_version: String,
+    pub config_version: u32,
+}
+
+impl Default for PluginContract {
+    fn default() -> Self {
+        Self {
+            api_version: 1,
+            host_version: ">=0.3.0, <0.4.0".into(),
+            config_version: 1,
+        }
+    }
+}
+
+impl PluginContract {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.api_version != 1 || self.config_version != 1 {
+            return Err("不支持的插件 API 或配置版本（当前均为 1）".into());
+        }
+        let requirement = semver::VersionReq::parse(&self.host_version)
+            .map_err(|_| "宿主兼容范围必须是有效的 SemVer 范围".to_string())?;
+        let host = semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("宿主版本合法");
+        if !requirement.matches(&host) {
+            return Err(format!("插件要求宿主 {}，当前为 {host}", self.host_version));
+        }
+        Ok(())
+    }
+}
+
 /// 插件清单：标识、种类、版本、关键词别名与所需能力。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +91,8 @@ pub struct PluginManifest {
     pub keywords: Vec<String>,
     /// 所需能力标识，用于宿主授权判定。
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub contract: PluginContract,
 }
 
 impl PluginManifest {
@@ -72,6 +108,7 @@ impl PluginManifest {
             version: version.into(),
             keywords: Vec::new(),
             capabilities: Vec::new(),
+            contract: PluginContract::default(),
         }
     }
 

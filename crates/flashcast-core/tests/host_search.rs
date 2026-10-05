@@ -84,6 +84,11 @@ fn empty_query_shows_quick_access_items() {
         response.items.iter().any(|item| item.title == "软件 0"),
         "空查询应包含软件"
     );
+    assert_eq!(
+        response.items[0].kind,
+        flashcast_core::ItemKind::Application,
+        "首页应优先启动软件"
+    );
     assert_eq!(response.selection, 0);
     assert!(response.notice.is_none());
     assert!(response.plugin_failures.is_empty());

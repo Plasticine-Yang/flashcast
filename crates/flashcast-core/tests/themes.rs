@@ -11,8 +11,8 @@ use std::path::PathBuf;
 
 use flashcast_core::{
     Appearance, ManifestEntry, PluginKind, PluginManifestFile, PluginOrigin, Settings,
-    ThemeAppearance, ThemeSelection, MANIFEST_FILE, SETTINGS_FILE, THEMES_DIR, THEME_DARK,
-    THEME_FILE, THEME_LIGHT, THEME_SYSTEM,
+    ThemeAppearance, ThemeSelection, MANIFEST_FILE, SETTINGS_FILE, THEMES_DIR, THEME_ARC,
+    THEME_DARK, THEME_FILE, THEME_LIGHT, THEME_SYSTEM,
 };
 use support::{
     cleanup, fast_settings, files_under, host_restarted, host_with_device, real_git_repo,
@@ -26,14 +26,17 @@ fn custom_theme_json(id: &str, name: &str) -> String {
             .unwrap();
     // 换个颜色，便于断言「外观确实变了」。
     tokens["color"]["surface"] = serde_json::json!("#101418");
-    tokens["color"]["pageBackground"] = serde_json::json!("rgba(12, 16, 20, 0.98)");
+    tokens["color"]["pageBackground"] = serde_json::json!("#0c1014");
     serde_json::json!({
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "id": id,
         "name": name,
         "version": "2.1.0",
-        "appearance": "dark",
-        "tokens": tokens,
+        "appearance": "system",
+        "palettes": { "light": flashcast_core::light_tokens(), "dark": tokens },
+        "contract": { "apiVersion": 1, "hostVersion": ">=0.3.0, <0.4.0", "configVersion": 1 },
+        "defaultStyle": "solid",
+        "styles": [flashcast_core::SurfaceStyle::solid()],
     })
     .to_string()
 }
@@ -53,22 +56,32 @@ fn the_default_manifest_carries_the_three_default_themes() {
 
     let entries = host.manifest_entries();
     let themes: Vec<&ManifestEntry> = entries.iter().filter(|entry| entry.is_theme()).collect();
-    assert_eq!(themes.len(), 3, "默认应有三个主题插件：{themes:?}");
+    assert_eq!(themes.len(), 4, "默认应有三个主题插件：{themes:?}");
     let ids: Vec<&str> = themes.iter().map(|entry| entry.id.as_str()).collect();
-    assert_eq!(ids, vec![THEME_LIGHT, THEME_DARK, THEME_SYSTEM]);
+    assert_eq!(ids, vec![THEME_ARC, THEME_LIGHT, THEME_DARK, THEME_SYSTEM]);
     for entry in &themes {
         assert_eq!(entry.kind, PluginKind::Theme);
-        assert_eq!(entry.version, "0.1.0");
+        assert_eq!(
+            entry.version,
+            if entry.id == THEME_ARC {
+                "0.3.0"
+            } else {
+                "0.1.0"
+            }
+        );
         assert!(entry.enabled, "默认主题默认启用：{entry:?}");
         assert!(entry.origin.removable() == false, "内置主题不可移除");
     }
 
     let state = host.theme_state();
-    assert_eq!(state.selected, THEME_LIGHT);
+    assert_eq!(state.selected, THEME_ARC);
     assert_eq!(state.appearance, Appearance::Light);
-    assert_eq!(state.themes.len(), 3);
+    assert_eq!(state.themes.len(), 4);
     assert!(
-        state.themes.iter().all(|theme| theme.usable && theme.error.is_none()),
+        state
+            .themes
+            .iter()
+            .all(|theme| theme.usable && theme.error.is_none()),
         "默认主题都应可用：{:?}",
         state.themes
     );
@@ -90,11 +103,11 @@ fn manifest_and_theme_selection_round_trip_across_a_restart() {
     // 初始化后就有写出的默认清单与主题配置。
     let text = fs::read_to_string(repo.join(MANIFEST_FILE)).expect("必须写出插件清单");
     let file = PluginManifestFile::from_json(&text).expect("清单必须是合法 JSON");
-    assert_eq!(file.entries().len(), 3);
+    assert_eq!(file.entries().len(), 4);
     let selection =
         ThemeSelection::from_json(&fs::read_to_string(repo.join(THEME_FILE)).expect("主题配置"))
             .expect("主题配置必须是合法 JSON");
-    assert_eq!(selection.selected, THEME_LIGHT);
+    assert_eq!(selection.selected, THEME_ARC);
 
     host.select_theme(THEME_DARK).expect("选择深色主题");
     assert_eq!(host.theme_state().selected, THEME_DARK);
@@ -157,10 +170,10 @@ fn linking_an_existing_workspace_writes_nothing() {
     );
     // 默认主题与默认清单仍然生效（来自内存默认值）。
     let state = host.theme_state();
-    assert_eq!(state.themes.len(), 3);
-    assert_eq!(state.selected, THEME_LIGHT);
+    assert_eq!(state.themes.len(), 4);
+    assert_eq!(state.selected, THEME_ARC);
     assert_eq!(state.error, None);
-    assert_eq!(host.manifest_entries().len(), 3);
+    assert_eq!(host.manifest_entries().len(), 4);
 
     // 用户真的做出选择时才落盘，并且是可读 JSON。
     host.select_theme(THEME_DARK).expect("选择深色");
@@ -184,7 +197,8 @@ fn a_disabled_theme_cannot_be_selected_and_keeps_the_current_appearance() {
     let (host, _launcher, device) = host_with_device(vec![], fast_settings());
     host.select_workspace(&repo).expect("关联工作区");
 
-    host.set_plugin_enabled(THEME_DARK, false).expect("停用深色");
+    host.set_plugin_enabled(THEME_DARK, false)
+        .expect("停用深色");
     let error = host
         .select_theme(THEME_DARK)
         .expect_err("停用的主题必须被拒绝");
@@ -194,7 +208,7 @@ fn a_disabled_theme_cannot_be_selected_and_keeps_the_current_appearance() {
         "原因必须可读：{message}"
     );
     let state = host.theme_state();
-    assert_eq!(state.selected, THEME_LIGHT, "被拒绝后不得切换主题");
+    assert_eq!(state.selected, THEME_ARC, "被拒绝后不得切换主题");
     assert_eq!(state.appearance, Appearance::Light);
 
     // 重新启用后可以正常选择。
@@ -224,6 +238,7 @@ fn every_builtin_theme_exposes_a_complete_token_set() {
         "--fc-text-muted",
         "--fc-text-disabled",
         "--fc-accent",
+        "--fc-accent-ink",
         "--fc-info-bg",
         "--fc-warning-bg",
         "--fc-warning-border",
@@ -254,9 +269,9 @@ fn every_builtin_theme_exposes_a_complete_token_set() {
 
     for document in flashcast_core::builtin_themes() {
         for system in [Appearance::Light, Appearance::Dark] {
-            let tokens = document
-                .resolve(system)
-                .unwrap_or_else(|error| panic!("{} 在 {system:?} 下必须可解析：{error}", document.id));
+            let tokens = document.resolve(system).unwrap_or_else(|error| {
+                panic!("{} 在 {system:?} 下必须可解析：{error}", document.id)
+            });
             tokens
                 .validate()
                 .unwrap_or_else(|error| panic!("{} 的 token 必须通过校验：{error}", document.id));
@@ -288,11 +303,7 @@ fn every_builtin_theme_exposes_a_complete_token_set() {
             );
         }
         for name in required {
-            assert!(
-                names.contains(name),
-                "{} 缺少 CSS 变量 {name}",
-                document.id
-            );
+            assert!(names.contains(name), "{} 缺少 CSS 变量 {name}", document.id);
         }
     }
 
@@ -329,8 +340,8 @@ fn theme_tokens_carry_no_animation_semantics() {
     // 未知字段会被拒绝：主题无法偷偷塞进动画字段。
     let mut json = serde_json::to_value(flashcast_core::light_tokens()).expect("序列化 token");
     json["state"]["selected"]["transition"] = serde_json::json!("all 300ms");
-    let error =
-        serde_json::from_value::<flashcast_core::ThemeTokens>(json).expect_err("未知字段必须被拒绝");
+    let error = serde_json::from_value::<flashcast_core::ThemeTokens>(json)
+        .expect_err("未知字段必须被拒绝");
     assert!(error.to_string().contains("transition"), "{error}");
 }
 
@@ -377,6 +388,8 @@ fn an_unreadable_theme_keeps_the_last_usable_appearance() {
 
     let package = write_theme_package(&packages, "example.solarized", "Solarized 深色");
     host.install_theme_package(&package).expect("安装主题包");
+    host.set_appearance_preferences(ThemeAppearance::Dark, "frosted".into(), false)
+        .expect("选择深色模式");
     host.select_theme("example.solarized")
         .expect("选择已安装主题");
     let good = host.theme_state();
@@ -426,10 +439,11 @@ fn an_unreadable_theme_keeps_the_last_usable_appearance() {
     assert_eq!(host.theme_state().tokens.color.surface, "#101418");
 
     // 主题配置指向一个不存在的主题：保留当前外观并说明原因。
-    fs::write(
-        repo.join(THEME_FILE),
-        ThemeSelection::new("ghost.theme").to_json().unwrap(),
-    )
+    fs::write(repo.join(THEME_FILE), {
+        let mut value = ThemeSelection::new("ghost.theme");
+        value.appearance = ThemeAppearance::Dark;
+        value.to_json().unwrap()
+    })
     .expect("写出无效的主题配置");
     let reload = host.reload_workspace();
     assert!(!reload.applied);
@@ -438,7 +452,7 @@ fn an_unreadable_theme_keeps_the_last_usable_appearance() {
         reload
             .error
             .as_deref()
-            .is_some_and(|message| message.contains("不可用")),
+            .is_some_and(|message| message.contains("找不到主题")),
         "原因必须可读：{:?}",
         reload.error
     );
@@ -465,6 +479,8 @@ fn the_selected_theme_follows_the_config_workspace() {
     host.select_workspace(&second).expect("切换到第二个工作区");
     host.install_theme_package(&package)
         .expect("在第二个工作区安装主题包");
+    host.set_appearance_preferences(ThemeAppearance::Dark, "frosted".into(), false)
+        .expect("选择深色模式");
     host.select_theme("example.solarized")
         .expect("在第二个工作区选择已安装主题");
     assert_eq!(host.theme_state().tokens.color.surface, "#101418");
@@ -480,7 +496,11 @@ fn the_selected_theme_follows_the_config_workspace() {
             .iter()
             .all(|theme| theme.id != "example.solarized"),
         "不得残留另一个工作区安装的主题：{:?}",
-        state.themes.iter().map(|theme| &theme.id).collect::<Vec<_>>()
+        state
+            .themes
+            .iter()
+            .map(|theme| &theme.id)
+            .collect::<Vec<_>>()
     );
 
     // 再切到第二个：恢复本地主题包（清单与主题包都来自那个工作区）。
@@ -526,7 +546,7 @@ fn a_local_theme_package_is_validated_installed_selected_and_removed() {
         message.contains("主题无效") && message.contains("JSON"),
         "原因必须可读：{message}"
     );
-    assert_eq!(host.theme_state().selected, THEME_LIGHT);
+    assert_eq!(host.theme_state().selected, THEME_ARC);
     assert!(
         host.manifest_entries()
             .iter()
@@ -570,6 +590,8 @@ fn a_local_theme_package_is_validated_installed_selected_and_removed() {
     assert_eq!(recorded.origin, PluginOrigin::Installed);
 
     // 选择它：外观按主题包的数据改变。
+    host.set_appearance_preferences(ThemeAppearance::Dark, "frosted".into(), false)
+        .expect("选择深色模式");
     let selected = host
         .select_theme("example.solarized")
         .expect("选择已安装主题");
@@ -592,7 +614,7 @@ fn a_local_theme_package_is_validated_installed_selected_and_removed() {
 
     // 移除已安装主题：文件与清单条目一起消失，选中回退并说明原因。
     let removed = host.remove_theme("example.solarized").expect("移除主题包");
-    assert_eq!(removed.selected, THEME_LIGHT, "移除选中主题后必须回退");
+    assert_eq!(removed.selected, THEME_ARC, "移除选中主题后必须回退");
     assert!(
         removed.error.is_some(),
         "回退必须给出中文原因：{:?}",
@@ -692,7 +714,10 @@ fn themes_cannot_change_the_layout_geometry() {
     // 圆角越界：拒绝。
     let mut tokens = flashcast_core::light_tokens();
     tokens.radius.window = "40px".to_string();
-    let message = tokens.validate().expect_err("圆角越界必须被拒绝").to_string();
+    let message = tokens
+        .validate()
+        .expect_err("圆角越界必须被拒绝")
+        .to_string();
     assert!(message.contains("圆角"), "原因必须可读：{message}");
 
     // 未知字段（试图引入动画）：解析即失败。
@@ -792,6 +817,7 @@ fn theme_availability_follows_the_manifest() {
         capabilities: Vec::new(),
         origin: PluginOrigin::Installed,
         appearance: Some(ThemeAppearance::Dark),
+        contract: Default::default(),
     });
     fs::write(&path, file.to_json().unwrap()).expect("写出清单");
 
@@ -819,7 +845,7 @@ fn theme_availability_follows_the_manifest() {
         error.to_string().contains("主题包文件不存在"),
         "原因必须可读：{error}"
     );
-    assert_eq!(restarted.theme_state().selected, THEME_LIGHT);
+    assert_eq!(restarted.theme_state().selected, THEME_ARC);
 
     // 没有关联工作区时，未登记的主题同样不可选择。
     let (fresh, _launcher2, device2) = host_with_device(vec![], fast_settings());

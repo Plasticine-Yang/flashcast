@@ -8,10 +8,11 @@
 // 变量名称与 `ThemeTokens::css_vars` 一一对应；`pnpm ui-check` 会断言这份映射没有
 // 缺口（数量与必需变量名都要对得上）。
 
-import type { Appearance, CssVar, ThemeAppearance, ThemeEntry, ThemeState } from "./types";
+import type { Appearance, CssVar, ThemeAppearance, ThemeEntry, ThemeState, SurfaceStyle } from "./types";
 
 /** 浏览器模拟宿主认得的主题。 */
 export interface MockTheme {
+  styles?: SurfaceStyle[];
   id: string;
   name: string;
   version: string;
@@ -33,6 +34,7 @@ export const LIGHT_VARS: Record<string, string> = {
   "--fc-text-muted": "#5f6673",
   "--fc-text-disabled": "#838a96",
   "--fc-accent": "#2b62ff",
+  "--fc-accent-ink": "#ffffff",
   "--fc-info-bg": "rgba(13, 15, 20, 0.045)",
   "--fc-warning-bg": "rgba(176, 118, 12, 0.12)",
   "--fc-warning-border": "rgba(176, 118, 12, 0.42)",
@@ -73,6 +75,7 @@ export const DARK_VARS: Record<string, string> = {
   "--fc-text-muted": "#a1a7b3",
   "--fc-text-disabled": "#767c88",
   "--fc-accent": "#7aa2f7",
+  "--fc-accent-ink": "#000000",
   "--fc-info-bg": "rgba(255, 255, 255, 0.06)",
   "--fc-warning-bg": "rgba(245, 158, 11, 0.18)",
   "--fc-warning-border": "rgba(245, 158, 11, 0.5)",
@@ -105,8 +108,33 @@ export const DARK_VARS: Record<string, string> = {
 /** 变量名清单：UI 检查用它断言映射完整。 */
 export const REQUIRED_THEME_VARS: string[] = Object.keys(LIGHT_VARS);
 
+export const SOLID_STYLE: SurfaceStyle = { id: "solid", name: "实底", renderer: "solid",
+  light: { fillOpacity: 1, blur: 0, saturation: 1, rim: 0 },
+  dark: { fillOpacity: 1, blur: 0, saturation: 1, rim: 0 } };
+export const ARC_STYLES: SurfaceStyle[] = [
+  { id: "frosted", name: "毛玻璃", renderer: "frosted",
+    light: { fillOpacity: .91, blur: 26, saturation: 1.15, rim: 0 },
+    dark: { fillOpacity: .88, blur: 26, saturation: 1.15, rim: 0 } },
+  { id: "liquid", name: "液态玻璃", renderer: "liquid",
+    light: { fillOpacity: .86, blur: 10, saturation: 1.5, rim: 2.5 },
+    dark: { fillOpacity: .80, blur: 10, saturation: 1.5, rim: 2.5 } }, SOLID_STYLE
+];
+const arcLight = { ...LIGHT_VARS, "--fc-page-bg": "#f2f5f8", "--fc-surface": "#e8edf3",
+  "--fc-text": "#202c3b", "--fc-text-muted": "#536479", "--fc-text-disabled": "#657489",
+  "--fc-accent": "#265b9d", "--fc-selection-bg": "rgba(38,91,157,0.13)",
+  "--fc-selection-border": "rgba(38,91,157,0.5)", "--fc-focus-ring": "#265b9d",
+  "--fc-radius-window": "16px", "--fc-radius-item": "7px", "--fc-radius-control": "7px" };
+const arcDark = { ...DARK_VARS, "--fc-page-bg": "#19212b", "--fc-surface": "#222c39",
+  "--fc-text": "#edf3fb", "--fc-text-muted": "#a8b7cb", "--fc-text-disabled": "#8797aa",
+  "--fc-accent": "#a2c4ff", "--fc-selection-bg": "rgba(162,196,255,0.16)",
+  "--fc-selection-border": "rgba(162,196,255,0.55)", "--fc-focus-ring": "#a2c4ff",
+  "--fc-radius-window": "16px", "--fc-radius-item": "7px", "--fc-radius-control": "7px" };
+
 /** 三个默认主题：浅色、深色、跟随系统。 */
 export const MOCK_THEMES: MockTheme[] = [
+  { id: "flashcast.theme.arc", name: "电弧", version: "0.3.0", appearance: "system",
+    builtin: true, enabled: true, styles: ARC_STYLES,
+    palettes: { light: arcLight, dark: arcDark } },
   {
     id: "flashcast.theme.light",
     name: "浅色",
@@ -139,20 +167,22 @@ export const MOCK_THEMES: MockTheme[] = [
 /** 一个已安装的本地主题包（模拟「用户从本地安装」的外观）。 */
 export const MOCK_INSTALLED_THEME: MockTheme = {
   id: "example.solarized",
-  name: "Solarized 深色",
-  version: "2.1.0",
-  appearance: "dark",
+  name: "Solarized",
+  version: "3.0.0",
+  appearance: "system",
+  styles: [{ ...SOLID_STYLE, id: "paper", name: "纸面" }],
   builtin: false,
   enabled: true,
   palettes: {
-    light: { ...LIGHT_VARS, "--fc-surface": "#fdf6e3", "--fc-text": "#073642" },
+    light: { ...LIGHT_VARS, "--fc-page-bg": "#fdf6e3", "--fc-surface": "#eee8d5", "--fc-text": "#073642", "--fc-accent": "#765900", "--fc-text-muted": "#52676b" },
     dark: {
       ...DARK_VARS,
-      "--fc-page-bg": "rgba(0, 43, 54, 0.98)",
+      "--fc-page-bg": "#002b36",
       "--fc-surface": "#002b36",
       "--fc-text": "#eee8d5",
       "--fc-text-muted": "#93a1a1",
-      "--fc-accent": "#b58900",
+      "--fc-accent": "#e1b83c",
+      "--fc-accent-ink": "#000000",
       "--fc-selection-bg": "rgba(181, 137, 0, 0.28)",
       "--fc-selection-border": "rgba(181, 137, 0, 0.8)",
       "--fc-focus-ring": "rgba(38, 139, 210, 0.95)",
@@ -178,6 +208,9 @@ export function buildMockThemeState(input: {
   selected: string;
   system: Appearance;
   error: string | null;
+  preference?: ThemeAppearance;
+  styles?: Record<string, string>;
+  reduce?: boolean;
 }): ThemeState {
   const selected =
     input.themes.find((theme) => theme.id === input.selected) ?? input.themes[0];
@@ -191,14 +224,23 @@ export function buildMockThemeState(input: {
     appearance: theme.appearance,
     usable: true,
     error: null,
+    legacy: !theme.styles,
+    canDisable: theme.id !== "flashcast.theme.arc",
   }));
+  const preference = selected.styles ? input.preference ?? "system" : selected.appearance;
+  const appearance: Appearance = preference === "system" ? input.system : preference;
+  const styles = selected.styles ?? [SOLID_STYLE];
+  const style = styles.find(s => s.id === input.styles?.[selected.id]) ?? styles[0];
+  const reduce = input.reduce ?? false;
   return {
     selected: selected.id,
     selectedName: selected.name,
-    preference: selected.appearance,
-    appearance: resolvedAppearance(selected, input.system),
+    preference,
+    appearance,
     systemAppearance: input.system,
-    cssVars: mockThemeCssVars(selected, input.system),
+    cssVars: Object.entries(selected.palettes[appearance]).map(([name,value]) => ({name,value})),
+    styles, style: style.id, renderer: reduce ? "solid" : style.renderer,
+    surface: reduce ? SOLID_STYLE.light : style[appearance], reduceTransparency: reduce,
     themes: entries,
     error: input.error,
   };

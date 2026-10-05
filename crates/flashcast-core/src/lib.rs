@@ -35,9 +35,9 @@ pub use clipboard::{
     content_hash_files, content_hash_image, content_hash_text, describe_age, event_from_capture,
     event_id_from_item_id, file_kind_label_zh, human_bytes, image_label, is_file_attachment,
     mime_short_label, new_attachment_id, new_event_id, now_ms, summary_for_files,
-    summary_for_image, summary_for_text, AttachmentKind, ClipboardActionError,
-    ClipboardAttachment, ClipboardCaptureOutcome, ClipboardCopyError, ClipboardEvent,
-    ClipboardFileView, ClipboardFormat, ClipboardPayload, ClipboardRestoreError, ClipboardRuntime,
+    summary_for_image, summary_for_text, AttachmentKind, ClipboardActionError, ClipboardAttachment,
+    ClipboardCaptureOutcome, ClipboardCopyError, ClipboardEvent, ClipboardFileView,
+    ClipboardFormat, ClipboardPayload, ClipboardRestoreError, ClipboardRuntime,
     ClipboardRuntimeSnapshot, ClipboardState, ClipboardStats, ClipboardStore, ClipboardStoreError,
     InsertOutcome, PayloadRole, ReclaimReport, ATTACHMENTS_DIR, CLIPBOARD_DB_FILE, CLIPBOARD_DIR,
     CLIPBOARD_ITEM_PREFIX, CLIPBOARD_PLUGIN_ID, MAX_COPY_BYTES, MAX_COPY_TOTAL_BYTES,
@@ -70,7 +70,7 @@ pub use model::{
 };
 pub use plugin::{
     is_valid_plugin_id, strip_keyword, FeaturePlugin, Keyword, PluginError, PluginKind,
-    PluginManifest, PluginScope, SearchContext, CAP_CLIPBOARD_READ, CAP_CLIPBOARD_WRITE,
+    PluginContract, PluginManifest, PluginScope, SearchContext, CAP_CLIPBOARD_READ, CAP_CLIPBOARD_WRITE,
 };
 pub use plugins::{
     ClipboardPlugin, MemoPlugin, CLIPBOARD_KEYWORD_ALT_ZH, CLIPBOARD_KEYWORD_EN,
@@ -86,8 +86,9 @@ pub use sync::{
 pub use theme::{
     builtin_themes, dark_tokens, light_tokens, Appearance, ColorTokens, CssVar, DisabledState,
     ErrorState, FocusState, FontTokens, RadiusTokens, Rgba, SelectedState, ShadowTokens,
-    SpaceTokens, StateTokens, ThemeAppearance, ThemeDocument, ThemeEntry, ThemeError, ThemeLibrary,
-    ThemePalettes, ThemeSelection, ThemeState, ThemeTokens, THEME_DARK, THEME_LIGHT, THEME_SYSTEM,
+    SpaceTokens, StateTokens, SurfaceRecipe, SurfaceRenderer, SurfaceStyle, ThemeAppearance,
+    ThemeDocument, ThemeEntry, ThemeError, ThemeLibrary, ThemePalettes, ThemeSelection, ThemeState,
+    ThemeTokens, THEME_ARC, THEME_DARK, THEME_LIGHT, THEME_SYSTEM,
 };
 pub use watch::{
     ChangeFilter, WatchError, WatchEventTrace, WorkspaceWatcher, DEBOUNCE, QUIET_WINDOW,

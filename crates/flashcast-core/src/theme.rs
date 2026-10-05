@@ -25,7 +25,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// 主题文档的格式版本。
-pub const THEME_SCHEMA_VERSION: u32 = 1;
+pub const THEME_SCHEMA_VERSION: u32 = 2;
+pub const THEME_ARC: &str = "flashcast.theme.arc";
 
 /// 内置浅色主题的标识。
 pub const THEME_LIGHT: &str = "flashcast.theme.light";
@@ -92,6 +93,91 @@ pub enum ThemeAppearance {
     Light,
     Dark,
     System,
+}
+
+impl Default for ThemeAppearance {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
+/// 版本化的宿主表面渲染器；风格 id/名称不受这些渲染器名称限制。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SurfaceRenderer {
+    #[default]
+    Solid,
+    Frosted,
+    Liquid,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SurfaceRecipe {
+    pub fill_opacity: f64,
+    pub blur: f64,
+    pub saturation: f64,
+    pub rim: f64,
+}
+
+impl Default for SurfaceRecipe {
+    fn default() -> Self {
+        Self {
+            fill_opacity: 1.0,
+            blur: 0.0,
+            saturation: 1.0,
+            rim: 0.0,
+        }
+    }
+}
+
+impl SurfaceRecipe {
+    fn validate(&self, renderer: SurfaceRenderer) -> Result<(), ThemeError> {
+        for (name, value, min, max) in [
+            ("fillOpacity", self.fill_opacity, 0.65, 1.0),
+            ("blur", self.blur, 0.0, 40.0),
+            ("saturation", self.saturation, 0.0, 2.0),
+            ("rim", self.rim, 0.0, 4.0),
+        ] {
+            if !value.is_finite() || value < min || value > max {
+                return Err(ThemeError::invalid(format!(
+                    "表面参数 {name} 必须在 {min}–{max} 之间"
+                )));
+            }
+        }
+        if renderer == SurfaceRenderer::Solid && *self != Self::default() {
+            return Err(ThemeError::invalid("实底渲染器必须使用不透明、无模糊参数"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SurfaceStyle {
+    pub id: String,
+    pub name: String,
+    pub renderer: SurfaceRenderer,
+    pub light: SurfaceRecipe,
+    pub dark: SurfaceRecipe,
+}
+
+impl SurfaceStyle {
+    pub fn solid() -> Self {
+        Self {
+            id: "solid".into(),
+            name: "实底".into(),
+            renderer: SurfaceRenderer::Solid,
+            light: SurfaceRecipe::default(),
+            dark: SurfaceRecipe::default(),
+        }
+    }
+    pub fn recipe(&self, appearance: Appearance) -> SurfaceRecipe {
+        match appearance {
+            Appearance::Light => self.light.clone(),
+            Appearance::Dark => self.dark.clone(),
+        }
+    }
 }
 
 impl ThemeAppearance {
@@ -430,11 +516,31 @@ impl ThemeTokens {
 
         let canonical_space = Self::canonical_space();
         let space_fields = [
-            ("space.windowPadding", &self.space.window_padding, &canonical_space.window_padding),
-            ("space.rowPadding", &self.space.row_padding, &canonical_space.row_padding),
-            ("space.rowGap", &self.space.row_gap, &canonical_space.row_gap),
-            ("space.sectionGap", &self.space.section_gap, &canonical_space.section_gap),
-            ("space.rowHeight", &self.space.row_height, &canonical_space.row_height),
+            (
+                "space.windowPadding",
+                &self.space.window_padding,
+                &canonical_space.window_padding,
+            ),
+            (
+                "space.rowPadding",
+                &self.space.row_padding,
+                &canonical_space.row_padding,
+            ),
+            (
+                "space.rowGap",
+                &self.space.row_gap,
+                &canonical_space.row_gap,
+            ),
+            (
+                "space.sectionGap",
+                &self.space.section_gap,
+                &canonical_space.section_gap,
+            ),
+            (
+                "space.rowHeight",
+                &self.space.row_height,
+                &canonical_space.row_height,
+            ),
         ];
         for (name, actual, expected) in space_fields {
             if actual != expected {
@@ -535,7 +641,12 @@ impl ThemeTokens {
         self.require_contrast("color.textMuted", &self.color.text_muted, surface, 4.5)?;
         self.require_contrast("color.text", &self.color.text, page, 4.5)?;
         // 禁用文字按 WCAG 属于豁免项，但至少要与背景区分得开。
-        self.require_contrast("color.textDisabled", &self.color.text_disabled, surface, 3.0)?;
+        self.require_contrast(
+            "color.textDisabled",
+            &self.color.text_disabled,
+            surface,
+            3.0,
+        )?;
 
         let selection_background =
             self.color_value("state.selected.background", &self.state.selected.background)?;
@@ -575,7 +686,11 @@ impl ThemeTokens {
                 "state.focus.ring 与 state.selected.border 太接近，焦点与选中状态无法区分",
             ));
         }
-        if error_background.composite_over(surface).max_channel_delta(surface) < 0.03 {
+        if error_background
+            .composite_over(surface)
+            .max_channel_delta(surface)
+            < 0.03
+        {
             return Err(ThemeError::invalid(
                 "state.error.background 与 color.surface 太接近，错误状态无法辨识",
             ));
@@ -625,10 +740,7 @@ impl ThemeTokens {
                 "--fc-icon-fallback-bg",
                 self.color.icon_fallback_background.clone(),
             ),
-            (
-                "--fc-selection-bg",
-                self.state.selected.background.clone(),
-            ),
+            ("--fc-selection-bg", self.state.selected.background.clone()),
             ("--fc-selection-border", self.state.selected.border.clone()),
             ("--fc-focus-ring", self.state.focus.ring.clone()),
             ("--fc-error-bg", self.state.error.background.clone()),
@@ -660,6 +772,33 @@ impl ThemeTokens {
                 value,
             })
             .collect();
+        let accent = Rgba::parse(&self.color.accent).unwrap_or(Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        });
+        let black = Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
+        let white = Rgba {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        vars.push(CssVar {
+            name: "--fc-accent-ink".into(),
+            value: if accent.contrast_ratio(black) >= accent.contrast_ratio(white) {
+                "#000000"
+            } else {
+                "#ffffff"
+            }
+            .into(),
+        });
         vars.push(CssVar {
             name: "--fc-radius-item".to_string(),
             value: self.radius.item.clone(),
@@ -741,6 +880,12 @@ pub struct ThemeDocument {
     /// `appearance` 为跟随系统时提供。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub palettes: Option<ThemePalettes>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<crate::plugin::PluginContract>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<SurfaceStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_style: Option<String>,
 }
 
 impl ThemeDocument {
@@ -781,7 +926,7 @@ impl ThemeDocument {
     }
 
     pub fn validate(&self) -> Result<(), ThemeError> {
-        if self.schema_version != THEME_SCHEMA_VERSION {
+        if self.schema_version != 1 && self.schema_version != THEME_SCHEMA_VERSION {
             return Err(ThemeError::invalid(format!(
                 "主题格式版本必须是 {THEME_SCHEMA_VERSION}，当前为 {}",
                 self.schema_version
@@ -799,6 +944,63 @@ impl ThemeDocument {
         if self.version.trim().is_empty() {
             return Err(ThemeError::invalid("主题版本不能为空"));
         }
+        if self.schema_version == 2 {
+            self.contract
+                .as_ref()
+                .ok_or_else(|| ThemeError::invalid("新主题缺少共同插件 contract"))?
+                .validate()
+                .map_err(ThemeError::invalid)?;
+            semver::Version::parse(&self.version)
+                .map_err(|_| ThemeError::invalid("主题包版本必须符合 SemVer"))?;
+            if self.appearance != ThemeAppearance::System
+                || self.tokens.is_some()
+                || self.palettes.is_none()
+            {
+                return Err(ThemeError::invalid(
+                    "新主题必须提供 palettes.light 和 palettes.dark，appearance 必须为 system",
+                ));
+            }
+            if self.styles.is_empty() || self.styles.len() > 16 {
+                return Err(ThemeError::invalid("主题需要提供 1–16 种表面风格"));
+            }
+            let mut ids = std::collections::BTreeSet::new();
+            for style in &self.styles {
+                if !is_valid_theme_id(&style.id)
+                    || style.name.trim().is_empty()
+                    || !ids.insert(&style.id)
+                {
+                    return Err(ThemeError::invalid("表面风格 id/名称无效或重复"));
+                }
+                style.light.validate(style.renderer)?;
+                style.dark.validate(style.renderer)?;
+            }
+            if !self
+                .styles
+                .iter()
+                .any(|s| Some(&s.id) == self.default_style.as_ref())
+            {
+                return Err(ThemeError::invalid("defaultStyle 必须指向主题提供的风格"));
+            }
+            for palette in [
+                &self.palettes.as_ref().unwrap().light,
+                &self.palettes.as_ref().unwrap().dark,
+            ] {
+                for color in [
+                    &palette.color.page_background,
+                    &palette.color.surface,
+                    &palette.color.accent,
+                ] {
+                    if Rgba::parse(color).map(|c| c.a) != Some(1.0) {
+                        return Err(ThemeError::invalid(
+                            "新主题的 pageBackground、surface 与 accent 必须不透明",
+                        ));
+                    }
+                }
+            }
+        } else if self.contract.is_some() || !self.styles.is_empty() || self.default_style.is_some()
+        {
+            return Err(ThemeError::invalid("旧主题不能声明 v2 契约字段"));
+        }
         match self.appearance {
             ThemeAppearance::System => {
                 if self.tokens.is_some() {
@@ -812,9 +1014,10 @@ impl ThemeDocument {
                 palettes.light.validate().map_err(|error| {
                     ThemeError::invalid(format!("palettes.light 无效：{error}"))
                 })?;
-                palettes.dark.validate().map_err(|error| {
-                    ThemeError::invalid(format!("palettes.dark 无效：{error}"))
-                })?;
+                palettes
+                    .dark
+                    .validate()
+                    .map_err(|error| ThemeError::invalid(format!("palettes.dark 无效：{error}")))?;
             }
             ThemeAppearance::Light | ThemeAppearance::Dark => {
                 if self.palettes.is_some() {
@@ -829,7 +1032,65 @@ impl ThemeDocument {
                 tokens.validate()?;
             }
         }
+        if self.schema_version == 2 {
+            let palettes = self.palettes.as_ref().unwrap();
+            for (mode, palette) in [
+                (Appearance::Light, &palettes.light),
+                (Appearance::Dark, &palettes.dark),
+            ] {
+                let page = Rgba::parse(&palette.color.page_background).unwrap();
+                palette.require_contrast("color.accent", &palette.color.accent, page, 4.5)?;
+                for style in &self.styles {
+                    let recipe = style.recipe(mode);
+                    let opacity = if style.renderer == SurfaceRenderer::Liquid {
+                        1.0 - (1.0 - recipe.fill_opacity) * 0.25
+                    } else {
+                        recipe.fill_opacity
+                    };
+                    for desktop in ["#000000", "#ffffff"] {
+                        let mut fill = page;
+                        fill.a = opacity;
+                        let background = fill.composite_over(Rgba::parse(desktop).unwrap());
+                        for (name, color) in [
+                            ("color.text", &palette.color.text),
+                            ("color.textMuted", &palette.color.text_muted),
+                        ] {
+                            palette
+                                .require_contrast(name, color, background, 4.5)
+                                .map_err(|e| {
+                                    ThemeError::invalid(format!(
+                                        "风格 {} 的 {:?} 透明阅读区域无效：{e}",
+                                        style.id, mode
+                                    ))
+                                })?;
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
+    }
+
+    pub fn surface_styles(&self) -> Vec<SurfaceStyle> {
+        if self.styles.is_empty() {
+            vec![SurfaceStyle::solid()]
+        } else {
+            self.styles.clone()
+        }
+    }
+
+    pub fn surface_style(&self, selected: Option<&str>) -> SurfaceStyle {
+        let styles = self.surface_styles();
+        styles
+            .iter()
+            .find(|s| Some(s.id.as_str()) == selected)
+            .or_else(|| {
+                styles
+                    .iter()
+                    .find(|s| Some(&s.id) == self.default_style.as_ref())
+            })
+            .unwrap_or(&styles[0])
+            .clone()
     }
 
     /// 按当前系统外观解析出生效的 token 集合。
@@ -911,12 +1172,21 @@ fn format_float(value: f64) -> String {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ThemeSelection {
     pub selected: String,
+    #[serde(default)]
+    pub appearance: ThemeAppearance,
+    #[serde(default)]
+    pub styles: BTreeMap<String, String>,
+    #[serde(default)]
+    pub reduce_transparency: bool,
 }
 
 impl ThemeSelection {
     pub fn new(selected: impl Into<String>) -> Self {
         Self {
             selected: selected.into(),
+            appearance: ThemeAppearance::System,
+            styles: BTreeMap::new(),
+            reduce_transparency: false,
         }
     }
 
@@ -950,6 +1220,8 @@ pub struct ThemeEntry {
     pub usable: bool,
     /// 选中的主题不可用时给出的中文原因。
     pub error: Option<String>,
+    pub legacy: bool,
+    pub can_disable: bool,
 }
 
 /// 宿主发给 UI 的主题状态：选中的主题、解析后的 token（含 CSS 自定义属性）
@@ -975,6 +1247,11 @@ pub struct ThemeState {
     pub themes: Vec<ThemeEntry>,
     /// 最近一次无效主题的中文原因；此时 `tokens` 仍是上一次可用外观。
     pub error: Option<String>,
+    pub styles: Vec<SurfaceStyle>,
+    pub style: String,
+    pub renderer: SurfaceRenderer,
+    pub surface: SurfaceRecipe,
+    pub reduce_transparency: bool,
 }
 
 /// 主题库。内置主题随应用提供；本地主题包从配置工作区的 `themes/<id>/` 读入。
@@ -1040,10 +1317,7 @@ impl ThemeLibrary {
 
     /// 全部已知主题文档（内置 + 已安装）。
     pub fn documents(&self) -> Vec<&ThemeDocument> {
-        self.builtin
-            .iter()
-            .chain(self.installed.values())
-            .collect()
+        self.builtin.iter().chain(self.installed.values()).collect()
     }
 
     /// 已安装主题包的 id。
@@ -1055,7 +1329,10 @@ impl ThemeLibrary {
     pub fn snapshot(&self) -> BTreeMap<String, String> {
         let mut snapshot = BTreeMap::new();
         for (id, document) in &self.installed {
-            snapshot.insert(format!("pkg:{id}"), document.version.clone());
+            snapshot.insert(
+                format!("pkg:{id}"),
+                serde_json::to_string(document).unwrap_or_default(),
+            );
         }
         for (id, reason) in &self.broken {
             snapshot.insert(format!("err:{id}"), reason.clone());
@@ -1070,26 +1347,33 @@ impl ThemeLibrary {
 /// 主题库只负责在给定 id 时提供文档。
 pub fn builtin_themes() -> Vec<ThemeDocument> {
     vec![
+        arc_theme(),
         ThemeDocument {
-            schema_version: THEME_SCHEMA_VERSION,
+            schema_version: 1,
             id: THEME_LIGHT.to_string(),
             name: "浅色".to_string(),
             version: "0.1.0".to_string(),
             appearance: ThemeAppearance::Light,
             tokens: Some(light_tokens()),
             palettes: None,
+            contract: None,
+            styles: Vec::new(),
+            default_style: None,
         },
         ThemeDocument {
-            schema_version: THEME_SCHEMA_VERSION,
+            schema_version: 1,
             id: THEME_DARK.to_string(),
             name: "深色".to_string(),
             version: "0.1.0".to_string(),
             appearance: ThemeAppearance::Dark,
             tokens: Some(dark_tokens()),
             palettes: None,
+            contract: None,
+            styles: Vec::new(),
+            default_style: None,
         },
         ThemeDocument {
-            schema_version: THEME_SCHEMA_VERSION,
+            schema_version: 1,
             id: THEME_SYSTEM.to_string(),
             name: "跟随系统".to_string(),
             version: "0.1.0".to_string(),
@@ -1099,6 +1383,9 @@ pub fn builtin_themes() -> Vec<ThemeDocument> {
                 light: light_tokens(),
                 dark: dark_tokens(),
             }),
+            contract: None,
+            styles: Vec::new(),
+            default_style: None,
         },
     ]
 }
@@ -1206,5 +1493,84 @@ pub fn dark_tokens() -> ThemeTokens {
                 opacity: 0.5,
             },
         },
+    }
+}
+
+/// 电弧：完整的深浅配色与三种表面风格。
+pub fn arc_theme() -> ThemeDocument {
+    let mut light = light_tokens();
+    let mut dark = dark_tokens();
+    light.color.page_background = "#f2f5f8".into();
+    light.color.surface = "#e8edf3".into();
+    light.color.text = "#202c3b".into();
+    light.color.text_muted = "#536479".into();
+    light.color.text_disabled = "#657489".into();
+    light.state.disabled.text = light.color.text_disabled.clone();
+    light.color.accent = "#265b9d".into();
+    light.state.selected.background = "rgba(38,91,157,0.13)".into();
+    light.state.selected.border = "rgba(38,91,157,0.5)".into();
+    light.state.focus.ring = "#265b9d".into();
+    dark.color.page_background = "#19212b".into();
+    dark.color.surface = "#222c39".into();
+    dark.color.text = "#edf3fb".into();
+    dark.color.text_muted = "#a8b7cb".into();
+    dark.color.text_disabled = "#8797aa".into();
+    dark.state.disabled.text = dark.color.text_disabled.clone();
+    dark.color.accent = "#a2c4ff".into();
+    dark.state.selected.background = "rgba(162,196,255,0.16)".into();
+    dark.state.selected.border = "rgba(162,196,255,0.55)".into();
+    dark.state.focus.ring = "#a2c4ff".into();
+    for tokens in [&mut light, &mut dark] {
+        tokens.radius.window = "16px".into();
+        tokens.radius.item = "7px".into();
+        tokens.radius.control = "7px".into();
+    }
+    ThemeDocument {
+        schema_version: 2,
+        id: THEME_ARC.into(),
+        name: "电弧".into(),
+        version: "0.3.0".into(),
+        appearance: ThemeAppearance::System,
+        tokens: None,
+        palettes: Some(ThemePalettes { light, dark }),
+        contract: Some(crate::plugin::PluginContract::default()),
+        default_style: Some("frosted".into()),
+        styles: vec![
+            SurfaceStyle {
+                id: "frosted".into(),
+                name: "毛玻璃".into(),
+                renderer: SurfaceRenderer::Frosted,
+                light: SurfaceRecipe {
+                    fill_opacity: 0.91,
+                    blur: 26.0,
+                    saturation: 1.15,
+                    rim: 0.0,
+                },
+                dark: SurfaceRecipe {
+                    fill_opacity: 0.88,
+                    blur: 26.0,
+                    saturation: 1.15,
+                    rim: 0.0,
+                },
+            },
+            SurfaceStyle {
+                id: "liquid".into(),
+                name: "液态玻璃".into(),
+                renderer: SurfaceRenderer::Liquid,
+                light: SurfaceRecipe {
+                    fill_opacity: 0.86,
+                    blur: 10.0,
+                    saturation: 1.5,
+                    rim: 2.5,
+                },
+                dark: SurfaceRecipe {
+                    fill_opacity: 0.80,
+                    blur: 10.0,
+                    saturation: 1.5,
+                    rim: 2.5,
+                },
+            },
+            SurfaceStyle::solid(),
+        ],
     }
 }

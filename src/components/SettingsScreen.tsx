@@ -1,3 +1,5 @@
+import { AppearanceControls } from "./AppearanceControls";
+import { Glyph } from "./Glyph";
 import { useEffect, useState } from "react";
 import type {
   Capabilities,
@@ -150,6 +152,8 @@ interface Props {
   workspace: WorkspaceStatus | null;
   settings: Settings | null;
   theme: ThemeState | null;
+  materialNotice: string | null;
+  onAppearanceChange: (appearance: import("../types").ThemeAppearance, style: string, reduce: boolean) => void;
   hotkey: { label: string; error: string | null; registered: boolean } | null;
   /** 运行环境与能力状态（来自平台层的真实探测）。 */
   capabilities: Capabilities | null;
@@ -206,9 +210,9 @@ interface Props {
   onToggleFeaturePlugin: (id: string, enabled: boolean) => void;
   onAssociateChromeProfile: (profileDir: string) => void;
   onRefreshChromeBookmarks: () => void;
-  onCreateMemo: (title: string, tags: string[], body: string) => Promise<void>;
-  onUpdateMemo: (id: string, title: string, tags: string[], body: string) => Promise<void>;
-  onDeleteMemo: (id: string) => Promise<void>;
+  onCreateMemo: (title: string, tags: string[], body: string) => Promise<boolean>;
+  onUpdateMemo: (id: string, title: string, tags: string[], body: string) => Promise<boolean>;
+  onDeleteMemo: (id: string) => Promise<boolean>;
   onToggleClipboardPaused: (paused: boolean) => void;
   onSaveClipboardLimits: (retentionDays: number, capacity: number) => void;
   onPinClipboardEntry: (id: string, pinned: boolean) => void;
@@ -279,7 +283,7 @@ export const SETTINGS_GROUPS: {
   {
     id: "about",
     label: "关于",
-    sections: [{ id: "capabilities", title: "运行环境与能力" }],
+    sections: [{ id: "capabilities", title: "运行环境" }],
   },
 ];
 
@@ -293,6 +297,8 @@ export function SettingsScreen({
   workspace,
   settings,
   theme,
+  materialNotice,
+  onAppearanceChange,
   hotkey,
   capabilities,
   message,
@@ -420,8 +426,9 @@ export function SettingsScreen({
           data-testid="settings-back"
           onClick={onBack}
         >
-          返回
+          ‹ 搜索
         </button>
+        <span className="settings-signature">FLASHCAST</span>
       </header>
 
       {/* 提示条紧贴头部、常驻可见。它原本在整个设置页的最底部：内容总高 3837px 时，
@@ -450,6 +457,7 @@ export function SettingsScreen({
                 aria-current={section.id === current ? "true" : undefined}
                 onClick={() => onSectionChange(section.id)}
               >
+                <Glyph name={({memos:"memo",clipboard:"clipboardEntry",chrome:"bookmark"} as Record<string,string>)[section.id] ?? section.id} />
                 {section.title}
               </button>
             ))}
@@ -879,7 +887,8 @@ export function SettingsScreen({
           hidden={current !== "theme"}
           data-testid="theme-section"
         >
-          <h2 className="settings-section-title">外观主题</h2>
+          <h2 className="settings-section-title">外观</h2>
+          {theme ? <AppearanceControls theme={theme} busy={busy} materialNotice={materialNotice} onChange={onAppearanceChange} /> : null}
 
           <dl className="settings-facts">
             <div className="settings-fact">
@@ -907,7 +916,7 @@ export function SettingsScreen({
           ) : null}
 
           <ul className="theme-list" data-testid="theme-list">
-            {(theme?.themes ?? []).map((entry) => (
+            {(theme?.themes ?? []).filter(entry => !entry.builtin || !entry.legacy || entry.selected).map((entry) => (
               <li
                 key={entry.id}
                 className="theme-item"
@@ -921,7 +930,7 @@ export function SettingsScreen({
                   {entry.name}
                   <span className="theme-meta">
                     {entry.builtin ? "内置" : "已安装"} · v{entry.version} ·{" "}
-                    {entry.appearance === "system"
+                    {!entry.legacy ? "深浅成对" : entry.appearance === "system"
                       ? "跟随系统"
                       : entry.appearance === "dark"
                         ? "深色"
@@ -951,7 +960,7 @@ export function SettingsScreen({
                   type="button"
                   className="secondary-button"
                   data-testid="theme-toggle"
-                  disabled={busy}
+                  disabled={busy || !entry.canDisable}
                   onClick={() => onToggleTheme(entry.id, !entry.enabled)}
                 >
                   {entry.enabled ? "停用" : "启用"}
@@ -996,9 +1005,7 @@ export function SettingsScreen({
             </button>
           </div>
           <p className="settings-hint">
-            主题包可以是包含 theme.json 的目录，也可以直接是主题 JSON 文件；校验失败会给出
-            原因并保留当前外观。主题是声明式数据（颜色、字体、间距、圆角、阴影与状态语义），
-            不执行任何代码；间距与字号由宿主固定，因此切换主题不会移动控件。
+            选择 theme.json 文件或所在目录。主题需同时提供浅色和深色设计；安装失败会保留当前外观。
           </p>
         </section>
 

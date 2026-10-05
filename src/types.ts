@@ -150,6 +150,15 @@ export interface ThemeEntry {
   /** 主题文档当前是否能解析并通过校验。 */
   usable: boolean;
   error: string | null;
+  legacy: boolean;
+  canDisable: boolean;
+}
+
+export type SurfaceRenderer = "solid" | "frosted" | "liquid";
+export interface SurfaceRecipe { fillOpacity: number; blur: number; saturation: number; rim: number }
+export interface SurfaceStyle {
+  id: string; name: string; renderer: SurfaceRenderer;
+  light: SurfaceRecipe; dark: SurfaceRecipe;
 }
 
 /** 宿主当前的主题状态（对应 flashcast_core::ThemeState）。 */
@@ -164,6 +173,11 @@ export interface ThemeState {
   themes: ThemeEntry[];
   /** 最近一次无效主题的中文原因；此时外观仍是上一次可用的。 */
   error: string | null;
+  styles: SurfaceStyle[];
+  style: string;
+  renderer: SurfaceRenderer;
+  surface: SurfaceRecipe;
+  reduceTransparency: boolean;
 }
 
 /** 插件清单条目（对应 flashcast_core::ManifestEntry）。 */

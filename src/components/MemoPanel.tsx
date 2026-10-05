@@ -32,9 +32,9 @@ interface Props {
   /** 无法读取的备忘录文件：如实展示原因，不假装不存在。 */
   problems: MemoProblem[];
   busy: boolean;
-  onCreate: (title: string, tags: string[], body: string) => Promise<void>;
-  onUpdate: (id: string, title: string, tags: string[], body: string) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
+  onCreate: (title: string, tags: string[], body: string) => Promise<boolean>;
+  onUpdate: (id: string, title: string, tags: string[], body: string) => Promise<boolean>;
+  onDelete: (id: string) => Promise<boolean>;
 }
 
 /**
@@ -76,12 +76,10 @@ export function MemoPanel({
 
   const save = async () => {
     const tags = parseTags(draft.tags);
-    if (editing && draft.id) {
-      await onUpdate(draft.id, draft.title, tags, draft.body);
-    } else {
-      await onCreate(draft.title, tags, draft.body);
-    }
-    setDraft(EMPTY_DRAFT);
+    const saved = editing && draft.id
+      ? await onUpdate(draft.id, draft.title, tags, draft.body)
+      : await onCreate(draft.title, tags, draft.body);
+    if (saved) setDraft(EMPTY_DRAFT);
   };
 
   return (

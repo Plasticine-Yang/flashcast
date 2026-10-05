@@ -34,7 +34,7 @@ export function FeaturePluginsPanel({ plugins, busy, onToggle }: Props) {
               <span className="theme-name">
                 {plugin.name}
                 <span className="theme-meta">
-                  {plugin.id} · v{plugin.version} · 关键词：
+                  v{plugin.version} · 关键词：
                   {plugin.keywords.length > 0 ? plugin.keywords.join(" / ") : "无"}
                 </span>
               </span>
@@ -55,9 +55,7 @@ export function FeaturePluginsPanel({ plugins, busy, onToggle }: Props) {
         </ul>
       )}
       <p className="settings-hint">
-        插件实现随应用提供，启用状态记录在工作区的 manifest.json 里；停用后既不贡献
-        搜索结果，也不产生后台活动。原生能力（例如写入剪贴板）只在插件声明了对应能力时
-        由宿主在边界处校验后执行。
+        插件随应用提供。停用后停止搜索和后台活动，启用状态随配置同步。
       </p>
     </section>
   );
