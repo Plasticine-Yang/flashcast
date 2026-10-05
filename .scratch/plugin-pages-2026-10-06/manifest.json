@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 1,
+  "project": "Flashcast · 插件页面十版交互",
+  "brief": "搜索后回车进入插件；剪切板左历史右预览；备忘录管理与平台快捷键配置。点击单张即可操作。",
+  "round": "交互 01",
+  "candidates": [
+    {
+      "id": "current",
+      "name": "当前主页面",
+      "concept": "对照移除顶部插件 Tab 前的当前主页面。",
+      "typography": "系统无衬线",
+      "palette": [
+        "#f3f8fd",
+        "#2c6095"
+      ],
+      "traits": [
+        "顶部插件 Tab",
+        "直接展示备忘录内容"
+      ],
+      "kind": "image",
+      "source": "assets/baseline.png",
+      "baseline": true
+    },
+    {
+      "id": "v01",
+      "name": "顺手双栏",
+      "concept": "列表与正文位置稳定，用最少的切换完成取用。",
+      "typography": "系统中文无衬线；正文14px、标题15–20px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "列表 42% / 正文 58%",
+        "正文区域内联编辑",
+        "结果行与原位动作"
+      ],
+      "kind": "html",
+      "source": "01.html",
+      "interactive": true
+    },
+    {
+      "id": "v02",
+      "name": "路径导航",
+      "concept": "把进入与返回做成可读的路径，避免搜索范围混淆。",
+      "typography": "系统中文无衬线；正文14px、标题15–20px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "独立路径栏与搜索栏",
+        "全页编辑，保存后返回原选中项",
+        "文件夹式阅读顺序"
+      ],
+      "kind": "html",
+      "source": "02.html",
+      "interactive": true
+    },
+    {
+      "id": "v03",
+      "name": "动作托盘",
+      "concept": "搜索与选中保持干净，管理动作集中在键盘面板。",
+      "typography": "系统中文无衬线；正文14px、标题15–20px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "首页通栏清单",
+        "底部动作面板 Ctrl+K",
+        "居中编辑对话框"
+      ],
+      "kind": "html",
+      "source": "03.html",
+      "interactive": true
+    },
+    {
+      "id": "v04",
+      "name": "内容画廊",
+      "concept": "以对象形状与缩略图识别入口，鼠标选择更直观。",
+      "typography": "系统中文无衬线；正文14px、标题15–20px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "首页双列对象卡片",
+        "图片缩略图进入列表",
+        "右侧抽屉编辑"
+      ],
+      "kind": "html",
+      "source": "04.html",
+      "interactive": true
+    },
+    {
+      "id": "v05",
+      "name": "紧凑清单",
+      "concept": "一次看到更多结果，按编号快速扫读。",
+      "typography": "系统中文无衬线；正文14px、标题15–20px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "表格式单列入口",
+        "紧凑行高与固定编号",
+        "独立编辑对话框"
+      ],
+      "kind": "html",
+      "source": "05.html",
+      "interactive": true
+    },
+    {
+      "id": "v06",
+      "name": "焦点工作台",
+      "concept": "让当前内容占主要空间，确认后再粘贴。",
+      "typography": "系统中文无衬线；正文14px、标题15–20px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "首页选中对象放大",
+        "窄列表与宽正文",
+        "阅读区域原位编辑"
+      ],
+      "kind": "html",
+      "source": "06.html",
+      "interactive": true
+    },
+    {
+      "id": "v07",
+      "name": "侧边动作",
+      "concept": "正文保持完整，管理操作沿右边缘展开。",
+      "typography": "系统中文无衬线；正文14px、标题15–20px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "专用侧边操作轨道",
+        "新建与编辑不占用标题行",
+        "编辑抽屉保留左侧上下文"
+      ],
+      "kind": "html",
+      "source": "07.html",
+      "interactive": true
+    },
+    {
+      "id": "v08",
+      "name": "分组目录",
+      "concept": "用类型、文件夹与标签把内容分段，便于浏览。",
+      "typography": "系统中文无衬线；正文14px、标题15–20px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "入口按软件/插件/标签分组",
+        "书签按目录分组",
+        "备忘录原位编辑"
+      ],
+      "kind": "html",
+      "source": "08.html",
+      "interactive": true
+    },
+    {
+      "id": "v09",
+      "name": "时间线",
+      "concept": "按最近使用与复制时间扫读，保留内容顺序。",
+      "typography": "系统中文无衬线；正文14px、标题15–20px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "独立时间列与连续轨道",
+        "时间标记对齐正文",
+        "全页编辑减少空间争抢"
+      ],
+      "kind": "html",
+      "source": "09.html",
+      "interactive": true
+    },
+    {
+      "id": "v10",
+      "name": "命令终端",
+      "concept": "用路径、编号和文字动作维持键盘操作节奏。",
+      "typography": "等宽辅助文字 / 系统中文；正文14px、标题17px",
+      "palette": [
+        "#f8fbfd",
+        "#263748",
+        "#66dcf1"
+      ],
+      "traits": [
+        "命令提示符与编号",
+        "低图标密度、等宽辅助文字",
+        "键盘动作面板与编辑对话框"
+      ],
+      "kind": "html",
+      "source": "10.html",
+      "interactive": true
+    }
+  ]
+}

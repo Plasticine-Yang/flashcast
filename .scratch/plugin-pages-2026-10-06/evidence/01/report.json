@@ -1,0 +1,58 @@
+[
+  {
+    "file": "home-640x420.png",
+    "state": "home",
+    "size": "640x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "clipboard-640x420.png",
+    "state": "clipboard",
+    "size": "640x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "memo-640x420.png",
+    "state": "memo",
+    "size": "640x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "settings-640x420.png",
+    "state": "settings",
+    "size": "640x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "home-480x420.png",
+    "state": "home",
+    "size": "480x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "clipboard-480x420.png",
+    "state": "clipboard",
+    "size": "480x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "memo-480x420.png",
+    "state": "memo",
+    "size": "480x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "settings-480x420.png",
+    "state": "settings",
+    "size": "480x420",
+    "zoom": 1,
+    "issues": []
+  }
+]

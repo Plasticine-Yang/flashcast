@@ -1,0 +1,102 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>__TITLE__ · Flashcast</title><link rel="icon" href="assets/flashcast.svg"><style>__CSS__</style></head><body>
+<div class="app v__ID__" x-data='flashcastPrototype(__CONFIG__)' :class="{'dark':dark,'home':page==='home','with-detail':split,'editing':editing}" @keydown.window="key($event)">
+<div x-show="!ready" style="height:100%;background:#f8fbfd;padding:18px;color:#263748">
+<div style="font-size:18px;padding-bottom:15px;border-bottom:1px solid #dbe4eb">⌕ 搜索软件、插件或备忘录标签…</div>
+__FALLBACK__
+</div>
+<div x-cloak x-show="ready" class="runtime">
+<div class="breadcrumb" x-show="config.id==='02'"><button @click="page!=='home' && goBack()">Flashcast</button><span>›</span><strong x-text="pageTitle"></strong></div>
+<header class="searchbar">
+<button x-show="page!=='home'" aria-label="返回搜索" data-testid="back" :disabled="editing" @click="goBack()">‹</button>
+<span class="symbol" x-show="page==='home' || config.id!=='02'" x-text="config.id==='10'?'›':'⌕'"></span>
+<input x-ref="search" id="search" data-testid="search-input" aria-label="搜索" :placeholder="page==='home'?'搜索软件、插件或备忘录标签…':'搜索'+pageTitle+'…'" x-model="query" @input="searchChanged()" :disabled="editing||page==='settings'" autocomplete="off">
+<span class="scope-token" x-show="config.id==='10' && page!=='home'" x-text="pageTitle"></span>
+<button class="settings-button" data-testid="open-settings" aria-label="设置" :disabled="editing" @click="page==='settings'?goBack():openSettings()">⚙</button>
+</header>
+<div class="toast" x-show="feedback && !feedbackBody" role="status"><span x-text="feedback"></span><button aria-label="关闭提示" @click="feedback=''">×</button></div>
+<div class="pagebar" x-show="page!=='settings'">
+<h1><span x-text="pageTitle"></span><small x-text="rows.length+' 项'"></small></h1>
+<button x-show="canManage" class="primary new-memo" data-testid="memo-new" @click="startEdit(true)">＋ 新建</button>
+<span x-show="page==='clipboard'" class="muted" style="font-size:12px" x-text="clipboardEnabled?'正在记录':'记录已关闭'"></span>
+</div>
+<div class="home-table-head" x-show="page==='home'"><span>名称 / 用途</span><span>类型</span></div>
+<div class="main" x-show="page!=='settings'">
+<div class="list" role="listbox" aria-label="搜索结果">
+<template x-for="(item,index) in rows" :key="item.id"><div>
+<div class="group" x-show="config.id==='08' && groupStart(index)" x-text="item.group"></div>
+<button class="row" role="option" :aria-selected="selected===index" :data-row-selected="selected===index" data-testid="result-item" @click="select(index)" @dblclick="select(index);enter(item)">
+<span class="row-index" x-text="String(index+1).padStart(2,'0')"></span>
+<span class="row-time" x-text="item.time||(['刚刚','今天','常用'][index%3])"></span>
+<img class="row-image" x-show="item.kind==='image'" src="assets/screenshot.png" alt="">
+<span class="row-symbol" x-show="item.kind!=='image'" x-text="item.symbol"></span>
+<span class="row-copy"><span class="row-title" x-text="item.title"></span><span class="row-subtitle" style="display:block" x-text="item.subtitle"></span></span>
+<span class="row-type" x-show="page==='home'" x-text="item.kind==='app'?'软件':item.kind==='memo-entry'?'备忘录':'插件'"></span>
+</button></div></template>
+<div class="empty" x-show="!rows.length"><strong>没有匹配结果</strong><span>换一个关键词，或清空搜索。</span></div>
+</div>
+<article class="preview" data-testid="detail-preview">
+<div x-show="current && !(editor && config.editor==='inline')" class="preview-content">
+<div class="preview-heading"><h2 x-text="current?.title"></h2><button class="ghost" x-show="canManage && config.id!=='03' && config.id!=='07'" data-testid="memo-edit" @click="startEdit()">编辑</button></div>
+<p class="meta" x-text="page==='memo'?(current?.tags||[]).map(t=>'#'+t).join('  '):page==='bookmark'?current?.group:page==='clipboard'?((current?.time||'')+' · '+(current?.source||'')):current?.subtitle"></p>
+<pre class="body" data-testid="text-preview" x-show="(page!=='home'||current?.kind==='memo-entry') && current?.kind!=='image'" x-text="current?.body"></pre>
+<img class="preview-image" data-testid="image-preview" x-show="current?.kind==='image'" src="assets/screenshot.png" :alt="current?.title||''">
+<div class="object-actions">
+<button class="primary" data-testid="default-action" @click="enter()" x-text="actionLabel+' ↵'"></button>
+<button class="ghost delete danger" x-show="canManage" data-testid="memo-delete" @click="deleteMemo()" x-text="confirmId===current?.id?'确认删除':'删除'"></button>
+<button class="ghost" x-show="confirmId" @click="confirmId=null">取消</button>
+</div>
+</div>
+<div class="empty" x-show="!current"><strong>选中内容后在这里预览</strong><span>支持完整文字与图片。</span></div>
+<div x-show="editor && config.editor==='inline'" class="editor-slot">__INLINE_EDITOR__</div>
+</article>
+<div class="action-rail" x-show="page!=='home'">
+<button @click="enter()">↵<br><span x-text="actionLabel"></span></button>
+<button x-show="canManage" data-testid="rail-new" @click="startEdit(true)">＋<br>新建</button>
+<button x-show="canManage" data-testid="rail-edit" @click="startEdit()">✎<br>编辑</button>
+<button x-show="canManage" class="danger" data-testid="rail-delete" @click="deleteMemo()" x-text="confirmId?'确认':'删除'"></button>
+<button @click="openSettings()">⚙<br>配置</button>
+</div>
+</div>
+<div class="settings-layout" x-show="page==='settings'">
+<nav class="settings-nav" aria-label="插件配置">
+<small>常用</small><button @click="dark=!dark">外观 <span x-text="dark?'☾':'☀'"></span></button>
+<small>插件配置</small>
+<button :class="{selected:commandPlugin==='memo'}" @click="commandPlugin='memo';shortcutChanged()">备忘录</button>
+<button :class="{selected:commandPlugin==='bookmark'}" @click="commandPlugin='bookmark';shortcutChanged()">Chrome 书签</button>
+<button :class="{selected:commandPlugin==='clipboard'}" data-testid="settings-clipboard" @click="commandPlugin='clipboard';shortcutChanged()">剪切板</button>
+</nav>
+<div class="settings-body">
+<h1 x-text="plugins.find(p=>p.id===commandPlugin)?.title"></h1>
+<p>调整插件偏好与直接进入页面的快捷键。</p>
+<div class="setting-line" x-show="commandPlugin==='clipboard'"><span>记录剪切板</span><input type="checkbox" aria-label="记录剪切板" x-model="clipboardEnabled"></div>
+<div class="setting-line" x-show="commandPlugin==='clipboard'"><span>保留期限（天）</span><input type="number" min="1" max="3650" aria-label="保留期限" x-model.number="retention"></div>
+<div class="setting-line" x-show="commandPlugin==='clipboard'"><span>容量（项）</span><input type="number" min="1" max="100000" aria-label="容量" x-model.number="capacity"></div>
+<div class="setting-line"><span>深色外观</span><input type="checkbox" aria-label="深色外观" x-model="dark"></div>
+<h2>打开插件页面</h2>
+<div class="setting-line" style="padding-top:0"><span>平台</span><select aria-label="快捷键平台" x-model="os" @change="shortcutChanged()"><option value="linux">Linux</option><option value="windows">Windows</option><option value="mac">macOS</option></select></div>
+<div class="shortcut-row" style="margin-top:10px"><input id="hotkey" data-testid="shortcut-input" x-model="hotkeyDraft" aria-label="插件快捷键" placeholder="未设置"><button class="primary" data-testid="shortcut-save" @click="saveShortcut()">保存</button><button class="ghost" data-testid="shortcut-reset" @click="resetShortcut()">恢复默认</button></div>
+<div class="shortcut-error" role="alert" x-show="shortcutError" x-text="shortcutError"></div>
+<p style="margin-top:10px">留空可关闭该命令的快捷键。</p>
+</div>
+</div>
+<footer>
+<span class="brand"><img src="assets/flashcast.svg" alt="">FLASHCAST</span>
+<span class="keys optional" x-show="!editor && page!=='settings'"><kbd>↑</kbd><kbd>↓</kbd>选择</span>
+<span class="keys"><kbd x-text="editor?'Ctrl ↵':'Enter'"></kbd><span x-text="editor?'保存':page==='settings'?'':' '+actionLabel"></span></span>
+<span class="keys"><kbd>Esc</kbd><span x-text="editor?'取消':'返回'"></span></span>
+<button class="actions-toggle keys" x-show="config.id==='03'||config.id==='10'" @click="actionMenu=!actionMenu">动作 <kbd>⌃ K</kbd></button>
+</footer>
+<div class="action-popover" x-show="actionMenu && !editor">
+<button @click="enter()"><span x-text="actionLabel"></span><kbd>↵</kbd></button>
+<button x-show="canManage" data-testid="menu-new" @click="startEdit(true)">新建备忘录<kbd>⌃ N</kbd></button>
+<button x-show="canManage" data-testid="menu-edit" @click="startEdit()">编辑备忘录<kbd>⌃ E</kbd></button>
+<button x-show="canManage" class="danger" @click="deleteMemo();if(!confirmId)actionMenu=false" x-text="confirmId===current?.id?'确认删除备忘录':'删除备忘录'">删除备忘录</button>
+<button @click="openSettings();actionMenu=false">插件配置<kbd>⌃ ,</kbd></button>
+</div>
+<div class="modal-backdrop" x-show="editor && config.editor==='modal'"> <div class="modal-editor">__OVERLAY_EDITOR__</div></div>
+<div class="drawer-editor" x-show="editor && config.editor==='drawer'">__DRAWER_EDITOR__</div>
+<div class="full-editor" x-show="editor && config.editor==='full'">__FULL_EDITOR__</div>
+<div class="action-output" x-show="feedbackBody" role="dialog" aria-label="操作内容"><h2 x-text="feedback"></h2><pre x-text="feedbackBody"></pre><button class="primary" @click="feedback='';feedbackBody='';$refs.search.focus()">返回</button></div>
+</div>
+</div>
+<script>__APP_SCRIPT__</script><script>__ALPINE__</script></body></html>

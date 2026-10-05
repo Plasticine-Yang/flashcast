@@ -86,7 +86,7 @@ export function ClipboardPanel({
   if (!clipboard) {
     return (
       <section className="settings-section" data-testid="clipboard-section">
-        <h2 className="settings-section-title">剪贴板历史</h2>
+        <h2 className="settings-section-title">剪切板</h2>
         <p className="settings-hint" data-testid="clipboard-loading">
           正在读取剪贴板历史状态…
         </p>
@@ -96,7 +96,7 @@ export function ClipboardPanel({
 
   return (
     <section className="settings-section" data-testid="clipboard-section">
-      <header className="panel-heading"><h2 className="settings-section-title">剪贴板历史</h2><span>{clipboard.entries} 条记录</span></header>
+      <header className="panel-heading"><h2 className="settings-section-title">剪切板</h2><span>{clipboard.entries} 条记录</span></header>
 
       <div className="capture-status" data-testid="clipboard-state-summary" data-active={clipboard.enabled && !clipboard.paused && clipboard.captureActive}>
         <span className="status-dot" />
@@ -193,7 +193,7 @@ export function ClipboardPanel({
       </details>
 
       {clipboard.items.length === 0 ? (
-        <div className="content-empty" data-testid="clipboard-empty"><strong>复制过的内容，在这里找回</strong><p>{clipboard.enabled ? "复制一段文字后，返回查看历史。" : "在功能插件中启用剪贴板历史，开始记录。"}</p></div>
+        <div className="content-empty" data-testid="clipboard-empty"><strong>复制过的内容，在这里找回</strong><p>{clipboard.enabled ? "复制一段文字后，返回查看历史。" : "在功能插件中启用剪切板，开始记录。"}</p></div>
       ) : (
         <ul className="theme-list clipboard-history-list" data-testid="clipboard-list">
           {clipboard.items.map((entry) => (

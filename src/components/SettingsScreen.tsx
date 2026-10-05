@@ -269,7 +269,7 @@ export const SETTINGS_GROUPS: {
     label: "数据与内容",
     sections: [
       { id: "plugins", title: "功能插件" },
-      { id: "clipboard", title: "剪贴板历史" },
+      { id: "clipboard", title: "剪切板" },
       { id: "memos", title: "备忘录" },
       { id: "chrome", title: "Chrome 书签" },
     ],
