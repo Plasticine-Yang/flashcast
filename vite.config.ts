@@ -13,9 +13,8 @@ export default defineConfig(() => ({
     strictPort: true,
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
-    // `artifacts/` 是 ui-check 的产物目录（每次运行写入约 80 张截图）。它必须排除在监视
-    // 之外：否则每张新截图都要占一个 watcher，跑几次就能把用户级的 inotify 额度耗尽，
-    // 让开发服务器以 ENOSPC 崩掉。
-    watch: { ignored: ["**/src-tauri/**", "**/artifacts/**"] },
+    // Rust workspace 的编译产物在根目录 `target/`，不在 `src-tauri/` 内。
+    // 将它和 ui-check 的 `artifacts/` 排除，避免大量产物耗尽 inotify 额度而报 ENOSPC。
+    watch: { ignored: ["**/src-tauri/**", "**/target/**", "**/artifacts/**"] },
   },
 }));
