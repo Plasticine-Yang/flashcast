@@ -16,7 +16,7 @@
 
 推荐 02：字母 F 与前进方向相关，便于建立产品识别。推荐 08：连续折带在小尺寸与单色下轮廓简洁。01 最直观地继承闪电意象。03 的内部分片、10 的联字在 16px 下细节更紧，应按使用场景取舍。
 
-icons/style-explorer.html 提供并排、单张、深浅背景及 16/24/32/48px 比较；当前图标作为额外基线，不计入十版。icons/board.svg 和 evidence/icons-board/page.png 是总览。尚未选择正式方向，应用与托盘资源保留当前图标。
+icons/style-explorer.html 提供并排、单张、深浅背景及 16/24/32/48px 比较；当前图标作为额外基线，不计入十版。icons/board.svg 和 evidence/icons-board/page.png 是总览。用户已选定 01「切光」。scripts/dev/generate-icons.py 生成对应 PNG/ICO/ICNS 和 SVG；浏览器与底部品牌标记同步采用该形状，托盘继承默认应用图标。
 
 ## 独立视觉评审
 
@@ -24,10 +24,18 @@ icons/style-explorer.html 提供并排、单张、深浅背景及 16/24/32/48px 
 
 已分别修正：编辑时收起重复工具栏并调整表单布局；切换操作栏提示并隔离全局按键；历史操作窄屏独立成行。主 Agent 查看了修正后的 480×420、640×420 与 200% 证据。没有追加独立评分，不将自检写成提分。
 
-剩余视觉取舍：短正文留下较大阅读留白；图标需要用户选择后再制作正式资源。
+剩余视觉取舍：短正文留下较大阅读留白；正式图标已按 01「切光」生成，已安装程序需后续打包更新才采用新资源。
 
 ## 证据
 
 任务目录 evidence/ 下：plugins/、plugins-dark-fixed/、clipboard/、memos-linked/、memo-editor-fixed/、memo-editor-final-zoom/、memo-long-final/ 为当前关键状态。baseline-* 保留修改前基线。plugins-dark/ 是误选浅色的旧证据，深色验收使用 plugins-dark-fixed/。
 
 plugin-motion/ 与 memo-motion/ 保留操作录制帧及开始、中间、结束图；环境未安装 ffmpeg，没有 MP4。检查了代表性帧，未测量帧率。按钮反馈沿用现有节奏，新开关、选中底色、编辑面板使用短过渡；CSS 遵守减少动态效果媒体查询，未操作系统级偏好进行验证。
+
+## 交互页面交付补充（2026-10-06）
+
+ui-preview.html 提供统一页面入口，嵌入正在运行的开发应用。直接入口是 http://localhost:1420/?preview=plugins、?preview=clipboard、?preview=memos 和 ?preview=chrome。预览使用内存 MockHost，刷新/切页重置数据；不会初始化磁盘目录，不操作本机剪贴板。Tauri 运行时忽略 preview 参数，正常浏览器入口也保持原行为。
+
+已实际操作入口切换、插件开关、剪贴板启用、新建备忘录及标签查询；浏览器预览持续打开。图标文件逐一解码并核对尺寸、ICO 七个尺寸、ICNS 载荷。正式 SVG 与已选择的 01 矢量稿相同。类型检查及 diff 检查通过。新增界面入口属于交付补齐，没有重新设计或重新独立评分。
+
+证据：evidence/ui-preview/page.png、evidence/direct-memo-preview/page.png。预览页面截图无控制台错误、横向溢出或图片加载失败。

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, isBrowserMock } from "./api";
+import { api, browserPreview, isBrowserMock } from "./api";
 import type {
   ActionOutcome,
   Appearance,
@@ -77,7 +77,7 @@ const EMPTY_RESPONSE: QueryView = {
 type Screen = "search" | "settings";
 
 export default function App() {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(browserPreview === "memos" ? "备忘录" : "");
   const [response, setResponse] = useState<QueryView>(EMPTY_RESPONSE);
   const [feedback, setFeedback] = useState<ActionOutcome | null>(null);
   const [status, setStatus] = useState<StatusView | null>(null);
@@ -90,7 +90,7 @@ export default function App() {
   const [menuOpen] = useState(false);
 
   // 设置页状态。
-  const [screen, setScreen] = useState<Screen>("search");
+  const [screen, setScreen] = useState<Screen>(browserPreview && browserPreview !== "memos" ? "settings" : "search");
   const [workspace, setWorkspace] = useState<WorkspaceStatus | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [theme, setTheme] = useState<ThemeState | null>(null);
@@ -98,7 +98,7 @@ export default function App() {
   const [settingsMessage, setSettingsMessage] = useState<SettingsMessage | null>(null);
   /** 当前显示的设置区块。放在 App 里，所以在会话内切走再回来会回到同一区块
    * （SettingsScreen 每次进设置页都会重新挂载，放它内部就记不住）。 */
-  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>("hotkey");
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>(browserPreview && browserPreview !== "memos" ? browserPreview : "hotkey");
   const [workspaceAlert, setWorkspaceAlert] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
@@ -136,7 +136,12 @@ export default function App() {
   useEffect(() => {
     // 首屏必须是一次空查询：宿主的 snapshot() 只回放当前状态，在还没有查询过时
     // 它是空的，只有 query("") 才会给出快速访问项。
-    void api.query("").then(apply);
+    void api.query(browserPreview === "memos" ? "备忘录" : "").then(apply);
+    if (browserPreview) {
+      void loadMemos();
+      void loadClipboard();
+      void loadChrome();
+    }
     void api.get_status().then(next => { setStatus(next); setPlugins(next.plugins); });
     // 设置页的运行环境与能力报告直接来自平台层的 CapabilityProbe（`get_capabilities`）。
     void api.get_capabilities().then(setCapabilities);

@@ -11,7 +11,6 @@ Tauri 的 `generate_context!` 会解码 `tauri.conf.json` 中 `bundle.icon` 列�
 
 from __future__ import annotations
 
-import io
 import pathlib
 
 from PIL import Image, ImageDraw
@@ -19,38 +18,30 @@ from PIL import Image, ImageDraw
 # 输出目录：仓库根下的 src-tauri/icons。
 ICONS_DIR = pathlib.Path(__file__).resolve().parents[2] / "src-tauri" / "icons"
 
-# 主图标按 4 倍超采样后缩放，得到干净的边缘。
+# 使用 1024px 母版超采样，再导出各尺寸。
 MASTER = 1024
 
-BACKGROUND = (24, 27, 36, 255)
-BORDER = (47, 54, 70, 255)
-BOLT = (255, 201, 75, 255)
+BACKGROUND = (23, 39, 52, 255)
+BOLT = (102, 220, 241, 255)
+SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><rect x="6" y="6" width="116" height="116" rx="27" fill="#172734"/><path d="M77 25 42 59h23Z M88 65H66l-11 38Z" fill="#66dcf1"/></svg>'
 
 
 def render_master() -> Image.Image:
-    """画一个圆角方块 + 闪电符号。"""
+    """按已选定的 01「切光」矢量坐标画深墨底与两段电光。"""
     img = Image.new("RGBA", (MASTER, MASTER), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    inset = MASTER * 0.06
-    radius = MASTER * 0.22
+    scale = MASTER / 128
+    inset = 6 * scale
+    radius = 27 * scale
     draw.rounded_rectangle(
         (inset, inset, MASTER - inset, MASTER - inset),
         radius=radius,
         fill=BACKGROUND,
-        outline=BORDER,
-        width=max(1, int(MASTER * 0.012)),
     )
 
-    bolt = [
-        (0.60, 0.07),
-        (0.26, 0.56),
-        (0.47, 0.56),
-        (0.38, 0.93),
-        (0.74, 0.44),
-        (0.53, 0.44),
-    ]
-    draw.polygon([(x * MASTER, y * MASTER) for x, y in bolt], fill=BOLT)
+    for triangle in [[(77, 25), (42, 59), (65, 59)], [(88, 65), (66, 65), (55, 103)]]:
+        draw.polygon([(x * scale, y * scale) for x, y in triangle], fill=BOLT)
     return img
 
 
@@ -61,6 +52,8 @@ def scaled(master: Image.Image, size: int) -> Image.Image:
 def main() -> None:
     ICONS_DIR.mkdir(parents=True, exist_ok=True)
     master = render_master()
+    (ICONS_DIR / "icon.svg").write_text(SVG + "\n")
+    (ICONS_DIR.parents[1] / "public" / "flashcast.svg").write_text(SVG + "\n")
 
     png_sizes = {
         "32x32.png": 32,

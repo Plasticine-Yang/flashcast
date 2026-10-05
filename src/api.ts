@@ -46,6 +46,16 @@ import { MOCK_INSTALLED_THEME, MOCK_THEMES, buildMockThemeState } from "./mockTh
 const inTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in (window as object);
 
+/** 浏览器设计预览直达入口；真实 Tauri 宿主不读取这些参数。 */
+export const browserPreview = (() => {
+  if (inTauri || typeof window === "undefined") return null;
+  const name = new URLSearchParams(window.location.search).get("preview");
+  switch (name) {
+    case "plugins": case "clipboard": case "memos": case "chrome": return name;
+    default: return null;
+  }
+})();
+
 type Handler = (payload: unknown) => void;
 
 export interface HostApi {
@@ -711,6 +721,10 @@ const MOCK_CHANGES: ChangedFile[] = [
 ];
 
 class MockHost implements HostApi {
+  constructor() {
+    // 只关联替身的内存工作区，让预览可直接操作；不创建磁盘目录。
+    if (browserPreview) this.link(MOCK_REPO);
+  }
   readonly kind = "browser" as const;
   private seq = 0;
   private input = "";
