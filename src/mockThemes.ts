@@ -119,9 +119,12 @@ export const ARC_STYLES: SurfaceStyle[] = [
     light: { fillOpacity: .86, blur: 10, saturation: 1.5, rim: 2.5 },
     dark: { fillOpacity: .80, blur: 10, saturation: 1.5, rim: 2.5 } }, SOLID_STYLE
 ];
-const arcLight = { ...LIGHT_VARS, "--fc-page-bg": "#f2f5f8", "--fc-surface": "#e8edf3",
-  "--fc-text": "#202c3b", "--fc-text-muted": "#536479", "--fc-text-disabled": "#657489",
-  "--fc-accent": "#265b9d", "--fc-selection-bg": "rgba(38,91,157,0.13)",
+const arcLight = { ...LIGHT_VARS, "--fc-page-bg": "#f2f7fc", "--fc-surface": "#e7eef5",
+  "--fc-text": "#202d3e", "--fc-text-muted": "#536479", "--fc-text-disabled": "#657489",
+  "--fc-accent": "#265b9d", "--fc-selection-bg": "rgba(89,142,207,0.115)",
+  "--fc-hover-bg": "rgba(64,96,137,0.06)", "--fc-info-bg": "rgba(64,96,137,0.06)",
+  "--fc-icon-fallback-bg": "rgba(64,96,137,0.06)", "--fc-border": "rgba(53,79,114,0.14)",
+  "--fc-shadow": "0 24px 65px rgba(33,63,99,0.15), 0 3px 12px rgba(33,63,99,0.08), inset 0 1px 0 rgba(250,254,255,0.92)",
   "--fc-selection-border": "rgba(38,91,157,0.5)", "--fc-focus-ring": "#265b9d",
   "--fc-radius-window": "16px", "--fc-radius-item": "7px", "--fc-radius-control": "7px" };
 const arcDark = { ...DARK_VARS, "--fc-page-bg": "#19212b", "--fc-surface": "#222c39",

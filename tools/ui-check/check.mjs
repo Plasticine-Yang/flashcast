@@ -114,7 +114,7 @@ const MOCK_THEME_PACKAGE = "/home/user/themes/solarized";
 const MOCK_BROKEN_THEME_PACKAGE = "/home/user/themes/broken";
 
 // 内置主题在浏览器模拟宿主里的表面色（见 src/mockThemes.ts）。
-const SURFACE_LIGHT = "#e8edf3";
+const SURFACE_LIGHT = "#e7eef5";
 const SURFACE_DARK = "#222c39";
 const SURFACE_SOLARIZED = "#002b36";
 
@@ -226,6 +226,11 @@ async function shot(page, name, force = false) {
   if (!force && process.env.FLASHCAST_UI_SCREENSHOTS !== "all" &&
       !["01-home-empty-query.png", "14-theme-light.png", "16-theme-dark.png", "27-scaling-200.png"].includes(name)) return "未截图";
   const path = resolve(ARTIFACTS, name);
+  // 唤起动画结束后再取色，避免把半透明过渡帧当成稳定外观。
+  await page.evaluate(async () => {
+    const finite = document.getAnimations().filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity);
+    await Promise.all(finite.map(animation => animation.finished.catch(() => {})));
+  });
   await page.screenshot({ path });
   return name;
 }

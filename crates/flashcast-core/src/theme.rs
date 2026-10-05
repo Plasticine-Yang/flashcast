@@ -1500,14 +1500,19 @@ pub fn dark_tokens() -> ThemeTokens {
 pub fn arc_theme() -> ThemeDocument {
     let mut light = light_tokens();
     let mut dark = dark_tokens();
-    light.color.page_background = "#f2f5f8".into();
-    light.color.surface = "#e8edf3".into();
-    light.color.text = "#202c3b".into();
+    light.color.page_background = "#f2f7fc".into();
+    light.color.surface = "#e7eef5".into();
+    light.color.text = "#202d3e".into();
     light.color.text_muted = "#536479".into();
     light.color.text_disabled = "#657489".into();
     light.state.disabled.text = light.color.text_disabled.clone();
     light.color.accent = "#265b9d".into();
-    light.state.selected.background = "rgba(38,91,157,0.13)".into();
+    light.color.hover = "rgba(64,96,137,0.06)".into();
+    light.color.info_background = "rgba(64,96,137,0.06)".into();
+    light.color.icon_fallback_background = "rgba(64,96,137,0.06)".into();
+    light.color.border = "rgba(53,79,114,0.14)".into();
+    light.shadow.window = "0 24px 65px rgba(33,63,99,0.15), 0 3px 12px rgba(33,63,99,0.08), inset 0 1px 0 rgba(250,254,255,0.92)".into();
+    light.state.selected.background = "rgba(89,142,207,0.115)".into();
     light.state.selected.border = "rgba(38,91,157,0.5)".into();
     light.state.focus.ring = "#265b9d".into();
     dark.color.page_background = "#19212b".into();

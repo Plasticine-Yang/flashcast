@@ -46,7 +46,7 @@ pub fn apply(app: &tauri::AppHandle, renderer: SurfaceRenderer) -> MaterialStatu
         MaterialStatus {
             supported: renderer == SurfaceRenderer::Solid,
             reason: (renderer != SurfaceRenderer::Solid)
-                .then(|| "当前平台使用实底；所选透明风格会在支持的设备上恢复".into()),
+                .then(|| "Linux 版暂未提供桌面玻璃效果，当前使用实底；保留所选风格".into()),
         }
     }
 }
