@@ -46,6 +46,11 @@ export async function hotkeyConflictChecks({ page, check, url, linkMockWorkspace
     await page.evaluate(() => { window.__flashcastMock.hotkeyConflictScenario = 'conflict'; });
     await click('解除冲突'); await dialog().getByRole('button', { name: '解除占用并绑定' }).click();
     await page.waitForSelector('.hotkey-success');
+    await open('partial-failure'); await click('解除冲突');
+    await dialog().getByRole('button', { name: '解除占用并绑定' }).click();
+    await page.waitForSelector('.hotkey-manual');
+    assert(await panel().locator('.hotkey-success').count() === 0, '部分修改或恢复失败时不能同时显示成功');
+    assert((await panel().textContent()).includes('恢复未完成'), '必须明确提示恢复未完成');
   });
   await check("系统只读或不可检测时只提供手动处理", async () => {
     for (const scenario of ['readonly', 'unknown']) {
@@ -60,10 +65,12 @@ export async function hotkeyConflictChecks({ page, check, url, linkMockWorkspace
     await page.waitForSelector('.hotkey-success');
     assert((await page.getByTestId("hotkey-status").textContent()).includes('Alt+Space'), '必须显示系统实际绑定');
   });
-  await check("保留系统菜单→替代快捷键写入配置", async () => {
-    await open('conflict'); await click('改用 Ctrl+Alt+Space');
+  await check("保留系统菜单→只选择系统已绑定的替代快捷键", async () => {
+    await open('conflict'); await click('使用当前 Ctrl+Alt+Space');
     await page.waitForFunction(() => document.querySelector('[data-testid="hotkey-input"]')?.value === 'Ctrl+Alt+Space');
     assert(await panel().count() === 0, '换用其他快捷键后不应继续显示 Alt+Space 冲突');
+    await open('bound-alt');
+    assert(await panel().getByRole('button', {name:'使用当前 Ctrl+Alt+Space',exact:true}).count() === 0, '系统未绑定备用按键时不得声称可以一键使用');
   });
   await page.goto(url);
 }

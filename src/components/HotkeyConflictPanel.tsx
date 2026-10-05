@@ -20,6 +20,7 @@ export function HotkeyConflictPanel({ desired, hotkey, active, busy, onBusyChang
   const [manual, setManual] = useState(false);
   const [message, setMessage] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [verified, setVerified] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -33,6 +34,7 @@ export function HotkeyConflictPanel({ desired, hotkey, active, busy, onBusyChang
   useEffect(() => {
     setConfirmed(false);
     setCompleted(false);
+    setFailed(false);
     setVerified(false);
     setMessage("");
     setManual(false);
@@ -67,6 +69,7 @@ export function HotkeyConflictPanel({ desired, hotkey, active, busy, onBusyChang
     operation.current = true;
     setWorking(true);
     onBusyChange(true);
+    setFailed(false);
     setMessage("");
     const id = ++request.current;
     try {
@@ -79,6 +82,7 @@ export function HotkeyConflictPanel({ desired, hotkey, active, busy, onBusyChang
       if (action === "undo") setMessage("已恢复修改前的系统快捷键。");
     } catch (error) {
       if (!mounted.current || id !== request.current) return;
+      setFailed(true);
       setMessage(String(error));
       setManual(true);
       setCompleted(false);
@@ -102,7 +106,7 @@ export function HotkeyConflictPanel({ desired, hotkey, active, busy, onBusyChang
         <p>{report.status === "conflict" ? "按下它会打开窗口菜单。解除占用后，再用它唤起 Flashcast。" : report.status === "mismatch" ? "系统仍使用其他按键打开 Flashcast，可以重新绑定为 Alt+Space。" : "请在系统设置中检查 Alt+Space 是否被占用。"}</p>
         {report.message && <p>{report.message}</p>}
         <div className="hotkey-actions">{report.canResolve && <button className="primary-button" disabled={disabled} onClick={() => setConfirmed(true)}>{report.status === "mismatch" ? "重新绑定" : "解除冲突"}</button>}<button className="ghost-button" disabled={disabled} onClick={() => { setManual(true); requestAnimationFrame(() => guide.current?.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" })); }} aria-expanded={showManual}>查看手动步骤</button></div>
-      </section> : (completed || report.canUndo) && <section className="hotkey-notice hotkey-success" role="status">
+      </section> : (completed || report.canUndo) && !failed && <section className="hotkey-notice hotkey-success" role="status">
         <strong>{verified ? "快捷键可以正常唤起" : "系统设置已更新"}</strong>
         <p>{hotkey?.pending ? "正在核验 Flashcast 的系统绑定…" : hotkey?.error ? "系统设置已保存，但快捷键注册未完成。请查看上方原因并重新检测。" : verified ? "随时按 Alt+Space 打开 Flashcast。" : "请按一次 Alt+Space，确认 Flashcast 能打开并输入。"}</p>
         {!verified && hotkey?.registered && !hotkey.pending && !hotkey.error && <button className="ghost-button" onClick={() => setVerified(true)}>已确认可以唤起</button>}
@@ -121,7 +125,7 @@ export function HotkeyConflictPanel({ desired, hotkey, active, busy, onBusyChang
     <div className="hotkey-actions hotkey-secondary-actions">
       <button className="ghost-button" disabled={disabled} onClick={() => void perform("check")}>重新检测</button>
       {report.canUndo && <button className="ghost-button" disabled={disabled} onClick={() => void perform("undo")}>撤销系统修改</button>}
-      {needsHelp && <button className="ghost-button" disabled={disabled} onClick={() => onSaveHotkey("Ctrl+Alt+Space")}>改用 Ctrl+Alt+Space</button>}
+      {needsHelp && report.effective === "Ctrl+Alt+Space" && <button className="ghost-button" disabled={disabled} onClick={() => onSaveHotkey("Ctrl+Alt+Space")}>使用当前 Ctrl+Alt+Space</button>}
     </div>
     <dialog ref={dialog} className="hotkey-confirm" onCancel={event => { event.preventDefault(); setConfirmed(false); }} aria-labelledby="hotkey-confirm-title">
       <Glyph name="hotkey"/>

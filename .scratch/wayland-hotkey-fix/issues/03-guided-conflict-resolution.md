@@ -15,7 +15,7 @@ Category: enhancement
 - 设置页显示目标按键与当前绑定，确认弹窗说明两项系统修改。只移除窗口菜单的 Alt+Space/Mod1+Space，其他组合及 Flashcast 其他操作保留。
 - 修改前在本机数据目录保存撤销记录；备份失败不改系统。通过 GNOME RebindShortcuts 应用绑定，不依赖门户 preferred_trigger。
 - 系统拒绝修改时尝试恢复旧值，并将恢复结果显示给用户。撤销记录跨重启保留；系统之后被再次修改时拒绝覆盖。
-- 无授权、缺少 schema、缺少重新绑定接口、设置只读或检测未知时提供手动步骤；可改用 Ctrl+Alt+Space。
+- 无授权、缺少 schema、缺少重新绑定接口、设置只读或检测未知时提供手动步骤；系统已有 Ctrl+Alt+Space 绑定时，可一键使用当前绑定；否则按系统设置指引修改。
 - 操作在工作线程执行，界面显示处理中；确认弹窗支持 Escape、焦点返回和取消；减少动效偏好停用动画。
 - 系统更新后重新注册以获取门户绑定说明。设置保存或注册成功不等于物理按键唤起通过，界面请用户实际确认。
 
@@ -35,3 +35,5 @@ GNOME 系统设置使用的原生接口：
 - https://raw.githubusercontent.com/GNOME/gnome-control-center/main/panels/applications/cc-application-shortcut-dialog.c
 
 自动处理限于具备上述 schema、可写设置和 GNOME 接口的 Wayland 会话；其他环境保持原有注册流程。仅处理已保存的 Alt+Space，编辑草稿需先保存。手动系统菜单的名称因 GNOME 版本而异。
+
+发布前复查：备用按键入口只在系统实际绑定恰为 Ctrl+Alt+Space 时出现，按钮表述为「使用当前 Ctrl+Alt+Space」，避免把门户首选按键当作实际重绑定。浏览器检查同时验证其他实际绑定时不提供此入口，以及部分修改/恢复失败时不能同时显示成功；80 项重新通过。

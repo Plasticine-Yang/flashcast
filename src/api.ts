@@ -1901,14 +1901,15 @@ class MockHost implements HostApi {
   }
 
   // 仅用于浏览器交互检查；真实应用始终调用原生平台适配层。
-  hotkeyConflictScenario: "none" | "conflict" | "failure" | "unknown" | "readonly" | "mismatch" = "none";
+  hotkeyConflictScenario: "none" | "conflict" | "failure" | "unknown" | "readonly" | "mismatch" | "bound-alt" | "partial-failure" = "none";
   private hotkeyConflictFixed = false;
   async get_hotkey_conflict(): Promise<import("./types").HotkeyConflictReport> {
     const scenario = this.hotkeyConflictScenario;
     if (scenario === "none" || this.settings.hotkey !== "Alt+Space") return { status: "not-applicable", canResolve: false, canUndo: false, effective: null, message: null };
-    return { status: this.hotkeyConflictFixed ? "clear" : scenario === "unknown" ? "unknown" : scenario === "mismatch" ? "mismatch" : "conflict", canResolve: !["unknown", "readonly"].includes(scenario), canUndo: this.hotkeyConflictFixed, effective: this.hotkeyConflictFixed ? "Alt+Space" : "Ctrl+Alt+Space", message: ["unknown", "readonly"].includes(scenario) ? "当前系统无法自动修改，请手动处理。" : null };
+    return { status: this.hotkeyConflictFixed ? "clear" : scenario === "unknown" ? "unknown" : scenario === "mismatch" ? "mismatch" : "conflict", canResolve: !["unknown", "readonly"].includes(scenario), canUndo: this.hotkeyConflictFixed, effective: this.hotkeyConflictFixed || scenario === "bound-alt" ? "Alt+Space" : "Ctrl+Alt+Space", message: ["unknown", "readonly"].includes(scenario) ? "当前系统无法自动修改，请手动处理。" : null };
   }
   async resolve_hotkey_conflict(undo: boolean): Promise<import("./types").HotkeyConflictReport> {
+    if (this.hotkeyConflictScenario === "partial-failure") { this.hotkeyConflictFixed = true; throw "自动处理失败，恢复未完成，请检查系统设置。"; }
     if (this.hotkeyConflictScenario === "failure") throw "系统未接受新的绑定，已恢复原来的系统设置。";
     if (["unknown", "readonly", "none"].includes(this.hotkeyConflictScenario)) throw "当前系统不支持自动修改。";
     this.hotkeyConflictFixed = !undo;
