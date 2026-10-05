@@ -15,3 +15,5 @@ Category: enhancement
 ## 完成记录
 
 实现与验证已完成，见 ../verification.md、docs/plugins 与 docs/release/v0.3.0.md；提交随实现一起。
+
+发布前补修：范围按钮切换后回到搜索框，点击范围→方向键→回车已观察到宿主执行反馈。

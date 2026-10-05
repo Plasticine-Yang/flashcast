@@ -1117,10 +1117,10 @@ export default function App() {
           />
 
           <div className="scope-strip" aria-label="查询范围">
-            <button type="button" aria-pressed={response.scope.kind === "home"} onClick={() => void runQuery("")}>快速访问</button>
+            <button type="button" aria-pressed={response.scope.kind === "home"} onClick={() => { void runQuery(""); focusInput(); }}>快速访问</button>
             {(status?.plugins ?? plugins).filter(plugin => plugin.enabled).map(plugin => <button key={plugin.id} type="button"
               aria-pressed={response.scope.kind === "plugin" && response.scope.id === plugin.id}
-              onClick={() => void runQuery(plugin.keywords[0] ?? plugin.name)}>{plugin.name}</button>)}
+              onClick={() => { void runQuery(plugin.keywords[0] ?? plugin.name); focusInput(); }}>{plugin.name}</button>)}
           </div>
           <div className="search-body" data-has-preview={selected && ["memo", "bookmark", "clipboardEntry"].includes(selected.kind) ? "true" : "false"}>
             <ResultList
