@@ -1,0 +1,255 @@
+/* Flashcast / Graphite — CSS optical study, inspired by Liquid Glass.
+   One outer glass shell; content rows deliberately remain planar. */
+
+body[data-material='liquid'] .window {
+  --bg: #20211f;
+  --surface: rgba(233, 240, 214, .065);
+  --text: #f3f4ef;
+  --muted: #adb0a7;
+  --line: rgba(234, 239, 222, .13);
+  --accent: #e1ec9c;
+  --accent-ink: #242710;
+  --selected: rgba(218, 230, 150, .115);
+  --glass-fill: rgba(22, 26, 25, .49);
+  --glass-border: rgba(249, 255, 235, .34);
+  --glass-shadow: 0 30px 75px rgba(5, 10, 9, .28), 0 9px 24px rgba(5, 10, 9, .15);
+  --content-rgb: 20, 24, 23;
+  --content-opacity: .44;
+  --chrome-opacity: .18;
+  --rim-opacity: .42;
+  --edge-light: rgba(255, 255, 244, .72);
+  --edge-low: rgba(249, 255, 235, .10);
+  --glint: rgba(242, 255, 211, .16);
+  --flash-color: var(--accent);
+  color: var(--text);
+  background: linear-gradient(145deg, var(--glint), transparent 31%, transparent 78%, rgba(255,255,255,.035)), var(--glass-fill);
+  border-color: var(--glass-border);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--edge-light), inset 1px 0 0 var(--edge-low), inset 0 -1px 0 rgba(0, 0, 0, .15);
+  backdrop-filter: blur(10px) saturate(150%);
+  -webkit-backdrop-filter: blur(10px) saturate(150%);
+  isolation: isolate;
+}
+
+body[data-material='liquid'][data-palette='volt'][data-appearance='dark'] .window {
+  --bg: #20211f;
+  --surface: rgba(233, 240, 214, .065);
+  --text: #f3f4ef;
+  --muted: #adb0a7;
+  --line: rgba(234, 239, 222, .13);
+  --accent: #e1ec9c;
+  --accent-ink: #242710;
+  --selected: rgba(218, 230, 150, .115);
+  --glass-fill: rgba(22, 26, 25, .49);
+  --glass-border: rgba(249, 255, 235, .34);
+  --glass-shadow: 0 30px 75px rgba(5, 10, 9, .28), 0 9px 24px rgba(5, 10, 9, .15);
+  --content-rgb: 20, 24, 23;
+  --glint: rgba(242, 255, 211, .16);
+  color-scheme: dark;
+}
+
+body[data-material='liquid'][data-palette='volt'][data-appearance='light'] .window {
+  --bg: #f6f4eb;
+  --surface: rgba(126, 114, 75, .065);
+  --text: #26281f;
+  --muted: #66695f;
+  --line: rgba(71, 74, 52, .14);
+  --accent: #79610b;
+  --accent-ink: #fffdf5;
+  --selected: rgba(181, 161, 60, .13);
+  --glass-fill: rgba(247, 249, 230, .50);
+  --glass-border: rgba(255, 255, 245, .89);
+  --glass-shadow: 0 30px 75px rgba(66, 78, 41, .18), 0 9px 24px rgba(53, 63, 35, .10);
+  --content-rgb: 246, 247, 235;
+  --content-opacity: .48;
+  --edge-light: rgba(255, 255, 250, 1);
+  --edge-low: rgba(255, 255, 245, .48);
+  --glint: rgba(255, 255, 255, .55);
+  color-scheme: light;
+}
+
+body[data-material='liquid'][data-palette='arc'][data-appearance='dark'] .window {
+  --bg: #1c222a;
+  --surface: rgba(220, 232, 249, .065);
+  --text: #edf2f8;
+  --muted: #a6b1bf;
+  --line: rgba(211, 226, 246, .14);
+  --accent: #a2c4ff;
+  --accent-ink: #182c47;
+  --selected: rgba(137, 181, 248, .135);
+  --glass-fill: rgba(15, 26, 38, .49);
+  --glass-border: rgba(226, 245, 255, .35);
+  --glass-shadow: 0 30px 75px rgba(4, 15, 29, .30), 0 9px 24px rgba(4, 15, 29, .16);
+  --content-rgb: 15, 25, 37;
+  --edge-light: rgba(236, 250, 255, .78);
+  --edge-low: rgba(212, 239, 255, .10);
+  --glint: rgba(192, 225, 255, .17);
+  color-scheme: dark;
+}
+
+body[data-material='liquid'][data-palette='arc'][data-appearance='light'] .window {
+  --bg: #f1f5fa;
+  --surface: rgba(64, 96, 137, .06);
+  --text: #202d3e;
+  --muted: #5c6c80;
+  --line: rgba(53, 79, 114, .14);
+  --accent: #265b9d;
+  --accent-ink: #fbfdff;
+  --selected: rgba(89, 142, 207, .115);
+  --glass-fill: rgba(234, 244, 254, .49);
+  --glass-border: rgba(246, 253, 255, .93);
+  --glass-shadow: 0 30px 75px rgba(40, 72, 110, .19), 0 9px 24px rgba(40, 72, 110, .10);
+  --content-rgb: 237, 245, 253;
+  --content-opacity: .48;
+  --edge-light: rgba(255, 255, 255, 1);
+  --edge-low: rgba(246, 253, 255, .50);
+  --glint: rgba(255, 255, 255, .57);
+  color-scheme: light;
+}
+
+body[data-material='liquid'][data-palette='silver'][data-appearance='dark'] .window {
+  --bg: #242426;
+  --surface: rgba(243, 241, 237, .065);
+  --text: #f2f1ef;
+  --muted: #adaba8;
+  --line: rgba(245, 240, 233, .14);
+  --accent: #ddc8a6;
+  --accent-ink: #30281d;
+  --selected: rgba(244, 233, 214, .10);
+  --glass-fill: rgba(28, 28, 30, .48);
+  --glass-border: rgba(255, 253, 249, .33);
+  --glass-shadow: 0 30px 75px rgba(17, 16, 18, .29), 0 9px 24px rgba(17, 16, 18, .16);
+  --content-rgb: 24, 24, 27;
+  --edge-light: rgba(255, 253, 249, .76);
+  --edge-low: rgba(255, 253, 249, .12);
+  --glint: rgba(253, 249, 241, .14);
+  color-scheme: dark;
+}
+
+body[data-material='liquid'][data-palette='silver'][data-appearance='light'] .window {
+  --bg: #f6f5f3;
+  --surface: rgba(91, 86, 78, .06);
+  --text: #292a2b;
+  --muted: #666461;
+  --line: rgba(72, 67, 60, .14);
+  --accent: #756044;
+  --accent-ink: #fffdfa;
+  --selected: rgba(122, 110, 91, .095);
+  --glass-fill: rgba(246, 245, 243, .49);
+  --glass-border: rgba(255, 254, 253, .93);
+  --glass-shadow: 0 30px 75px rgba(76, 67, 55, .16), 0 9px 24px rgba(76, 67, 55, .09);
+  --content-rgb: 247, 245, 242;
+  --content-opacity: .48;
+  --edge-light: rgba(255, 255, 255, 1);
+  --edge-low: rgba(255, 254, 251, .55);
+  --glint: rgba(255, 255, 255, .57);
+  color-scheme: light;
+}
+
+/* Rim: a thin local highlight suggests the curved optical edge.
+   The centre stays untouched so glyphs never inherit blur or displacement. */
+body[data-material='liquid'] .window::before,
+body[data-material='liquid'] .window::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+body[data-material='liquid'] .window::before {
+  z-index: 2;
+  padding: 3.5px;
+  background: linear-gradient(138deg, var(--edge-light) 0%, rgba(255,255,255,.08) 18%, transparent 37%, rgba(255,255,255,.03) 60%, var(--edge-low) 79%, var(--edge-light) 100%);
+  backdrop-filter: blur(2px) saturate(180%) contrast(108%);
+  -webkit-backdrop-filter: blur(2px) saturate(180%) contrast(108%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: var(--rim-opacity);
+}
+body[data-material='liquid'] .window::after {
+  z-index: 3;
+  box-shadow: inset 0 1px 0 var(--edge-light), inset 0 -1px 0 var(--edge-low), inset 1px 0 0 rgba(255,255,255,.16), inset -1px 0 0 rgba(0,0,0,.09);
+}
+body[data-material='liquid'] .window > * { position: relative; z-index: 1; }
+body[data-material='liquid'] .window > .toast { position: absolute; z-index: 4; }
+body[data-material='liquid'][data-appearance='light'] .window {
+  --rim-opacity: .28;
+  --content-opacity: .72;
+  --chrome-opacity: .68;
+}
+body[data-material='liquid'][data-appearance='light'] .scopebar {
+  background: rgba(var(--content-rgb), var(--chrome-opacity));
+}
+body[data-material='liquid'][data-appearance='light'][data-scene='dark'] .window {
+  --glass-fill: color-mix(in srgb, var(--bg) 76%, transparent);
+}
+
+/* Brighter desktop content needs a steady reading plane, not more blur.
+   The outer optical rim retains the original thin material. */
+body[data-material='liquid'][data-appearance='dark']:is([data-scene='bright'], [data-scene='desk']) .window {
+  --content-opacity: .60;
+  --chrome-opacity: .64;
+}
+body[data-material='liquid'][data-appearance='dark']:is([data-scene='bright'], [data-scene='desk']) .scopebar {
+  background: rgba(var(--content-rgb), var(--chrome-opacity));
+}
+
+/* Stable reading plane — no glass bubbles around results. */
+body[data-material='liquid'] .resultarea,
+body[data-material='liquid'] .settingslayout {
+  background: rgba(var(--content-rgb), var(--content-opacity));
+}
+body[data-material='liquid'] .search,
+body[data-material='liquid'] .settingshead,
+body[data-material='liquid'] .footer { background: rgba(var(--content-rgb), var(--chrome-opacity)); }
+body[data-material='liquid'] .search svg,
+body[data-material='liquid'] .flash { color: var(--flash-color); }
+body[data-material='liquid'] .search,
+body[data-material='liquid'] .settingshead { border-bottom-color: var(--line); }
+body[data-material='liquid'] .footer { border-top-color: var(--line); }
+body[data-material='liquid'] .row,
+body[data-material='liquid'] .nav button { transition: none; }
+body[data-material='liquid'] .row.selected { background: var(--selected); }
+body[data-material='liquid'] .row.selected::before { background: var(--accent); }
+body[data-material='liquid'] .ico,
+body[data-material='liquid'] .ico.app { background: var(--surface); color: var(--muted); }
+body[data-material='liquid'] .row.selected .ico { color: var(--accent); }
+body[data-material='liquid'] .detail,
+body[data-material='liquid'] .nav { background: rgba(var(--content-rgb), .28); }
+body[data-material='liquid'] .nav button.active { background: var(--selected); }
+
+/* Range selector is the one small lens; inactive tabs remain quiet. */
+body[data-material='liquid'] .scopebar button {
+  border: 0;
+  transition: none;
+}
+body[data-material='liquid'] .scopebar button.active {
+  color: var(--text);
+  background: linear-gradient(155deg, rgba(255,255,255,.14), transparent 70%), var(--selected);
+  box-shadow: inset 0 0 0 1px var(--glass-border), inset 0 1px 0 var(--edge-light), 0 2px 7px rgba(0,0,0,.10);
+}
+body[data-material='liquid'] .gear:hover { background: var(--surface); }
+body[data-material='liquid'] .primary {
+  color: var(--accent-ink);
+  background: var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.24), 0 2px 5px rgba(0,0,0,.08);
+}
+body[data-material='liquid'] .secondary,
+body[data-material='liquid'] .keyset,
+body[data-material='liquid'] .editor input,
+body[data-material='liquid'] .editor textarea { background: var(--surface); border-color: var(--line); }
+body[data-material='liquid'] .theme.chosen .thumb { outline-color: var(--accent); }
+body[data-material='liquid'] .toast { background: var(--bg); border-color: var(--glass-border); }
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  body[data-material='liquid'] .window { background: var(--bg); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  body[data-material='liquid'] .window { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  body[data-material='liquid'] .window::before { backdrop-filter: none; -webkit-backdrop-filter: none; opacity: .25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-material='liquid'] :is(.row, .scopebar button, .nav button) { transition: none; }
+}

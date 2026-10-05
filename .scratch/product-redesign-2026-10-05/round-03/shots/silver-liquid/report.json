@@ -1,0 +1,30 @@
+[
+  {
+    "file": "dark-home.png",
+    "state": "dark-home",
+    "size": "860x660",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "light-home.png",
+    "state": "light-home",
+    "size": "860x660",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "dark-memos.png",
+    "state": "dark-memos",
+    "size": "860x660",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "light-memos.png",
+    "state": "light-memos",
+    "size": "860x660",
+    "zoom": 1,
+    "issues": []
+  }
+]

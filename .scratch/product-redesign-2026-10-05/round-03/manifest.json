@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "project": "Flashcast · 石墨配色与玻璃",
+  "round": "03",
+  "brief": "三套闪电配色，每套深浅成对；先比较01–03毛玻璃与04–06液态玻璃，再进单张查看切换深浅、材质、桌面背景。液态玻璃为浏览器外观近似，保持石墨640×420布局。",
+  "candidates": [
+    {
+      "id": "baseline",
+      "name": "原石墨 · 不透明",
+      "concept": "已选定的石墨布局与原始银紫配色，放在相同桌面背景上作为材质基线。",
+      "typography": "系统无衬线；输入19px / 结果14px / 设置23px",
+      "palette": [
+        "#1c1d22",
+        "#343b52",
+        "#c5d0ff"
+      ],
+      "traits": [
+        "原始不透明表面",
+        "640×420 石墨结构"
+      ],
+      "kind": "html",
+      "source": "baseline.html",
+      "baseline": true
+    },
+    {
+      "id": "volt-frosted",
+      "name": "雷光 · 毛玻璃",
+      "concept": "石墨与硫黄闪光；品牌感最鲜明，浅色使用深金保证文字清楚。",
+      "typography": "系统无衬线；输入19px / 结果14px / 设置23px",
+      "palette": [
+        "#1d2023",
+        "#e1ec9c",
+        "#79610b"
+      ],
+      "traits": [
+        "深色 / 浅色成对",
+        "同色可直接切换两种材质",
+        "五种桌面背景与减少透明度"
+      ],
+      "kind": "html",
+      "source": "volt-frosted.html",
+      "interactive": true
+    },
+    {
+      "id": "arc-frosted",
+      "name": "电弧 · 毛玻璃",
+      "concept": "冷石墨与冰蓝电弧；更冷静，适合长时间工作的效率工具。",
+      "typography": "系统无衬线；输入19px / 结果14px / 设置23px",
+      "palette": [
+        "#19212b",
+        "#a2c4ff",
+        "#265b9d"
+      ],
+      "traits": [
+        "深色 / 浅色成对",
+        "同色可直接切换两种材质",
+        "五种桌面背景与减少透明度"
+      ],
+      "kind": "html",
+      "source": "arc-frosted.html",
+      "interactive": true
+    },
+    {
+      "id": "silver-frosted",
+      "name": "银闪 · 毛玻璃",
+      "concept": "中性银灰与少量香槟闪光；表面最安静，颜色集中在选择与动作。",
+      "typography": "系统无衬线；输入19px / 结果14px / 设置23px",
+      "palette": [
+        "#242322",
+        "#ddc8a6",
+        "#756044"
+      ],
+      "traits": [
+        "深色 / 浅色成对",
+        "同色可直接切换两种材质",
+        "五种桌面背景与减少透明度"
+      ],
+      "kind": "html",
+      "source": "silver-frosted.html",
+      "interactive": true
+    },
+    {
+      "id": "volt-liquid",
+      "name": "雷光 · 液态玻璃",
+      "concept": "石墨与硫黄闪光；品牌感最鲜明，浅色使用深金保证文字清楚。",
+      "typography": "系统无衬线；输入19px / 结果14px / 设置23px",
+      "palette": [
+        "#1d2023",
+        "#e1ec9c",
+        "#79610b"
+      ],
+      "traits": [
+        "深色 / 浅色成对",
+        "同色可直接切换两种材质",
+        "五种桌面背景与减少透明度"
+      ],
+      "kind": "html",
+      "source": "volt-liquid.html",
+      "interactive": true
+    },
+    {
+      "id": "arc-liquid",
+      "name": "电弧 · 液态玻璃",
+      "concept": "冷石墨与冰蓝电弧；更冷静，适合长时间工作的效率工具。",
+      "typography": "系统无衬线；输入19px / 结果14px / 设置23px",
+      "palette": [
+        "#19212b",
+        "#a2c4ff",
+        "#265b9d"
+      ],
+      "traits": [
+        "深色 / 浅色成对",
+        "同色可直接切换两种材质",
+        "五种桌面背景与减少透明度"
+      ],
+      "kind": "html",
+      "source": "arc-liquid.html",
+      "interactive": true
+    },
+    {
+      "id": "silver-liquid",
+      "name": "银闪 · 液态玻璃",
+      "concept": "中性银灰与少量香槟闪光；表面最安静，颜色集中在选择与动作。",
+      "typography": "系统无衬线；输入19px / 结果14px / 设置23px",
+      "palette": [
+        "#242322",
+        "#ddc8a6",
+        "#756044"
+      ],
+      "traits": [
+        "深色 / 浅色成对",
+        "同色可直接切换两种材质",
+        "五种桌面背景与减少透明度"
+      ],
+      "kind": "html",
+      "source": "silver-liquid.html",
+      "interactive": true
+    }
+  ]
+}

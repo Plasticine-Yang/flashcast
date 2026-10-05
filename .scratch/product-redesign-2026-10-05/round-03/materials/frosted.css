@@ -1,0 +1,156 @@
+/* Flashcast · frosted graphite. Material scope prevents liquid-glass collisions. */
+body[data-material='frosted'] .window {
+  --r: 16px;
+  --glass-blur: 26px;
+  --glass-saturation: 115%;
+  --bg: #20211f;
+  --surface: rgba(255, 255, 255, .065);
+  --text: #f3f4ef;
+  --muted: #adb0a7;
+  --line: rgba(234, 239, 222, .13);
+  --accent: #e1ec9c;
+  --accent-ink: #242710;
+  --selected: rgba(218, 230, 150, .115);
+  --glass-fill: rgba(30, 32, 29, .78);
+  --glass-border: rgba(241, 246, 228, .21);
+  --glass-shadow: 0 24px 70px rgba(8, 12, 9, .26), 0 4px 14px rgba(8, 12, 9, .15);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r);
+  box-shadow: var(--glass-shadow);
+  color: var(--text);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  isolation: isolate;
+}
+
+/* VOLT / sulfur lightning — warm grey paper for light; mineral graphite for dark. */
+body[data-material='frosted'][data-palette='volt'][data-appearance='dark'] .window {
+  --bg: #20211f;
+  --surface: rgba(233, 240, 214, .065);
+  --text: #f3f4ef;
+  --muted: #adb0a7;
+  --line: rgba(234, 239, 222, .13);
+  --accent: #e1ec9c;
+  --accent-ink: #242710;
+  --selected: rgba(218, 230, 150, .115);
+  --glass-fill: rgba(30, 32, 29, .78);
+  --glass-border: rgba(241, 246, 228, .21);
+  --glass-shadow: 0 24px 70px rgba(8, 12, 9, .26), 0 4px 14px rgba(8, 12, 9, .15);
+  color-scheme: dark;
+}
+body[data-material='frosted'][data-palette='volt'][data-appearance='light'] .window {
+  --bg: #f6f4eb;
+  --surface: rgba(126, 114, 75, .065);
+  --text: #26281f;
+  --muted: #66695f;
+  --line: rgba(71, 74, 52, .14);
+  --accent: #79610b;
+  --accent-ink: #fffdf5;
+  --selected: rgba(181, 161, 60, .13);
+  --glass-fill: rgba(247, 246, 236, .78);
+  --glass-border: rgba(255, 255, 247, .90);
+  --glass-shadow: 0 24px 65px rgba(67, 66, 40, .14), 0 3px 12px rgba(67, 66, 40, .08);
+  color-scheme: light;
+}
+
+/* ARC / electric blue — cool graphite and pale mineral white. */
+body[data-material='frosted'][data-palette='arc'][data-appearance='dark'] .window {
+  --bg: #1c222a;
+  --surface: rgba(220, 232, 249, .065);
+  --text: #edf2f8;
+  --muted: #a6b1bf;
+  --line: rgba(211, 226, 246, .14);
+  --accent: #a2c4ff;
+  --accent-ink: #182c47;
+  --selected: rgba(137, 181, 248, .135);
+  --glass-fill: rgba(26, 33, 42, .80);
+  --glass-border: rgba(220, 233, 252, .21);
+  --glass-shadow: 0 24px 70px rgba(7, 14, 24, .29), 0 4px 14px rgba(7, 14, 24, .15);
+  color-scheme: dark;
+}
+body[data-material='frosted'][data-palette='arc'][data-appearance='light'] .window {
+  --bg: #f1f5fa;
+  --surface: rgba(64, 96, 137, .06);
+  --text: #202d3e;
+  --muted: #5c6c80;
+  --line: rgba(53, 79, 114, .14);
+  --accent: #265b9d;
+  --accent-ink: #fbfdff;
+  --selected: rgba(89, 142, 207, .115);
+  --glass-fill: rgba(242, 247, 252, .78);
+  --glass-border: rgba(250, 254, 255, .92);
+  --glass-shadow: 0 24px 65px rgba(33, 63, 99, .15), 0 3px 12px rgba(33, 63, 99, .08);
+  color-scheme: light;
+}
+
+/* SILVER / champagne flash — nearly achromatic, a small warm brand spark. */
+body[data-material='frosted'][data-palette='silver'][data-appearance='dark'] .window {
+  --bg: #242426;
+  --surface: rgba(243, 241, 237, .065);
+  --text: #f2f1ef;
+  --muted: #adaba8;
+  --line: rgba(245, 240, 233, .14);
+  --accent: #ddc8a6;
+  --accent-ink: #30281d;
+  --selected: rgba(244, 233, 214, .10);
+  --glass-fill: rgba(34, 34, 36, .80);
+  --glass-border: rgba(251, 246, 237, .22);
+  --glass-shadow: 0 24px 70px rgba(15, 15, 18, .26), 0 4px 14px rgba(15, 15, 18, .15);
+  color-scheme: dark;
+}
+body[data-material='frosted'][data-palette='silver'][data-appearance='light'] .window {
+  --bg: #f6f5f3;
+  --surface: rgba(91, 86, 78, .06);
+  --text: #292a2b;
+  --muted: #666461;
+  --line: rgba(72, 67, 60, .14);
+  --accent: #756044;
+  --accent-ink: #fffdfa;
+  --selected: rgba(122, 110, 91, .095);
+  --glass-fill: rgba(250, 249, 247, .78);
+  --glass-border: rgba(255, 255, 255, .94);
+  --glass-shadow: 0 24px 65px rgba(63, 58, 50, .14), 0 3px 12px rgba(63, 58, 50, .08);
+  color-scheme: light;
+}
+
+/* Preserve text contrast against opposite-luminance and dense desktop scenes. */
+body[data-material='frosted']:is([data-scene='bright'], [data-scene='desk'])[data-palette='volt'][data-appearance='dark'] .window { --glass-fill: rgba(30, 32, 29, .88); }
+body[data-material='frosted']:is([data-scene='bright'], [data-scene='desk'])[data-palette='arc'][data-appearance='dark'] .window { --glass-fill: rgba(26, 33, 42, .88); }
+body[data-material='frosted']:is([data-scene='bright'], [data-scene='desk'])[data-palette='silver'][data-appearance='dark'] .window { --glass-fill: rgba(34, 34, 36, .88); }
+body[data-material='frosted'][data-appearance='light'][data-palette='volt'] .window { --glass-fill: rgba(247, 246, 236, .88); }
+body[data-material='frosted'][data-appearance='light'][data-palette='arc'] .window { --glass-fill: rgba(242, 247, 252, .88); }
+body[data-material='frosted'][data-appearance='light'][data-palette='silver'] .window { --glass-fill: rgba(250, 249, 247, .88); }
+body[data-material='frosted'][data-scene='dark'][data-appearance='light'][data-palette='volt'] .window { --glass-fill: rgba(247, 246, 236, .96); }
+body[data-material='frosted'][data-scene='dark'][data-appearance='light'][data-palette='arc'] .window { --glass-fill: rgba(242, 247, 252, .96); }
+body[data-material='frosted'][data-scene='dark'][data-appearance='light'][data-palette='silver'] .window { --glass-fill: rgba(250, 249, 247, .96); }
+
+/* Keep one frosted plane: interior controls use tint, never nested blur. */
+body[data-material='frosted'] .window .search,
+body[data-material='frosted'] .window .settingshead { background: transparent; border-color: var(--line); }
+body[data-material='frosted'] .window .footer { background: var(--surface); border-color: var(--line); }
+body[data-material='frosted'] .window .nav { background: var(--surface); border-color: var(--line); }
+body[data-material='frosted'] .window .detail { background: var(--surface); border-color: var(--line); }
+body[data-material='frosted'] .window .ico,
+body[data-material='frosted'] .window .ico.app { color: var(--muted); background: var(--surface); }
+body[data-material='frosted'] .window .row.selected .ico { color: var(--accent); background: transparent; }
+body[data-material='frosted'] .window .row.selected,
+body[data-material='frosted'] .window .scopebar button.active,
+body[data-material='frosted'] .window .nav button.active { background: var(--selected); }
+body[data-material='frosted'] .window .row.selected::before { background: var(--accent); width: 2px; height: 20px; }
+body[data-material='frosted'] .window .scopebar button.active { color: var(--accent); }
+body[data-material='frosted'] .window .nav button.active { color: var(--text); }
+body[data-material='frosted'] .window .primary { color: var(--accent-ink); background: var(--accent); }
+body[data-material='frosted'] .window .theme.chosen .thumb { outline-color: var(--accent); }
+body[data-material='frosted'] .window .keyset,
+body[data-material='frosted'] .window .editor input,
+body[data-material='frosted'] .window .editor textarea { background: var(--surface); border-color: var(--line); }
+body[data-material='frosted'] .window .toast { background: var(--bg); color: var(--text); }
+body[data-material='frosted'] .window :is(.row, .scopebar button, .nav button, .gear) { transition: none; }
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  body[data-material='frosted'] .window { background: var(--bg); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  body[data-material='frosted'] .window { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}

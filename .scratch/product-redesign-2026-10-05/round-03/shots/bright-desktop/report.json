@@ -1,0 +1,16 @@
+[
+  {
+    "file": "dark-home.png",
+    "state": "dark-home",
+    "size": "860x660",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "light-home.png",
+    "state": "light-home",
+    "size": "860x660",
+    "zoom": 1,
+    "issues": []
+  }
+]
