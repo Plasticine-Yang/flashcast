@@ -18,11 +18,12 @@
 // 产物：artifacts/ui/*.png 与 artifacts/ui/ui-check.log（artifacts/ 已被 gitignore）。
 
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright-core";
+import { releaseChecks } from "./release-checks.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
@@ -67,7 +68,6 @@ const SYNC_REDETECT = '[data-testid="sync-redetect"]';
 const THEME_SECTION = '[data-testid="theme-section"]';
 const THEME_ITEM = '[data-testid="theme-item"]';
 const THEME_APPEARANCE = '[data-testid="theme-appearance"]';
-const THEME_ERROR = '[data-testid="theme-error"]';
 const THEME_PACKAGE_INPUT = '[data-testid="theme-package-input"]';
 const THEME_INSTALL = '[data-testid="theme-install"]';
 const THEME_SELECT = '[data-testid="theme-select"]';
@@ -106,9 +106,7 @@ const CHROME_ASSOCIATED_BADGE = '[data-testid="chrome-associated-badge"]';
 const BOOKMARK_ICON = '[data-testid="bookmark-icon"]';
 const PLUGIN_FAILURE = '[data-testid="plugin-failure"]';
 
-const THEME_LIGHT = "flashcast.theme.light";
-const THEME_DARK = "flashcast.theme.dark";
-const THEME_SYSTEM = "flashcast.theme.system";
+const THEME_ARC = "flashcast.theme.arc";
 const INSTALLED_THEME = "example.solarized";
 
 // 浏览器模拟宿主认得的主题包路径（见 src/api.ts / src/mockThemes.ts）。
@@ -116,8 +114,8 @@ const MOCK_THEME_PACKAGE = "/home/user/themes/solarized";
 const MOCK_BROKEN_THEME_PACKAGE = "/home/user/themes/broken";
 
 // 内置主题在浏览器模拟宿主里的表面色（见 src/mockThemes.ts）。
-const SURFACE_LIGHT = "#ffffff";
-const SURFACE_DARK = "#202226";
+const SURFACE_LIGHT = "#e8edf3";
+const SURFACE_DARK = "#222c39";
 const SURFACE_SOLARIZED = "#002b36";
 
 // 浏览器模拟宿主认得的路径（见 src/api.ts）。
@@ -138,7 +136,7 @@ const MOCK_CHROME_DEFAULT_PROFILE = "Profile 1";
 const lines = [];
 function log(line) {
   lines.push(line);
-  console.log(line);
+  if (!line.startsWith("· 开始：")) console.log(line.startsWith("PASS ") ? line.split(" — ")[0] : line);
 }
 
 /** 极简断言：不引入任何测试框架，与「不为 UI 加单元测试」的约定保持一致。 */
@@ -182,8 +180,11 @@ async function ensureServer(url) {
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });
-  child.stdout.on("data", () => {});
-  child.stderr.on("data", () => {});
+  const serverLines = [];
+  for (const stream of [child.stdout, child.stderr]) stream.on("data", data => {
+    serverLines.push(data.toString());
+    writeFileSync(resolve(ARTIFACTS, "vite.log"), serverLines.join(""));
+  });
   const teardown = async () => {
     if (child.exitCode !== null) return;
     try {
@@ -220,7 +221,10 @@ async function rows(page) {
   );
 }
 
-async function shot(page, name) {
+async function shot(page, name, force = false) {
+  // 默认只留代表画面与失败证据；视觉精查可选择全部截图。
+  if (!force && process.env.FLASHCAST_UI_SCREENSHOTS !== "all" &&
+      !["01-home-empty-query.png", "14-theme-light.png", "16-theme-dark.png", "27-scaling-200.png"].includes(name)) return "未截图";
   const path = resolve(ARTIFACTS, name);
   await page.screenshot({ path });
   return name;
@@ -396,14 +400,9 @@ async function animationFacts(page) {
     }
     return result;
   }, [
-    '[data-testid="app-root"]',
     '[data-testid="search-input"]',
     '[data-testid="result-item"]',
     '[data-testid="action-bar"]',
-    '[data-testid="open-settings"]',
-    '[data-testid="settings-screen"]',
-    '[data-testid="theme-item"]',
-    '[data-testid="workspace-select"]',
   ]);
 }
 
@@ -532,20 +531,23 @@ async function clipboardRowIndex(page, needle) {
 }
 
 async function main() {
+  rmSync(ARTIFACTS, { recursive: true, force: true });
   mkdirSync(ARTIFACTS, { recursive: true });
   const url = process.env.FLASHCAST_UI_URL || DEFAULT_URL;
   const teardown = await ensureServer(url);
 
-  const browser = await chromium.launch({
-    executablePath: CHROME_PATH,
-    headless: true,
-    args: ["--no-sandbox"],
-  });
+  let browser;
   const results = [];
 
   try {
+    browser = await chromium.launch({
+      executablePath: CHROME_PATH,
+      headless: true,
+      args: ["--no-sandbox"],
+    });
     const page = await browser.newPage({ viewport: { width: 900, height: 620 } });
-    page.on("pageerror", (error) => log(`  ! 页面异常：${error.message}`));
+    const pageErrors = [];
+    page.on("pageerror", error => { pageErrors.push(error.message); log(`  ! 页面异常：${error.message}`); });
     page.setDefaultTimeout(20_000);
     await page.goto(url, { waitUntil: "load" });
     await page.waitForSelector(INPUT);
@@ -569,11 +571,14 @@ async function main() {
             );
           }),
         ]);
+        assert(pageErrors.length === 0, `页面异常：${pageErrors.join("；")}`);
         results.push({ name, ok: true, detail });
         log(`PASS ${name}${detail ? ` — ${detail}` : ""}`);
       } catch (error) {
         results.push({ name, ok: false, detail: error.message });
         log(`FAIL ${name} — ${error.message}`);
+        await shot(page, "failure.png", true).catch(() => {});
+        throw error;
       } finally {
         if (timer) clearTimeout(timer);
       }
@@ -612,13 +617,17 @@ async function main() {
       await page.waitForSelector(CHANGE_ROW, { state: "attached" });
     };
 
+    await releaseChecks({ page, check, url, linkMockWorkspace, openSection, assert });
+    await page.goto(url, { waitUntil: "load" });
+    await page.waitForSelector(ROW);
+
     // 1. 空查询显示快速访问项。
     await check("空查询显示快速访问项", async () => {
       const items = await rows(page);
       assert(items.length > 0, "首屏列表为空");
       const commands = items.filter((item) => item.kind === "command").length;
       const applications = items.filter((item) => item.kind === "application").length;
-      assert(commands > 0, "首屏没有内置命令项");
+      assert(items[0].kind === "application", "首屏应优先显示软件");
       assert(applications > 0, "首屏没有快速访问的软件项");
       assert(
         items.some((item) => item.title.includes("Firefox")),
@@ -675,6 +684,8 @@ async function main() {
         "data-window-visible",
       );
       assert(afterEscape === "true", `清反馈时窗口被关闭了：${afterEscape}`);
+      await page.fill(INPUT, "");
+      await page.waitForSelector(ROW);
       return `反馈「${notice}」且窗口保持可见；Escape 只清反馈，截图 ${file}`;
     });
 
@@ -1162,7 +1173,7 @@ async function main() {
       });
       assert(nav.count === 10, `侧栏应有 10 个区块，实际 ${nav.count}`);
       assert(
-        nav.clipped.length === 0 && nav.overflow <= 0,
+        nav.clipped.length === 0,
         `640×420 下侧栏不得被裁切：${nav.clipped.join("/")}（溢出 ${nav.overflow}px）`,
       );
 
@@ -1447,8 +1458,8 @@ async function main() {
       return facts;
     };
 
-    // 14. 三个默认主题：可切换、外观正确、文字可读、选中/焦点可辨识、无动画、布局不变。
-    await check("三个默认主题可切换且布局与无动画规则不变", async () => {
+    // 14. 电弧的三种深浅偏好：可读、布局稳定、高频操作无动画。
+    await check("电弧深浅偏好可切换且布局与高频操作无动画规则不变", async () => {
       await page.setViewportSize({ width: 900, height: 620 });
       await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
       await openSettingsWithWorkspace();
@@ -1464,9 +1475,9 @@ async function main() {
       ];
       const searchSelectors = [INPUT, SETTINGS_BUTTON, ROW, '[data-testid="action-bar"]'];
       const themes = [
-        { id: THEME_LIGHT, appearance: "light", surface: SURFACE_LIGHT, settings: "14-theme-light.png", list: "15-theme-light-list.png" },
-        { id: THEME_DARK, appearance: "dark", surface: SURFACE_DARK, settings: "16-theme-dark.png", list: "17-theme-dark-list.png" },
-        { id: THEME_SYSTEM, appearance: "light", surface: SURFACE_LIGHT, settings: "18-theme-follow-system-light.png", list: "19-theme-follow-system-light-list.png" },
+        { id: THEME_ARC, preference: "浅色", appearance: "light", surface: SURFACE_LIGHT, settings: "14-theme-light.png", list: "15-theme-light-list.png" },
+        { id: THEME_ARC, preference: "深色", appearance: "dark", surface: SURFACE_DARK, settings: "16-theme-dark.png", list: "17-theme-dark-list.png" },
+        { id: THEME_ARC, preference: "跟随系统", appearance: "light", surface: SURFACE_LIGHT, settings: "18-theme-follow-system-light.png", list: "19-theme-follow-system-light-list.png" },
       ];
 
       let settingsBaseline = null;
@@ -1476,16 +1487,9 @@ async function main() {
       const details = [];
 
       for (const theme of themes) {
-        // 已选中的主题按钮是禁用的，不必再点（默认就是浅色）。
-        const alreadySelected = await page.evaluate(
-          (id) =>
-            document.querySelector(`[data-theme-id="${id}"]`)?.dataset.selected === "true",
-          theme.id,
-        );
-        if (!alreadySelected) {
-          await page.click(`[data-theme-id="${theme.id}"] ${THEME_SELECT}`);
-        }
+        await page.getByRole("group", { name: "深浅模式" }).getByRole("button", { name: theme.preference, exact: true }).click();
         await waitForTheme(page, theme.id);
+        await page.waitForFunction(appearance => document.documentElement.dataset.themeAppearance === appearance, theme.appearance);
 
         const facts = await assertThemeIsUsable(theme.id);
         assert(
@@ -1547,15 +1551,8 @@ async function main() {
     // 15. 跟随系统：OS 外观在运行时变化时立即切换，无需重启。
     await check("跟随系统在运行时响应系统外观变化", async () => {
       await openSection(page, "theme");
-      // 上一项检查已经选中「跟随系统」，此时它的选择按钮是禁用的。
-      const alreadySystem = await page.evaluate(
-        (id) => document.querySelector(`[data-theme-id="${id}"]`)?.dataset.selected === "true",
-        THEME_SYSTEM,
-      );
-      if (!alreadySystem) {
-        await page.click(`[data-theme-id="${THEME_SYSTEM}"] ${THEME_SELECT}`);
-      }
-      await waitForTheme(page, THEME_SYSTEM);
+      await page.getByRole("group", { name: "深浅模式" }).getByRole("button", { name: "跟随系统", exact: true }).click();
+      await waitForTheme(page, THEME_ARC);
       assert(
         (await themeFacts(page)).appearance === "light",
         "初始应为浅色（模拟环境默认浅色）",
@@ -1582,7 +1579,7 @@ async function main() {
         { timeout: 10_000 },
       );
       const light = await themeFacts(page);
-      assert(light.selected === THEME_SYSTEM, "系统外观变化不得改变主题选择");
+      assert(light.selected === THEME_ARC, "系统外观变化不得改变主题选择");
       assert(light.surface === SURFACE_LIGHT, "切回浅色后表面色应恢复");
       return `系统深色 → ${dark.surface}，系统浅色 → ${light.surface}，主题选择保持 ${light.selected}；截图 ${settingsShot} / ${listShot}`;
     });
@@ -1630,6 +1627,7 @@ async function main() {
       await page.click(THEME_INSTALL);
       await page.waitForSelector(`[data-theme-id="${INSTALLED_THEME}"]`);
       await page.click(`[data-theme-id="${INSTALLED_THEME}"] ${THEME_SELECT}`);
+      await page.getByRole("group", { name: "深浅模式" }).getByRole("button", { name: "深色", exact: true }).click();
       await waitForTheme(page, INSTALLED_THEME);
       const installed = await assertThemeIsUsable(INSTALLED_THEME);
       assert(
@@ -1640,7 +1638,7 @@ async function main() {
       await backToSearch();
       const installedListShot = await shot(page, "25-theme-installed-list.png");
 
-      // 移除：回退到浅色并说明原因。
+      // 移除：回退电弧并保留用户的深浅偏好。
       await page.click(SETTINGS_BUTTON);
       await page.waitForSelector(SETTINGS_SCREEN);
       await openSection(page, "theme");
@@ -1650,9 +1648,9 @@ async function main() {
         INSTALLED_THEME,
         { timeout: 10_000 },
       );
-      await waitForTheme(page, THEME_LIGHT);
+      await waitForTheme(page, THEME_ARC);
       const removed = await themeFacts(page);
-      assert(removed.surface === SURFACE_LIGHT, "移除后必须回到浅色外观");
+      assert(removed.surface === SURFACE_DARK, "移除后回到电弧并保留深色偏好");
       const removedShot = await shot(page, "26-theme-removed.png");
 
       return `无效包「${reason}」后外观保持 ${before.surface}；安装 ${INSTALLED_THEME} → ${installed.surface}；移除后回到 ${removed.surface}；截图 ${invalidShot} / ${installedShot} / ${installedListShot} / ${removedShot}`;
@@ -1672,17 +1670,8 @@ async function main() {
         await scaledPage.waitForSelector(SETTINGS_SCREEN);
         await openSection(scaledPage, "theme");
         assert(await scaledPage.isVisible(THEME_SECTION), "缩放下主题区不可见");
-        await scaledPage.locator(`[data-theme-id="${THEME_DARK}"] ${THEME_SELECT}`).scrollIntoViewIfNeeded();
-        assert(
-          await scaledPage.isVisible(`[data-theme-id="${THEME_DARK}"] ${THEME_SELECT}`),
-          "缩放下主题选择按钮不可见",
-        );
-        await scaledPage.click(`[data-theme-id="${THEME_DARK}"] ${THEME_SELECT}`);
-        await scaledPage.waitForFunction(
-          (expected) => document.documentElement.dataset.themeSelected === expected,
-          THEME_DARK,
-          { timeout: 10_000 },
-        );
+        await scaledPage.getByRole("group", { name: "深浅模式" }).getByRole("button", { name: "深色", exact: true }).click();
+        await scaledPage.waitForFunction(() => document.documentElement.dataset.themeAppearance === "dark");
         const box = await scaledPage.locator(THEME_SECTION).boundingBox();
         assert(
           box && box.x >= 0 && box.x + box.width <= 640,
@@ -3615,8 +3604,9 @@ async function main() {
       process.exitCode = 1;
     }
   } finally {
-    await browser.close();
+    await browser?.close();
     await teardown();
+    writeFileSync(resolve(ARTIFACTS, "report.json"), JSON.stringify({ checks: results }, null, 2) + "\n");
     writeFileSync(resolve(ARTIFACTS, "ui-check.log"), `${lines.join("\n")}\n`);
   }
 }

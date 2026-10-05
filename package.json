@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "ui-check": "pnpm --dir tools/ui-check run check"
+    "ui-check": "pnpm --dir tools/ui-check run check",
+    "release:prepare": "node scripts/release/prepare.mjs",
+    "release:check": "node --test scripts/release/*.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.0",

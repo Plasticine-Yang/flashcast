@@ -19,3 +19,7 @@
 ### Domain docs
 
 采用 single-context 布局：根目录 `GLOSSARY.md` 和 `docs/adr/`；探索代码或修改领域文档前，先读 `docs/agents/domain.md`。
+
+## 发布
+
+- 发版前读取 `docs/agents/release.md`，使用仓库发布入口冻结源码和创建标签。

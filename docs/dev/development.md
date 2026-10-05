@@ -105,10 +105,12 @@ CHROME_PATH=/usr/bin/google-chrome pnpm ui-check     # 默认就是这个路径
 自己启动的进程。检查项：空查询的快速访问项、输入过滤、方向键选择、Escape 关闭并在唤起后
 清空查询、输入法组合期间回车不执行（组合结束后回车才执行）、鼠标悬停不改变键盘选择、
 设置页与工作区操作、设置页侧栏分组（一次只显示一个区块、`↑↓` 切换、会话内记住上次区块、
-640×420 真实窗口下 10 个区块一屏内全部可见）、三个默认主题（浅色 / 深色 / 跟随系统）的切换与布局稳定性、
+640×420 真实窗口下 10 个区块一屏内全部可见）、电弧深浅偏好（浅色 / 深色 / 跟随系统）的切换与布局稳定性、
 跟随系统在运行时响应 `prefers-color-scheme`、减少动态效果下无动画、
 本地主题包的安装 / 选择 / 移除与无效主题包保留外观、200% 系统缩放。
-产物在 `artifacts/ui/`（截图 + `ui-check.log`，该目录已被 gitignore）。
+发布关键路径在 `tools/ui-check/release-checks.mjs`，与完整检查一起执行。产物在 `artifacts/ui/`（代表截图、失败截图、`ui-check.log` 与自动启动的 `vite.log`，该目录已被 gitignore）。首个失败立即停止，避免状态污染和重复超时；全部截图使用 `FLASHCAST_UI_SCREENSHOTS=all pnpm ui-check`。
+
+发布入口与 CI 分工见 [发布流程](../agents/release.md)。
 
 **范围**：只覆盖浏览器里的 React UI 与 `src/api.ts` 中的模拟宿主。它不是 Tauri webview，
 因此**不能**证明托盘、全局快捷键、自动粘贴或真实软件启动可用。
