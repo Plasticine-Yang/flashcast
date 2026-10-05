@@ -32,6 +32,8 @@ plist = "1.10.1"
 global-hotkey = "0.8.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# 与宿主 GTK 共用版本；按门户使用的 GIO 规则验证桌面身份，而非只检查文件存在。
+gio = "0.18"
 ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "global_shortcuts"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
 futures-util = "0.3"

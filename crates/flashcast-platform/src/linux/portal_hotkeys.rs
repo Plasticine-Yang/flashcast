@@ -125,8 +125,13 @@ async fn connect() -> Result<GlobalShortcuts, HotkeyError> {
         .map_err(unavailable)
 }
 
-/// deb 随包提供身份文件；开发运行及便携 AppImage 按需添加不显示在菜单的身份。
+/// deb 随包提供身份文件；开发运行及便携 AppImage 按需修复不可加载的身份。
 fn ensure_desktop_entry() -> Result<(), HotkeyError> {
+    // 门户通过 GIO 加载身份；Exec 指向不存在的程序时，即使文件存在也会失败。
+    // 按 XDG 优先级检查，避免失效的用户条目遮住有效的系统条目。
+    if gio::DesktopAppInfo::new(&format!("{APP_ID}.desktop")).is_some() {
+        return Ok(());
+    }
     let data_home = std::env::var_os("XDG_DATA_HOME")
         .filter(|s| !s.is_empty())
         .map(std::path::PathBuf::from)
@@ -134,24 +139,11 @@ fn ensure_desktop_entry() -> Result<(), HotkeyError> {
             std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
         })
         .ok_or_else(|| unavailable("无法找到用户应用目录"))?;
-    let mut dirs = vec![data_home.clone()];
-    dirs.extend(std::env::split_paths(
-        &std::env::var_os("XDG_DATA_DIRS").unwrap_or_else(|| "/usr/local/share:/usr/share".into()),
-    ));
     let filename = format!("applications/{APP_ID}.desktop");
-    if dirs.iter().any(|d| d.join(&filename).is_file()) {
-        return Ok(());
-    }
     let running = std::env::current_exe().map_err(unavailable)?;
     let executable = std::env::var_os("APPIMAGE")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            if running.file_name().and_then(|n| n.to_str()) == Some("flashcast") {
-                running
-            } else {
-                std::path::PathBuf::from("flashcast")
-            }
-        });
+        .unwrap_or(running);
     let executable = executable
         .to_str()
         .ok_or_else(|| unavailable("程序路径不是 UTF-8"))?;
@@ -166,7 +158,10 @@ fn ensure_desktop_entry() -> Result<(), HotkeyError> {
         .replace('%', "%%");
     let target = data_home.join(filename);
     std::fs::create_dir_all(target.parent().expect("应用目录有父路径")).map_err(unavailable)?;
-    std::fs::write(target, format!("[Desktop Entry]\nType=Application\nName=Flashcast\nExec=\"{exec}\"\nIcon=flashcast\nNoDisplay=true\nTerminal=false\n")).map_err(unavailable)
+    std::fs::write(&target, format!("[Desktop Entry]\nType=Application\nName=Flashcast\nExec=\"{exec}\"\nIcon=flashcast\nNoDisplay=true\nTerminal=false\n")).map_err(unavailable)?;
+    gio::DesktopAppInfo::from_filename(&target)
+        .ok_or_else(|| unavailable("桌面身份文件无法加载，请检查程序路径"))?;
+    Ok(())
 }
 
 pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHandle, HotkeyError> {
