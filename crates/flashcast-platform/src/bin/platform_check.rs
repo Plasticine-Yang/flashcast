@@ -307,7 +307,7 @@ fn main() {
         // 5. 全局快捷键注册。
         let hotkeys = LinuxHotkeyManager::new();
         let spec = HotkeySpec::parse(if capabilities.session == SessionType::Wayland {
-            "Ctrl+Alt+Space"
+            flashcast_platform::DEFAULT_HOTKEY
         } else {
             "Ctrl+Alt+F12"
         })

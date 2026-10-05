@@ -307,7 +307,7 @@ mod tests {
     fn default_hotkey_maps_to_a_backend_code() {
         let spec = HotkeySpec::parse(crate::hotkey::DEFAULT_HOTKEY).expect("默认快捷键可解析");
         let hotkey = to_backend_hotkey(&spec).expect("默认快捷键可映射");
-        assert_eq!(hotkey.mods, Modifiers::CONTROL | Modifiers::ALT);
+        assert_eq!(hotkey.mods, Modifiers::ALT);
         assert_eq!(hotkey.key, Code::Space);
     }
 

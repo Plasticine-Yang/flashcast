@@ -194,9 +194,5 @@ fn parse_key(token: &str) -> Option<Key> {
     }
 }
 
-/// v0.1.0 的默认全局快捷键。
-///
-/// 选择 `Ctrl+Alt+Space`：GNOME 已占用 `Super+Space`（切换输入法）与 `Super`
-/// （活动概览），IBus/fcitx 默认占用 `Ctrl+Space`，因此这两个候选都会与中文
-/// 用户的环境冲突。`Ctrl+Alt+Space` 在 GNOME 默认键位表中未被占用。
-pub const DEFAULT_HOTKEY: &str = "Ctrl+Alt+Space";
+/// 默认全局快捷键：Alt + 空格（macOS 对应 Option + 空格）。
+pub const DEFAULT_HOTKEY: &str = "Alt+Space";

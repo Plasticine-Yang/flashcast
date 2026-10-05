@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// 这是配置工作区里 `settings.toml` 的格式，键名与 UI / JSON 一致使用 camelCase：
 ///
 /// ```toml
-/// hotkey = "Ctrl+Alt+Space"
+/// hotkey = "Alt+Space"
 /// launchAtStartup = false
 /// quickAccessLimit = 6
 /// pluginTimeoutMs = 400
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Settings {
-    /// 全局快捷键，采用 `Ctrl+Alt+Space` 这类写法。
+    /// 全局快捷键，采用 `Alt+Space` 这类写法。
     pub hotkey: String,
     /// 是否随系统启动。ticket 01 只保存该偏好，实际生效由后续 ticket 完成。
     pub launch_at_startup: bool,
@@ -75,7 +75,7 @@ impl Default for ClipboardSettings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            // 默认快捷键的选择理由见 `flashcast_platform::hotkey::DEFAULT_HOTKEY`。
+            // 默认快捷键见 `flashcast_platform::hotkey::DEFAULT_HOTKEY`。
             hotkey: DEFAULT_HOTKEY.to_string(),
             launch_at_startup: false,
             quick_access_limit: 6,

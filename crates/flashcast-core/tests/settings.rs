@@ -6,15 +6,15 @@ use flashcast_core::Settings;
 use flashcast_platform::hotkey::{HotkeySpec, DEFAULT_HOTKEY};
 use support::{app, fast_settings, host_with};
 
-/// 默认快捷键可用且不会与 GNOME / 输入法默认键位冲突。
+/// 默认设置使用 Alt + 空格，并可解析和通过设置校验。
 #[test]
-fn default_settings_use_a_parseable_non_conflicting_hotkey() {
+fn default_settings_use_alt_space() {
     let settings = Settings::default();
 
     assert_eq!(settings.hotkey, DEFAULT_HOTKEY);
-    assert_eq!(DEFAULT_HOTKEY, "Ctrl+Alt+Space");
+    assert_eq!(DEFAULT_HOTKEY, "Alt+Space");
     let spec = HotkeySpec::parse(&settings.hotkey).expect("默认快捷键必须可解析");
-    assert_eq!(spec.canonical(), "Ctrl+Alt+Space");
+    assert_eq!(spec.canonical(), "Alt+Space");
     assert!(!settings.launch_at_startup);
     settings.validate().expect("默认设置必须有效");
 }
@@ -23,7 +23,7 @@ fn default_settings_use_a_parseable_non_conflicting_hotkey() {
 #[test]
 fn settings_round_trip_json_and_toml() {
     let settings = Settings {
-        hotkey: "Ctrl+Shift+Space".to_string(),
+        hotkey: "Ctrl+Alt+Space".to_string(),
         launch_at_startup: true,
         quick_access_limit: 8,
         plugin_timeout_ms: 250,

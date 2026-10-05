@@ -1734,7 +1734,7 @@ async function main() {
       );
       const diff = (await page.textContent(CHANGE_DIFF)).trim();
       assert(
-        diff.includes('-hotkey = "Ctrl+Alt+Space"') && diff.includes("+++ b/settings.toml"),
+        diff.includes('-hotkey = "Alt+Space"') && diff.includes("+++ b/settings.toml"),
         `必须展示真实补丁：${diff}`,
       );
 
@@ -1998,7 +1998,7 @@ async function main() {
     await check("快进拉取展示进行中并重新加载设置、主题与备忘录", async () => {
       await page.evaluate(() => window.__flashcastMock.simulateSyncScenario("ready"));
       await page.click(SYNC_REDETECT);
-      await page.evaluate(() => window.__flashcastMock.simulateRemoteCommit("Alt+Space"));
+      await page.evaluate(() => window.__flashcastMock.simulateRemoteCommit("Ctrl+Alt+Space"));
       await page.click(SYNC_REDETECT);
       await page.waitForFunction(
         ({ sel, expected }) => document.querySelector(sel)?.textContent?.includes(expected),
@@ -2025,7 +2025,7 @@ async function main() {
 
       const after = await page.inputValue(HOTKEY_INPUT);
       assert(
-        after === "Alt+Space" && before !== after,
+        after === "Ctrl+Alt+Space" && before !== after,
         `设置必须随拉取重新加载：${before} → ${after}`,
       );
       const counts = await text(SYNC_COUNTS);

@@ -800,7 +800,7 @@ export function SettingsScreen({
               type="text"
               spellCheck={false}
               autoComplete="off"
-              placeholder="Ctrl+Alt+Space"
+              placeholder="Alt+Space"
               value={hotkeyDraft}
               onChange={(event) => setHotkeyDraft(event.target.value)}
             />

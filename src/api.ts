@@ -658,7 +658,7 @@ const MOCK_CHANGES: ChangedFile[] = [
       "--- a/settings.toml",
       "+++ b/settings.toml",
       "@@ -1,2 +1,2 @@",
-      '-hotkey = "Ctrl+Alt+Space"',
+      '-hotkey = "Alt+Space"',
       '+hotkey = "Super+Space"',
       " quickAccessLimit = 6",
       "",
@@ -717,7 +717,7 @@ class MockHost implements HostApi {
   private scope: QueryScope = { kind: "home" };
   private handlers = new Map<string, Set<Handler>>();
   private settings: Settings = {
-    hotkey: "Ctrl+Alt+Space",
+    hotkey: "Alt+Space",
     launchAtStartup: false,
     quickAccessLimit: 6,
     pluginTimeoutMs: 400,
@@ -2327,7 +2327,7 @@ class MockHost implements HostApi {
    * 模拟远端新增一次提交：下一次拉取会快进，并把有效设置、主题与备忘录
    * 「重新加载」成远端的内容（与宿主拉取后的行为一致）。
    */
-  simulateRemoteCommit(hotkey = "Alt+Space"): void {
+  simulateRemoteCommit(hotkey = "Ctrl+Alt+Space"): void {
     this.syncBehind = 1;
     this.incoming = {
       hotkey,

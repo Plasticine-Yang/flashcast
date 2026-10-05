@@ -4,7 +4,7 @@ members = ["crates/*", "src-tauri"]
 
 [workspace.package]
 # 版本单一来源：`src-tauri/tauri.conf.json` 与 `package.json` 必须与本值一致。
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/flashcast-app/flashcast"
