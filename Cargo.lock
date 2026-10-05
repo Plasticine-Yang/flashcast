@@ -1132,7 +1132,7 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
 name = "flashcast"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "base64 0.22.1",
  "flashcast-core",
@@ -1148,9 +1148,11 @@ dependencies = [
 
 [[package]]
 name = "flashcast-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
+ "ashpd",
  "flashcast-platform",
+ "gio",
  "git2",
  "notify-debouncer-full",
  "rusqlite",
@@ -1159,12 +1161,13 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "toml 1.1.6+spec-1.1.0",
 ]
 
 [[package]]
 name = "flashcast-platform"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "ashpd",
  "enigo",

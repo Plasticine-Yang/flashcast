@@ -8,10 +8,11 @@ pub mod catalog;
 pub mod chrome;
 pub mod clipboard;
 pub mod focus;
+mod gnome_hotkeys;
 pub mod hotkeys;
-mod portal_hotkeys;
 pub mod launcher;
 pub mod paste;
+mod portal_hotkeys;
 pub mod x11;
 
 pub use cap::LinuxCapabilityProbe;

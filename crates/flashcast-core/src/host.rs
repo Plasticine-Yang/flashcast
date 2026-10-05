@@ -367,6 +367,38 @@ impl Host {
         lock(&self.inner).settings.clone()
     }
 
+    /// 系统快捷键检测与修复仍走宿主入口，平台细节封装在适配层。
+    pub fn hotkey_conflict(
+        &self,
+        manager: &dyn flashcast_platform::HotkeyManager,
+    ) -> flashcast_platform::shortcut::HotkeyConflictReport {
+        match flashcast_platform::hotkey::HotkeySpec::parse(&self.settings().hotkey) {
+            Ok(spec) => manager.inspect_conflict(
+                &spec,
+                &self.deps.device_dir.join("gnome-hotkey-backup.json"),
+            ),
+            Err(error) => flashcast_platform::shortcut::HotkeyConflictReport {
+                status: "unknown".into(),
+                message: Some(error.to_string()),
+                ..Default::default()
+            },
+        }
+    }
+
+    pub fn resolve_hotkey_conflict(
+        &self,
+        manager: &dyn flashcast_platform::HotkeyManager,
+        undo: bool,
+    ) -> Result<flashcast_platform::shortcut::HotkeyConflictReport, String> {
+        let spec = flashcast_platform::hotkey::HotkeySpec::parse(&self.settings().hotkey)
+            .map_err(|e| e.to_string())?;
+        manager.resolve_conflict(
+            &spec,
+            &self.deps.device_dir.join("gnome-hotkey-backup.json"),
+            undo,
+        )
+    }
+
     /// 更新设置：先落到工作区文件，成功后才改为生效状态。
     ///
     /// 未关联工作区时设置只在内存中生效（`workspace_status().persisted == false`）。

@@ -249,6 +249,36 @@ pub fn set_settings(
     Ok(crate::hotkey::status(&state))
 }
 
+/// GSettings 与 D-Bus 都在工作线程执行，避免阻塞桌面事件循环。
+#[tauri::command]
+pub async fn get_hotkey_conflict(
+    state: State<'_, AppState>,
+) -> Result<flashcast_platform::shortcut::HotkeyConflictReport, String> {
+    let host = state.host.clone();
+    let manager = state.platform.hotkeys.clone();
+    tauri::async_runtime::spawn_blocking(move || host.hotkey_conflict(manager.as_ref()))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn resolve_hotkey_conflict(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    undo: bool,
+) -> Result<flashcast_platform::shortcut::HotkeyConflictReport, String> {
+    let host = state.host.clone();
+    let manager = state.platform.hotkeys.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        host.resolve_hotkey_conflict(manager.as_ref(), undo)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    // 重新获取门户的实际绑定说明；状态事件会反馈授权/注册失败。
+    crate::hotkey::apply(&app, &state, &state.host.settings().hotkey);
+    Ok(result)
+}
+
 /// 当前主题状态：选中主题、CSS 自定义属性与可选主题列表。
 #[tauri::command]
 pub fn get_theme(state: State<'_, AppState>) -> ThemeState {

@@ -60,6 +60,8 @@ export interface HostApi {
   get_settings(): Promise<Settings>;
   set_settings(settings: Settings): Promise<StatusView["hotkey"]>;
   get_status(): Promise<StatusView>;
+  get_hotkey_conflict(): Promise<import("./types").HotkeyConflictReport>;
+  resolve_hotkey_conflict(undo: boolean): Promise<import("./types").HotkeyConflictReport>;
   /** 当前主题状态：选中主题、CSS 自定义属性与可选主题列表。 */
   get_theme(): Promise<ThemeState>;
   /** 选择主题。失败时 reject，原因为中文，且当前外观不变。 */
@@ -171,6 +173,8 @@ const tauriApi: HostApi = {
   get_settings: () => tauriInvoke("get_settings"),
   set_settings: (settings) => tauriInvoke("set_settings", { settings }),
   get_status: () => tauriInvoke("get_status"),
+  get_hotkey_conflict: () => tauriInvoke("get_hotkey_conflict"),
+  resolve_hotkey_conflict: (undo) => tauriInvoke("resolve_hotkey_conflict", { undo }),
   get_theme: () => tauriInvoke("get_theme"),
   select_theme: (id) => tauriInvoke("select_theme", { id }),
   set_appearance_preferences: (appearance, style, reduceTransparency) => tauriInvoke("set_appearance_preferences", { appearance, style, reduceTransparency }),
@@ -1894,6 +1898,22 @@ class MockHost implements HostApi {
 
   async get_settings(): Promise<Settings> {
     return this.settings;
+  }
+
+  // 仅用于浏览器交互检查；真实应用始终调用原生平台适配层。
+  hotkeyConflictScenario: "none" | "conflict" | "failure" | "unknown" | "readonly" | "mismatch" = "none";
+  private hotkeyConflictFixed = false;
+  async get_hotkey_conflict(): Promise<import("./types").HotkeyConflictReport> {
+    const scenario = this.hotkeyConflictScenario;
+    if (scenario === "none" || this.settings.hotkey !== "Alt+Space") return { status: "not-applicable", canResolve: false, canUndo: false, effective: null, message: null };
+    return { status: this.hotkeyConflictFixed ? "clear" : scenario === "unknown" ? "unknown" : scenario === "mismatch" ? "mismatch" : "conflict", canResolve: !["unknown", "readonly"].includes(scenario), canUndo: this.hotkeyConflictFixed, effective: this.hotkeyConflictFixed ? "Alt+Space" : "Ctrl+Alt+Space", message: ["unknown", "readonly"].includes(scenario) ? "当前系统无法自动修改，请手动处理。" : null };
+  }
+  async resolve_hotkey_conflict(undo: boolean): Promise<import("./types").HotkeyConflictReport> {
+    if (this.hotkeyConflictScenario === "failure") throw "系统未接受新的绑定，已恢复原来的系统设置。";
+    if (["unknown", "readonly", "none"].includes(this.hotkeyConflictScenario)) throw "当前系统不支持自动修改。";
+    this.hotkeyConflictFixed = !undo;
+    this.emit("flashcast://hotkey-status", { label: undo ? "Ctrl+Alt+Space" : "Alt+Space", registered: true, pending: false, error: null });
+    return this.get_hotkey_conflict();
   }
 
   async set_settings(settings: Settings): Promise<StatusView["hotkey"]> {

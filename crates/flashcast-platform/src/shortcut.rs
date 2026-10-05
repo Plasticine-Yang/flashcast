@@ -64,8 +64,48 @@ pub enum HotkeyError {
     Other { reason: String },
 }
 
+/// 系统占用检测。Unknown 与不适用分开，避免把无法检测当作没有冲突。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HotkeyConflictReport {
+    pub status: String,
+    pub can_resolve: bool,
+    pub can_undo: bool,
+    pub effective: Option<String>,
+    pub message: Option<String>,
+}
+impl Default for HotkeyConflictReport {
+    fn default() -> Self {
+        Self {
+            status: "not-applicable".into(),
+            can_resolve: false,
+            can_undo: false,
+            effective: None,
+            message: None,
+        }
+    }
+}
+
 /// 注册、注销、更新全局快捷键。
 pub trait HotkeyManager: Send + Sync {
+    /// 只读检测，不申请授权或修改桌面设置。撤销记录只保存在本机。
+    fn inspect_conflict(
+        &self,
+        _spec: &HotkeySpec,
+        _backup: &std::path::Path,
+    ) -> HotkeyConflictReport {
+        HotkeyConflictReport::default()
+    }
+    /// 仅在用户确认后调用；失败须回滚并给出手动处理原因。
+    fn resolve_conflict(
+        &self,
+        _spec: &HotkeySpec,
+        _backup: &std::path::Path,
+        _undo: bool,
+    ) -> Result<HotkeyConflictReport, String> {
+        Err("当前桌面不支持自动处理，请在系统快捷键设置中修改。".into())
+    }
+
     /// 注册 `spec`，成功时返回句柄，失败时返回可展示的原因。
     fn register(
         &self,

@@ -1,0 +1,29 @@
+.hotkey-conflict-panel { display:flex;flex-direction:column;gap:14px; }
+.hotkey-notice { padding:14px;border-radius:var(--fc-radius-control);background:var(--fc-warning-bg);color:var(--fc-warning-text);animation:hotkey-notice-arrive 180ms ease-out; }
+.hotkey-notice p,.hotkey-confirm p,.hotkey-manual p { margin:7px 0 0;font-size:12px;line-height:1.75; }
+.hotkey-notice-title { display:flex;gap:7px;align-items:center;font-size:13px; }
+.hotkey-notice-title .glyph { width:16px;height:16px;flex:none; }
+.hotkey-success { background:var(--fc-selection-bg);color:var(--fc-text); }
+.hotkey-actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;align-items:center; }
+.hotkey-secondary-actions { margin-top:0; }
+.hotkey-manual { font-size:12px; }
+.hotkey-manual ol { padding-left:20px;margin:12px 0; }
+.hotkey-manual li { padding-left:5px;margin-bottom:12px; }
+.hotkey-manual p { color:var(--fc-text-muted); }
+.hotkey-working { display:flex;gap:10px;align-items:center;padding:16px 0;font-size:13px; }
+.hotkey-spinner { width:16px;height:16px;border:2px solid var(--fc-border-strong);border-top-color:var(--fc-accent);border-radius:50%;animation:hotkey-spin 800ms linear infinite; }
+.hotkey-confirm { width:min(390px,calc(100% - 32px));max-height:calc(100% - 32px);box-sizing:border-box;overflow:auto;padding:22px;background:var(--fc-page-bg);color:var(--fc-text);border:1px solid var(--fc-border);border-radius:12px;box-shadow:var(--fc-shadow-overlay); }
+.hotkey-confirm[open] { animation:hotkey-dialog-arrive 200ms ease-out; }
+.hotkey-confirm::backdrop { background:rgba(20,29,40,.35);backdrop-filter:blur(3px); }
+.hotkey-confirm > .glyph { color:var(--fc-accent);width:22px;height:22px; }
+.hotkey-confirm h2 { font-size:19px;margin:12px 0 10px; }
+.hotkey-confirm p { color:var(--fc-text-muted); }
+.hotkey-confirm dl { background:var(--fc-info-bg);padding:0 12px;border-radius:7px;margin:14px 0; }
+.hotkey-confirm dl div { display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;padding:12px 0;font-size:11px; }
+.hotkey-confirm dl div+div { border-top:1px solid var(--fc-border); }
+.hotkey-confirm dd { margin:0;overflow-wrap:anywhere; }
+.hotkey-confirm .hotkey-actions { justify-content:flex-end;margin-top:20px; }
+@keyframes hotkey-notice-arrive { from { opacity:0;transform:translateY(3px); } }
+@keyframes hotkey-dialog-arrive { from { opacity:0;transform:scale(.97); } }
+@keyframes hotkey-spin { to { transform:rotate(360deg); } }
+@media(prefers-reduced-motion:reduce) { .hotkey-notice,.hotkey-confirm[open],.hotkey-spinner { animation:none; } }

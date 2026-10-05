@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright-core";
 import { releaseChecks } from "./release-checks.mjs";
+import { hotkeyConflictChecks } from "./hotkey-conflict-checks.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..");
@@ -623,6 +624,7 @@ async function main() {
     };
 
     await releaseChecks({ page, check, url, linkMockWorkspace, openSection, assert });
+    await hotkeyConflictChecks({ page, check, url, linkMockWorkspace, openSection, assert });
     await page.goto(url, { waitUntil: "load" });
     await page.waitForSelector(ROW);
 

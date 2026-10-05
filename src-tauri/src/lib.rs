@@ -38,6 +38,8 @@ pub fn run() {
             commands::get_capabilities,
             commands::get_settings,
             commands::set_settings,
+            commands::get_hotkey_conflict,
+            commands::resolve_hotkey_conflict,
             commands::get_status,
             commands::get_theme,
             commands::select_theme,

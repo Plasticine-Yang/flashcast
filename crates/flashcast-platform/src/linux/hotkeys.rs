@@ -13,6 +13,7 @@ use super::{detect_session_type, force_x11_backend};
 pub struct LinuxHotkeyManager {
     session: SessionType,
     force_x11: bool,
+    conflict_operation: std::sync::Mutex<()>,
 }
 
 impl Default for LinuxHotkeyManager {
@@ -26,11 +27,16 @@ impl LinuxHotkeyManager {
         Self {
             session: detect_session_type(),
             force_x11: force_x11_backend(),
+            conflict_operation: Default::default(),
         }
     }
 
     pub fn with_session(session: SessionType, force_x11: bool) -> Self {
-        Self { session, force_x11 }
+        Self {
+            session,
+            force_x11,
+            conflict_operation: Default::default(),
+        }
     }
 
     /// 当前会话下是否允许尝试注册。
@@ -52,6 +58,30 @@ impl LinuxHotkeyManager {
 }
 
 impl HotkeyManager for LinuxHotkeyManager {
+    fn inspect_conflict(
+        &self,
+        spec: &HotkeySpec,
+        backup: &std::path::Path,
+    ) -> crate::shortcut::HotkeyConflictReport {
+        let _operation = self
+            .conflict_operation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        super::gnome_hotkeys::inspect(self.session, spec, backup)
+    }
+    fn resolve_conflict(
+        &self,
+        spec: &HotkeySpec,
+        backup: &std::path::Path,
+        undo: bool,
+    ) -> Result<crate::shortcut::HotkeyConflictReport, String> {
+        let _operation = self
+            .conflict_operation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        super::gnome_hotkeys::resolve(self.session, spec, backup, undo)
+    }
+
     fn register(
         &self,
         spec: &HotkeySpec,

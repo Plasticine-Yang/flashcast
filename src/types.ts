@@ -111,6 +111,14 @@ export interface FocusedApp {
   window: number | null;
 }
 
+export interface HotkeyConflictReport {
+  status: "not-applicable" | "unknown" | "conflict" | "mismatch" | "clear";
+  canResolve: boolean;
+  canUndo: boolean;
+  effective: string | null;
+  message: string | null;
+}
+
 export interface HotkeyStatus {
   pending?: boolean;
   label: string;

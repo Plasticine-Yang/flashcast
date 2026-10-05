@@ -1,5 +1,6 @@
 import { AppearanceControls } from "./AppearanceControls";
 import { Glyph } from "./Glyph";
+import { HotkeyConflictPanel } from "./HotkeyConflictPanel";
 import { useEffect, useState } from "react";
 import type {
   Capabilities,
@@ -11,6 +12,7 @@ import type {
   PluginView,
   Settings,
   HotkeyStatus,
+  HotkeyConflictReport,
   Support,
   SyncPhase,
   SyncProgress,
@@ -353,6 +355,8 @@ export function SettingsScreen({
   onSectionChange,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
+  const [hotkeyConflict, setHotkeyConflict] = useState<HotkeyConflictReport | null>(null);
+  const [hotkeyBusy, setHotkeyBusy] = useState(false);
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
   const [remoteUrl, setRemoteUrl] = useState("");
   const [tokenUser, setTokenUser] = useState("");
@@ -376,7 +380,7 @@ export function SettingsScreen({
   // 禁用状态并失去焦点，此时焦点在 body 上，容器上的 onKeyDown 不会再触发。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
         event.preventDefault();
         onBack();
       }
@@ -389,7 +393,7 @@ export function SettingsScreen({
   // 输入框与多行文本自己处理方向键，所以可编辑控件上不接管（←→ 与数字键另有用途）。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey) {
+      if (event.metaKey || event.ctrlKey || event.altKey || document.querySelector("dialog[open]")) {
         return;
       }
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
@@ -801,6 +805,7 @@ export function SettingsScreen({
               spellCheck={false}
               autoComplete="off"
               placeholder="Alt+Space"
+              disabled={busy || hotkeyBusy}
               value={hotkeyDraft}
               onChange={(event) => setHotkeyDraft(event.target.value)}
             />
@@ -808,19 +813,18 @@ export function SettingsScreen({
               type="button"
               className="primary-button"
               data-testid="hotkey-save"
-              disabled={busy}
+              disabled={busy || hotkeyBusy}
               onClick={() => onSaveHotkey(hotkeyDraft)}
             >
               保存
             </button>
           </div>
           <p className="settings-hint" data-testid="hotkey-status">
-            当前生效：{hotkey?.pending ? "等待系统授权" : hotkey?.registered ? hotkey.label : "未注册"}
+            当前绑定：{hotkey?.pending ? "等待系统授权" : hotkey?.registered ? hotkeyConflict?.effective ?? hotkey.label : "未注册"}
             {hotkey?.error ? `（${hotkey.error}）` : ""}
           </p>
-          <p className="settings-hint">
-            修改后写入工作区的 settings.toml。Wayland 会请求系统授权，最终按键以系统绑定为准；已有绑定可在系统快捷键设置中修改。
-          </p>
+          <HotkeyConflictPanel desired={settings?.hotkey ?? ""} hotkey={hotkey} active={current === "hotkey"} busy={busy} onBusyChange={setHotkeyBusy} onReportChange={setHotkeyConflict} onSaveHotkey={onSaveHotkey}/>
+          <p className="settings-hint">系统决定最终绑定的按键。修改后请确认可以唤起 Flashcast。</p>
         </section>
 
         <section
