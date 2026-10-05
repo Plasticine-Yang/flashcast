@@ -1,0 +1,16 @@
+[
+  {
+    "file": "home-@2x.png",
+    "state": "home",
+    "size": "1280x840",
+    "zoom": 2,
+    "issues": []
+  },
+  {
+    "file": "theme-@2x.png",
+    "state": "theme",
+    "size": "1280x840",
+    "zoom": 2,
+    "issues": []
+  }
+]

@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "project": "Flashcast · 全产品重设计",
+  "brief": "以同一批软件、备忘录和剪贴板内容比较三套界面。640×420 桌面窗口；单张查看可操作搜索、范围切换和设置（快捷键 / 外观 / 备忘录 / 剪贴板 / 工作区）。探索小样不连接真实宿主。",
+  "round": "02",
+  "candidates": [
+    {
+      "id": "current",
+      "name": "当前版本",
+      "concept": "当前棱镜实现：通栏输入与结果/预览分栏，软件选中时预览重复名称。",
+      "typography": "系统无衬线；输入16px、标题14px、辅助12px",
+      "palette": [
+        "#ffffff",
+        "#2b62ff",
+        "#f5f5f6"
+      ],
+      "traits": [
+        "640×420 当前搜索入口",
+        "固定右侧预览",
+        "当前设置另存基线截图"
+      ],
+      "kind": "html",
+      "source": "baseline.html",
+      "baseline": true
+    },
+    {
+      "id": "graphite",
+      "name": "石墨 · Graphite",
+      "concept": "让结果占满窗口，用一条安静的底部预览确认内容。",
+      "typography": "系统无衬线；输入19px、结果14px、设置标题23px",
+      "palette": [
+        "#1c1d22",
+        "#343b52",
+        "#c5d0ff"
+      ],
+      "traits": [
+        "深石墨表面与冷银紫选区",
+        "通栏结果 + 条件底部预览",
+        "侧栏设置，独立页头"
+      ],
+      "kind": "html",
+      "source": "graphite.html",
+      "interactive": true
+    },
+    {
+      "id": "ivory",
+      "name": "晨光 · Ivory",
+      "concept": "用清楚的排版和柔和的紫色选择，让常用工具有轻盈的秩序。",
+      "typography": "系统无衬线；输入21px/500、结果14px、设置标题23px",
+      "palette": [
+        "#fdfdfc",
+        "#7152c4",
+        "#ede7fa"
+      ],
+      "traits": [
+        "浅色墨紫，少边框",
+        "结果副标题收起，内容确认位于下方",
+        "外观缩略图与舒展设置排版"
+      ],
+      "kind": "html",
+      "source": "ivory.html",
+      "interactive": true
+    },
+    {
+      "id": "rail",
+      "name": "航道 · Rail",
+      "concept": "把入口放在左侧，搜索与内容按任务切换，不重复占用空间。",
+      "typography": "系统无衬线；输入18px、结果14px、设置标题22px",
+      "palette": [
+        "#16392f",
+        "#f6f7f9",
+        "#e1eee9"
+      ],
+      "traits": [
+        "深绿导航轨道 + 亮白内容",
+        "软件通栏、备忘录/剪贴板分栏",
+        "设置使用顶部分类导航"
+      ],
+      "kind": "html",
+      "source": "rail.html",
+      "interactive": true
+    }
+  ]
+}

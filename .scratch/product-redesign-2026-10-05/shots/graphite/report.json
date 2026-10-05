@@ -1,0 +1,30 @@
+[
+  {
+    "file": "home.png",
+    "state": "home",
+    "size": "640x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "hotkey.png",
+    "state": "hotkey",
+    "size": "640x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "theme.png",
+    "state": "theme",
+    "size": "640x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "memos.png",
+    "state": "memos",
+    "size": "640x420",
+    "zoom": 1,
+    "issues": []
+  }
+]

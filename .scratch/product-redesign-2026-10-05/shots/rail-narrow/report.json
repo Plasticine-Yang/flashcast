@@ -1,0 +1,23 @@
+[
+  {
+    "file": "home.png",
+    "state": "home",
+    "size": "480x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "theme.png",
+    "state": "theme",
+    "size": "480x420",
+    "zoom": 1,
+    "issues": []
+  },
+  {
+    "file": "memos.png",
+    "state": "memos",
+    "size": "480x420",
+    "zoom": 1,
+    "issues": []
+  }
+]
