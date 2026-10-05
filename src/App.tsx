@@ -135,7 +135,7 @@ export default function App() {
     // 首屏必须是一次空查询：宿主的 snapshot() 只回放当前状态，在还没有查询过时
     // 它是空的，只有 query("") 才会给出快速访问项。
     void api.query("").then(apply);
-    void api.get_status().then(setStatus);
+    void api.get_status().then(next => { setStatus(next); setPlugins(next.plugins); });
     // 设置页的运行环境与能力报告直接来自平台层的 CapabilityProbe（`get_capabilities`）。
     void api.get_capabilities().then(setCapabilities);
     void api.get_workspace().then((next) => {
@@ -199,6 +199,7 @@ export default function App() {
           // 工作区被外部改动后，变更视图必须按仓库真实状态重新读取。
           void loadChanges();
           void loadSync();
+          void loadPlugins();
           if (event.reload?.error) {
             setSettingsMessage({ level: "error", text: event.reload.error });
           } else if (event.reload?.applied) {
@@ -872,6 +873,22 @@ export default function App() {
     // 这里只显示反馈、不隐藏（真实外壳在关窗后会以最终状态更新同一块反馈区）。
   };
 
+  const switchScope = async (plugin: PluginView | null) => {
+    const keyword = plugin ? plugin.keywords[0] ?? plugin.name : "";
+    setInput(keyword);
+    focusInput();
+    const next = await api.query(keyword);
+    apply(next);
+    if (plugin && next.scope.kind === "home" && next.seq === appliedSeq.current) {
+      const entry = next.items.find(item => item.id === `flashcast.plugin.${plugin.id}`);
+      if (entry) {
+        const outcome = await api.execute(entry.id);
+        if (outcome.status === "failed") setFeedback(outcome);
+        else apply(await api.query(keyword));
+      }
+    }
+  };
+
   /**
    * 搜索界面的键盘入口：挂在 `window` 上，**不是**挂在输入框上。
    *
@@ -1117,10 +1134,10 @@ export default function App() {
           />
 
           <div className="scope-strip" aria-label="查询范围">
-            <button type="button" aria-pressed={response.scope.kind === "home"} onClick={() => { void runQuery(""); focusInput(); }}>快速访问</button>
-            {(status?.plugins ?? plugins).filter(plugin => plugin.enabled).map(plugin => <button key={plugin.id} type="button"
+            <button type="button" aria-pressed={response.scope.kind === "home"} onClick={() => void switchScope(null)}>快速访问</button>
+            {plugins.filter(plugin => plugin.enabled).map(plugin => <button key={plugin.id} type="button"
               aria-pressed={response.scope.kind === "plugin" && response.scope.id === plugin.id}
-              onClick={() => { void runQuery(plugin.keywords[0] ?? plugin.name); focusInput(); }}>{plugin.name}</button>)}
+              onClick={() => void switchScope(plugin)}>{plugin.name}</button>)}
           </div>
           <div className="search-body" data-has-preview={selected && ["memo", "bookmark", "clipboardEntry"].includes(selected.kind) ? "true" : "false"}>
             <ResultList
