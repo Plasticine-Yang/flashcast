@@ -39,6 +39,7 @@ pkg-config --modversion webkit2gtk-4.1
 pnpm install                 # 安装前端依赖
 pnpm dev                     # 仅启动 UI（浏览器交互检查）
 pnpm tauri dev               # 启动完整桌面应用
+pnpm dev:check               # 检查开发产物隔离、源码监听及更新
 pnpm build                   # 构建前端产物
 pnpm ui-check                # 浏览器交互检查（自动起停 Vite + 真实 Chrome）
 cargo test --workspace       # 运行全部无头测试
@@ -46,6 +47,42 @@ cargo build -p flashcast     # 编译 Tauri 宿主
 cargo run -p flashcast-platform --bin flashcast-platform-check   # 真实平台检查
 cargo clippy --workspace --all-targets
 ```
+
+## 开发产物与清理
+
+Rust workspace 的默认编译目录是根目录 `target/`，其中包含用于加速后续编译的缓存。
+多次迭代、切换编译配置或升级工具链后，目录可能明显增大。日常开发保留缓存；需要回收
+磁盘空间时，先停止开发服务器和 Cargo 编译，再按需执行：
+
+```bash
+du -sh target artifacts                      # 查看本机产物体积
+pnpm dev:clean --dry-run                     # 预览清理 workspace 成员的产物
+pnpm dev:clean                               # 清理成员产物，保留外部依赖的编译缓存
+cargo clean --dry-run                        # 预览完整清理
+cargo clean                                  # 完整清理，下次启动需要重新编译依赖
+```
+
+`pnpm ui-check` 每次运行会重建 `artifacts/ui/`，只保留当前运行的截图和日志。
+`artifacts/` 下的发布记录和平台诊断有独立用途，需要按用途处理。
+
+### Vite 报 ENOSPC
+
+当错误包含 `syscall: 'watch'` 和 `System limit for number of file watchers reached` 时，
+先检查监听范围。`.gitignore` 只影响 Git，Vite 的忽略规则由 `vite.config.ts` 的
+`server.watch.ignored` 决定。根目录 `target/`、`artifacts/` 和 `src-tauri/` 已显式排除；
+`dist/`、`node_modules/` 与 `.git/` 由 Vite 默认排除。新增产物目录时，同步配置监听隔离，
+并扩展 `scripts/dev/watch.test.mjs` 的夹具。
+
+`pnpm dev:check` 在临时工作区加载真实 Vite 配置，验证产物目录没有被监听、前端源码修改
+仍被监听且能更新开发服务器响应。CI 的浏览器检查任务也运行它，因此无需等本机积累
+数万个文件才能发现遗漏。它是开发工具集成检查，不是 UI 单元测试。
+
+排除编译产物后，文件数量增加不会消耗 Vite 的监听额度。若仍报监听额度错误，再检查
+其他进程的占用与 `sysctl fs.inotify.max_user_watches fs.inotify.max_user_instances`。
+
+参考：[Cargo 构建缓存](https://doc.rust-lang.org/cargo/reference/build-cache.html)、
+[Cargo 清理选项](https://doc.rust-lang.org/cargo/commands/cargo-clean.html)、
+[Vite ENOSPC 排障](https://vite.dev/guide/troubleshooting#vite-crashes-with-enospc-error)。
 
 ## 测试约定
 

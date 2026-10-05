@@ -336,6 +336,8 @@ jobs:
           pnpm --dir tools/ui-check install --frozen-lockfile
       - name: Check release gates
         run: pnpm release:check
+      - name: Check dev watcher isolation
+        run: pnpm dev:check
       - name: Browser interaction gate
         run: pnpm ui-check
       - name: Upload browser diagnostics

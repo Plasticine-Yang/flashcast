@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:check": "node --test scripts/dev/watch.test.mjs",
+    "dev:clean": "cargo clean --workspace",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
