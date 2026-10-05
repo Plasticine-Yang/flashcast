@@ -16,3 +16,5 @@ Category: enhancement
 - 分支 CI 保留四个平台目标与两个跨目标检查，增加浏览器验收；Release 复用成功 CI，只打包与发布。手动 Release 只生成候选包，错误版本标签在打包前拒绝。
 - 文档与本地 tracker 改动跳过重型 CI；首个浏览器失败立即停止，默认四张代表截图、失败截图、结构化报告与 Vite 日志。
 - TypeScript / 生产构建、actionlint 工作流校验、git diff --check 通过。真实远端 CI 结果另记 verification.md。
+
+真实 CI 全部 7 项通过，发布入口已接受该提交的检查结果；见 ../verification.md。
