@@ -13,6 +13,77 @@ use crate::summon;
 
 /// 注册（或重新注册）全局快捷键，并把结果推送给 UI。
 pub fn apply<R: Runtime>(app: &AppHandle<R>, state: &AppState, raw: &str) {
+    #[cfg(target_os = "linux")]
+    if flashcast_platform::linux::detect_session_type() == flashcast_platform::SessionType::Wayland
+    {
+        let generation = {
+            let mut hotkey = lock(&state.hotkey);
+            hotkey.generation += 1;
+            hotkey.error = None;
+            hotkey.pending = true;
+            if hotkey.handle.is_none() {
+                hotkey.label = raw.to_string();
+            }
+            hotkey.generation
+        };
+        push_status(app, state);
+        let app = app.clone();
+        let raw = raw.to_string();
+        // BindShortcuts 会等待用户操作；不能堵住 GTK 主事件循环。
+        std::thread::spawn(move || {
+            let state = app.state::<AppState>();
+            let _registration = lock(&state.hotkey_registration);
+            if lock(&state.hotkey).generation != generation {
+                return;
+            }
+            let result = HotkeySpec::parse(&raw)
+                .map_err(Into::into)
+                .and_then(|spec| state.platform.hotkeys.register(&spec, callback(&app)));
+            let mut hotkey = lock(&state.hotkey);
+            if hotkey.generation != generation {
+                drop(hotkey);
+                if let Ok(handle) = result {
+                    let _ = state.platform.hotkeys.unregister(&handle);
+                }
+                return;
+            }
+            hotkey.pending = false;
+            match result {
+                Ok(handle) => {
+                    hotkey.label = handle.trigger_description.clone().unwrap_or(raw);
+                    let previous = hotkey.handle.replace(handle);
+                    hotkey.error = None;
+                    drop(hotkey);
+                    if let Some(previous) = previous {
+                        let _ = state.platform.hotkeys.unregister(&previous);
+                    }
+                }
+                Err(error) => {
+                    if hotkey.handle.is_none() {
+                        hotkey.label = raw;
+                    }
+                    hotkey.error = Some(error.to_string());
+                    drop(hotkey);
+                }
+            }
+            push_status(&app, &state);
+        });
+        return;
+    }
+    apply_sync(app, state, raw);
+}
+
+fn callback<R: Runtime>(app: &AppHandle<R>) -> PressCallback {
+    let app = app.clone();
+    Arc::new(move |activation| {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            summon::summon_with_activation(&handle, activation.token.as_deref());
+        });
+    })
+}
+
+fn apply_sync<R: Runtime>(app: &AppHandle<R>, state: &AppState, raw: &str) {
     // 先注销旧的，避免重新注册时与自身冲突。
     {
         let mut hotkey = lock(&state.hotkey);
@@ -34,16 +105,7 @@ pub fn apply<R: Runtime>(app: &AppHandle<R>, state: &AppState, raw: &str) {
         }
     };
 
-    let callback: PressCallback = {
-        let app = app.clone();
-        Arc::new(move || {
-            // 回调在非主线程执行，必须转回主线程再操作窗口。
-            let handle = app.clone();
-            let _ = app.run_on_main_thread(move || summon::summon(&handle));
-        })
-    };
-
-    match state.platform.hotkeys.register(&spec, callback) {
+    match state.platform.hotkeys.register(&spec, callback(app)) {
         Ok(handle) => {
             let mut hotkey = lock(&state.hotkey);
             hotkey.handle = Some(handle);
@@ -63,6 +125,7 @@ pub fn push_status<R: Runtime>(app: &AppHandle<R>, state: &AppState) {
         label: hotkey.label.clone(),
         error: hotkey.error.clone(),
         registered: hotkey.handle.is_some(),
+        pending: hotkey.pending,
     };
     drop(hotkey);
     let _ = app.emit("flashcast://hotkey-status", view);
@@ -75,6 +138,7 @@ pub fn status(state: &AppState) -> HotkeyStatusView {
         label: hotkey.label.clone(),
         error: hotkey.error.clone(),
         registered: hotkey.handle.is_some(),
+        pending: hotkey.pending,
     }
 }
 

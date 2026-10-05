@@ -164,6 +164,7 @@ struct Options {
     output: Option<String>,
     /// 允许检查真的写一次系统剪贴板（会覆盖用户当前剪贴板里的内容）。
     allow_clipboard_write: bool,
+    allow_hotkey_registration: bool,
 }
 
 fn parse_args() -> Options {
@@ -174,6 +175,7 @@ fn parse_args() -> Options {
             "--json" => options.json = true,
             "--output" => options.output = args.next(),
             "--allow-clipboard-write" => options.allow_clipboard_write = true,
+            "--allow-hotkey-registration" => options.allow_hotkey_registration = true,
             _ => {}
         }
     }
@@ -304,38 +306,55 @@ fn main() {
 
         // 5. 全局快捷键注册。
         let hotkeys = LinuxHotkeyManager::new();
-        let spec = HotkeySpec::parse("Ctrl+Alt+F12").expect("固定检查用快捷键必须可解析");
-        let hotkey_check = match hotkeys.register(&spec, Arc::new(|| {})) {
-            Ok(handle) => {
-                let _ = hotkeys.unregister(&handle);
-                CheckResult {
+        let spec = HotkeySpec::parse(if capabilities.session == SessionType::Wayland {
+            "Ctrl+Alt+Space"
+        } else {
+            "Ctrl+Alt+F12"
+        })
+        .expect("固定检查用快捷键必须可解析");
+        let hotkey_check = if capabilities.session == SessionType::Wayland
+            && !options.allow_hotkey_registration
+        {
+            CheckResult {
+                id: "hotkey.register", title: "全局快捷键注册", status: Status::NotCovered,
+                detail: "未请求授权；Wayland 门户会弹出系统绑定窗口，需要 --allow-hotkey-registration".into(),
+                command: "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-hotkey-registration".into(),
+            }
+        } else {
+            match hotkeys.register(&spec, Arc::new(|_| {})) {
+                Ok(handle) => {
+                    let actual = handle.trigger_description.clone().unwrap_or_else(|| spec.canonical());
+                    let closed = hotkeys.unregister(&handle);
+                    CheckResult {
+                        id: "hotkey.register",
+                        title: "全局快捷键注册",
+                        status: if closed.is_ok() { Status::MeasuredPass } else { Status::MeasuredFail },
+                        detail: match closed {
+                            Ok(()) => format!("申请 {}，系统绑定 {}；注册并注销成功", spec.canonical(), actual),
+                            Err(error) => format!("注册成功但注销失败：{error}"),
+                        },
+                        command: "cargo run -p flashcast-platform --bin flashcast-platform-check"
+                            .to_string(),
+                    }
+                }
+                Err(flashcast_platform::shortcut::HotkeyError::BackendUnavailable { reason }) => {
+                    CheckResult {
+                        id: "hotkey.register",
+                        title: "全局快捷键注册",
+                        status: Status::NotCovered,
+                        detail: reason,
+                        command: "cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-hotkey-registration".to_string(),
+                    }
+                }
+                Err(error) => CheckResult {
                     id: "hotkey.register",
                     title: "全局快捷键注册",
-                    status: Status::MeasuredPass,
-                    detail: format!("注册并注销 {} 成功", spec.canonical()),
+                    status: Status::MeasuredFail,
+                    detail: error.to_string(),
                     command: "cargo run -p flashcast-platform --bin flashcast-platform-check"
                         .to_string(),
-                }
+                },
             }
-            Err(flashcast_platform::shortcut::HotkeyError::BackendUnavailable { reason }) => {
-                CheckResult {
-                    id: "hotkey.register",
-                    title: "全局快捷键注册",
-                    status: Status::NotCovered,
-                    detail: reason,
-                    command: "FLASHCAST_FORCE_X11_BACKEND=1 cargo run -p flashcast-platform --bin \
-                              flashcast-platform-check"
-                        .to_string(),
-                }
-            }
-            Err(error) => CheckResult {
-                id: "hotkey.register",
-                title: "全局快捷键注册",
-                status: Status::MeasuredFail,
-                detail: error.to_string(),
-                command: "cargo run -p flashcast-platform --bin flashcast-platform-check"
-                    .to_string(),
-            },
         };
         checks.push(hotkey_check);
 
@@ -1492,7 +1511,7 @@ fn windows_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
             command: command.clone(),
         }
     } else {
-        match hotkeys.register(&spec, Arc::new(|| {})) {
+        match hotkeys.register(&spec, Arc::new(|_| {})) {
             Ok(handle) => {
                 let _ = hotkeys.unregister(&handle);
                 CheckResult {
@@ -2038,7 +2057,7 @@ fn macos_checks(capabilities: &Capabilities) -> Vec<CheckResult> {
     let hotkeys = MacosHotkeyManager::new();
     let spec = MacosHotkeySpec::parse("Ctrl+Alt+F12").expect("固定检查用快捷键必须可解析");
     checks.push(
-        match MacosHotkeyManagerTrait::register(&hotkeys, &spec, MacosArc::new(|| {})) {
+        match MacosHotkeyManagerTrait::register(&hotkeys, &spec, MacosArc::new(|_| {})) {
             Ok(handle) => {
                 let _ = MacosHotkeyManagerTrait::unregister(&hotkeys, &handle);
                 CheckResult {

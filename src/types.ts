@@ -112,6 +112,7 @@ export interface FocusedApp {
 }
 
 export interface HotkeyStatus {
+  pending?: boolean;
   label: string;
   error: string | null;
   registered: boolean;

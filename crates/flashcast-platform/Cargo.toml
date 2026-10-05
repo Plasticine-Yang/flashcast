@@ -32,6 +32,9 @@ plist = "1.10.1"
 global-hotkey = "0.8.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "global_shortcuts"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+futures-util = "0.3"
 # 与 global-hotkey 依赖的 x11rb 保持同一版本，避免重复编译两份。
 x11rb = "0.13.2"
 # 合成 Ctrl+V（研究笔记 §4.1：enigo 是唯一同时覆盖 Windows / macOS / X11 的成熟

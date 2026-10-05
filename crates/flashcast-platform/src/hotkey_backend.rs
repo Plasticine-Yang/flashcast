@@ -112,7 +112,7 @@ fn ensure_listener() {
                     }
                     let callback = lock_callbacks().get(&event.id()).cloned();
                     if let Some(callback) = callback {
-                        callback();
+                        callback(crate::shortcut::HotkeyActivation::default());
                     }
                 }
             })
@@ -289,10 +289,10 @@ pub fn classify(error: global_hotkey::Error, spec: &HotkeySpec) -> HotkeyError {
 
 /// 句柄上的占位回调。真正的分发走全局表，因此这里不会被执行。
 fn dummy_callback(id: u32) -> PressCallback {
-    std::sync::Arc::new(move || {
+    std::sync::Arc::new(move |activation| {
         let callback = lock_callbacks().get(&id).cloned();
         if let Some(callback) = callback {
-            callback();
+            callback(activation);
         }
     })
 }

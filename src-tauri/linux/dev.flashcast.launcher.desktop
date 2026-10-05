@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Flashcast
+Exec=flashcast
+Icon=flashcast
+NoDisplay=true
+Terminal=false

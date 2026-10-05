@@ -71,6 +71,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d62b7694a562cdf5a74227903507c56ab2cc8bdd1f781ed5cb4cf9c9f810bfc"
 
 [[package]]
+name = "ashpd"
+version = "0.13.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb8421aaa9644a5faf26735f258b669b15f063313ef8f8e2bdb28912a1a6f111"
+dependencies = [
+ "enumflags2",
+ "futures-util",
+ "getrandom 0.4.3",
+ "serde",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1118,11 +1132,12 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
 name = "flashcast"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "flashcast-core",
  "flashcast-platform",
+ "gtk",
  "serde",
  "serde_json",
  "tauri",
@@ -1133,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "flashcast-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "flashcast-platform",
  "git2",
@@ -1149,9 +1164,11 @@ dependencies = [
 
 [[package]]
 name = "flashcast-platform"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
+ "ashpd",
  "enigo",
+ "futures-util",
  "global-hotkey",
  "image",
  "lnk",
@@ -1164,6 +1181,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "tokio",
  "windows 0.62.2",
  "windows-registry",
  "x11rb",
@@ -4332,8 +4350,22 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
+ "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -5594,6 +5626,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_repr",
+ "tokio",
  "tracing",
  "uds_windows",
  "uuid",

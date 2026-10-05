@@ -65,6 +65,7 @@ pub struct HotkeyStatusView {
     pub error: Option<String>,
     /// 是否已成功注册。
     pub registered: bool,
+    pub pending: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

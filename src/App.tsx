@@ -834,13 +834,18 @@ export default function App() {
     void runSettingsAction(
       () => api.set_settings({ ...settings, hotkey }),
       (hotkeyStatus) => {
-        setSettings({ ...settings, hotkey: hotkeyStatus.label });
+        // 配置保存用户请求的组合；门户返回的 label 只用于显示实际绑定。
+        setSettings({ ...settings, hotkey });
         setStatus((current) => (current ? { ...current, hotkey: hotkeyStatus } : current));
         setSettingsMessage({
           level: "info",
-          text: hotkeyStatus.registered
-            ? `快捷键已立即生效：${hotkeyStatus.label}`
-            : `快捷键 ${hotkeyStatus.label} 注册失败：${hotkeyStatus.error ?? "原因未知"}`,
+          text: hotkeyStatus.pending
+            ? "快捷键配置已保存，系统授权结果会显示在「当前生效」中。"
+            : hotkeyStatus.error
+              ? `快捷键配置已保存，但注册失败：${hotkeyStatus.error}`
+              : hotkeyStatus.registered
+                ? `快捷键已立即生效：${hotkeyStatus.label}`
+                : "快捷键配置已保存，正在注册。",
         });
       },
     );

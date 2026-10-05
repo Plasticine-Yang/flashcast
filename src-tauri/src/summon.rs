@@ -22,6 +22,11 @@ pub const SEARCH_WINDOW: &str = "search";
 
 /// 唤起：先记录唤起前的前台应用，再显示并聚焦窗口，最后通知 UI 聚焦输入框。
 pub fn summon<R: Runtime>(app: &AppHandle<R>) {
+    summon_with_activation(app, None);
+}
+
+/// 门户签发的激活令牌随这次按键传入，不写环境变量或持久化。
+pub fn summon_with_activation<R: Runtime>(app: &AppHandle<R>, token: Option<&str>) {
     let state = app.state::<AppState>();
     let previous = match state.capture_previous_app() {
         Ok(previous) => Some(previous),
@@ -38,6 +43,13 @@ pub fn summon<R: Runtime>(app: &AppHandle<R>) {
 
     if let Some(window) = app.get_webview_window(SEARCH_WINDOW) {
         let _ = window.center();
+        #[cfg(target_os = "linux")]
+        if let (Some(token), Ok(native)) = (token, window.gtk_window()) {
+            use gtk::prelude::GtkWindowExt;
+            native.set_startup_id(token);
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = token;
         let _ = window.show();
         let _ = window.set_focus();
     }

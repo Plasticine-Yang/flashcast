@@ -9,6 +9,7 @@ pub mod chrome;
 pub mod clipboard;
 pub mod focus;
 pub mod hotkeys;
+mod portal_hotkeys;
 pub mod launcher;
 pub mod paste;
 pub mod x11;

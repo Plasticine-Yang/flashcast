@@ -10,6 +10,7 @@ import type {
   MemoProblem,
   PluginView,
   Settings,
+  HotkeyStatus,
   Support,
   SyncPhase,
   SyncProgress,
@@ -154,7 +155,7 @@ interface Props {
   theme: ThemeState | null;
   materialNotice: string | null;
   onAppearanceChange: (appearance: import("../types").ThemeAppearance, style: string, reduce: boolean) => void;
-  hotkey: { label: string; error: string | null; registered: boolean } | null;
+  hotkey: HotkeyStatus | null;
   /** 运行环境与能力状态（来自平台层的真实探测）。 */
   capabilities: Capabilities | null;
   message: SettingsMessage | null;
@@ -814,11 +815,11 @@ export function SettingsScreen({
             </button>
           </div>
           <p className="settings-hint" data-testid="hotkey-status">
-            当前生效：{hotkey?.registered ? hotkey.label : "未注册"}
+            当前生效：{hotkey?.pending ? "等待系统授权" : hotkey?.registered ? hotkey.label : "未注册"}
             {hotkey?.error ? `（${hotkey.error}）` : ""}
           </p>
           <p className="settings-hint">
-            修改后立即生效，并写入工作区的 settings.toml，可以直接用编辑器维护。
+            修改后写入工作区的 settings.toml。Wayland 会请求系统授权，最终按键以系统绑定为准；已有绑定可在系统快捷键设置中修改。
           </p>
         </section>
 

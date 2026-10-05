@@ -56,6 +56,11 @@ export function StatusBanner({ status, response, feedback, workspaceAlert }: Pro
           {notice.message}
         </div>
       ) : null}
+      {status?.hotkey.pending ? (
+        <div className="banner banner-info" data-testid="hotkey-pending" role="status">
+          正在等待系统快捷键授权，请在系统弹窗中确认「打开 Flashcast」。
+        </div>
+      ) : null}
       {hotkeyError ? (
         <div className="banner banner-warning" data-testid="hotkey-warning" role="status">
           全局快捷键 {status?.hotkey.label} 注册失败：{hotkeyError}

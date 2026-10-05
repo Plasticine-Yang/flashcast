@@ -5,17 +5,23 @@ use std::sync::Arc;
 
 use crate::hotkey::HotkeySpec;
 
-/// 快捷键被按下时调用的回调。
-///
-/// 回调在**非主线程**上执行；实现方不得在回调内直接操作窗口，应转发到主线程
-/// 或事件循环。
-pub type PressCallback = Arc<dyn Fn() + Send + Sync + 'static>;
+/// 一次快捷键激活携带的平台凭据。
+#[derive(Debug, Clone, Default)]
+pub struct HotkeyActivation {
+    /// Wayland 合成器签发的窗口激活凭据；仅供这次唤起使用。
+    pub token: Option<String>,
+}
+
+/// 回调在非主线程执行；窗口操作须转发到主线程。
+pub type PressCallback = Arc<dyn Fn(HotkeyActivation) + Send + Sync + 'static>;
 
 /// 已注册快捷键的句柄。`id` 由实现分配，`spec` 保留注册时的规格以便注销。
 #[derive(Clone)]
 pub struct HotkeyHandle {
     pub id: u64,
     pub spec: HotkeySpec,
+    /// 门户实际绑定的按键说明，可能与首选组合不同。
+    pub trigger_description: Option<String>,
     pub(crate) callback: PressCallback,
 }
 
@@ -30,12 +36,17 @@ impl std::fmt::Debug for HotkeyHandle {
 
 impl HotkeyHandle {
     pub fn new(id: u64, spec: HotkeySpec, callback: PressCallback) -> Self {
-        Self { id, spec, callback }
+        Self {
+            id,
+            spec,
+            callback,
+            trigger_description: None,
+        }
     }
 
     /// 触发该快捷键的回调。供测试替身与诊断使用。
     pub fn fire(&self) {
-        (self.callback)();
+        (self.callback)(HotkeyActivation::default());
     }
 }
 
@@ -63,11 +74,8 @@ pub trait HotkeyManager: Send + Sync {
     ) -> Result<HotkeyHandle, HotkeyError>;
 
     /// 用新规格替换已注册的快捷键，返回新的句柄。
-    fn update(
-        &self,
-        handle: &HotkeyHandle,
-        spec: &HotkeySpec,
-    ) -> Result<HotkeyHandle, HotkeyError>;
+    fn update(&self, handle: &HotkeyHandle, spec: &HotkeySpec)
+        -> Result<HotkeyHandle, HotkeyError>;
 
     /// 注销已注册的快捷键。重复注销不视为错误。
     fn unregister(&self, handle: &HotkeyHandle) -> Result<(), HotkeyError>;

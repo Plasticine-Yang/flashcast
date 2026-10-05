@@ -66,10 +66,11 @@ impl CapabilityProbe for LinuxCapabilityProbe {
                     "XWayland 下抓取通常无法收到按键，结果不可靠"
                 ),
             },
-            SessionType::Wayland => Support::Unsupported {
-                reason: "Wayland 会话不支持全局快捷键抓取（global-hotkey 仅实现 X11 的 XGrabKey，\
-                         GNOME 未提供 XDG GlobalShortcuts 门户的一等实现）；请使用托盘入口打开 Flashcast"
-                    .to_string(),
+            SessionType::Wayland => match super::portal_hotkeys::available() {
+                Ok(()) => Support::Unknown {
+                    reason: "已检测到 XDG GlobalShortcuts 门户；快捷键由系统授权并分配，实际绑定与唤起需在桌面验证".to_string(),
+                },
+                Err(error) => Support::Unsupported { reason: error.to_string() },
             },
             SessionType::Headless => Support::Unsupported {
                 reason: "当前没有桌面会话".to_string(),

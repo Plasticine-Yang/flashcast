@@ -18,6 +18,9 @@ pub struct HotkeyState {
     pub error: Option<String>,
     /// 当前生效的快捷键写法。
     pub label: String,
+    /// 避免迟到的门户授权覆盖更新后的设置。
+    pub generation: u64,
+    pub pending: bool,
 }
 
 pub struct AppState {
@@ -26,6 +29,7 @@ pub struct AppState {
     /// 唤起前处于前台的应用程序（用于后续的粘贴恢复）。
     pub previous_app: Mutex<Option<FocusedApp>>,
     pub hotkey: Mutex<HotkeyState>,
+    pub hotkey_registration: Mutex<()>,
     /// 图标 data URL 缓存，按文件路径索引。
     pub icons: Mutex<HashMap<PathBuf, Option<String>>>,
     /// 剪贴板图片缩略图 data URL 缓存，按附件路径索引（ticket 10）。
@@ -44,6 +48,7 @@ impl AppState {
             platform,
             previous_app: Mutex::new(None),
             hotkey: Mutex::new(HotkeyState::default()),
+            hotkey_registration: Mutex::new(()),
             icons: Mutex::new(HashMap::new()),
             thumbnails: Mutex::new(HashMap::new()),
             last_summon: Mutex::new(None),
@@ -80,5 +85,7 @@ impl AppState {
 }
 
 pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

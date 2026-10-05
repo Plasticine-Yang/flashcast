@@ -1,11 +1,7 @@
-//! Linux 全局快捷键：基于 `global-hotkey`（X11 `XGrabKey`）。
+//! Linux 全局快捷键：X11 使用 `global-hotkey`，Wayland 使用 XDG 门户。
 //!
-//! 该后端**只支持 X11**。Wayland 会话下抓取即便返回成功也不会收到按键事件，
-//! 因此默认拒绝注册并返回 [`HotkeyError::BackendUnavailable`]，让 UI 明确提示
-//! 用户改用托盘入口，而不是给出一个「看起来注册成功」的假象。
-//!
-//! 进程级回调表、按键映射与错误分类在 [`crate::hotkey_backend`] 中与 macOS 共享；
-//! 本模块只负责「当前会话是否允许注册」这一 Linux 专有判断。
+//! XWayland 抓取即便返回成功也不会收到原生 Wayland 按键事件，
+//! 因此 Wayland 默认走门户，只有诊断开关才强制使用 X11 后端。
 
 use crate::capability::SessionType;
 use crate::hotkey::HotkeySpec;
@@ -42,10 +38,7 @@ impl LinuxHotkeyManager {
         match self.session {
             SessionType::X11 => Ok(()),
             SessionType::Wayland if self.force_x11 => Ok(()),
-            SessionType::Wayland => Err(HotkeyError::BackendUnavailable {
-                reason: "Wayland 会话不支持全局快捷键抓取；请使用托盘入口，或在 X11 会话下运行"
-                    .to_string(),
-            }),
+            SessionType::Wayland => super::portal_hotkeys::available(),
             SessionType::Headless => Err(HotkeyError::BackendUnavailable {
                 reason: "当前没有桌面会话，无法注册全局快捷键".to_string(),
             }),
@@ -64,6 +57,9 @@ impl HotkeyManager for LinuxHotkeyManager {
         spec: &HotkeySpec,
         on_press: PressCallback,
     ) -> Result<HotkeyHandle, HotkeyError> {
+        if self.session == SessionType::Wayland && !self.force_x11 {
+            return super::portal_hotkeys::register(spec, on_press);
+        }
         self.backend_allowed()?;
         hotkey_backend::register(spec, on_press)
     }
@@ -73,10 +69,16 @@ impl HotkeyManager for LinuxHotkeyManager {
         handle: &HotkeyHandle,
         spec: &HotkeySpec,
     ) -> Result<HotkeyHandle, HotkeyError> {
+        if self.session == SessionType::Wayland && !self.force_x11 {
+            return super::portal_hotkeys::update(handle, spec);
+        }
         hotkey_backend::update(handle, spec)
     }
 
     fn unregister(&self, handle: &HotkeyHandle) -> Result<(), HotkeyError> {
+        if self.session == SessionType::Wayland && !self.force_x11 {
+            return super::portal_hotkeys::unregister(handle);
+        }
         hotkey_backend::unregister(handle)
     }
 }

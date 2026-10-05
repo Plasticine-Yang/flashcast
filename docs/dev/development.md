@@ -135,3 +135,15 @@ Windows 目标需要 `llvm-rc` 嵌入图标，macOS 目标需要能识别 `-arch
 
 当前开发机：Ubuntu 26.04 (resolute) x86_64，桌面会话为 **Wayland**（`XDG_SESSION_TYPE=wayland`，`WAYLAND_DISPLAY=wayland-0`），同时存在 XWayland 显示 `:0`。
 平台能力报告必须区分 X11 与 Wayland 检查结果，不能用 X11 检查推断 Wayland 支持。
+
+## Wayland 快捷键
+
+Wayland 使用 XDG GlobalShortcuts 门户，启动时由桌面请求用户授权，最终按键以系统绑定为准。没有实现该门户的桌面可用托盘，或在系统自定义快捷键中运行 `flashcast`。首次运行便携 AppImage／开发二进制时会按需创建 `~/.local/share/applications/dev.flashcast.launcher.desktop`（尊重 `XDG_DATA_HOME`），作为门户身份；该条目不显示在应用菜单。deb 随包提供身份文件。
+
+只读平台检查不触发授权弹窗。真实注册检查使用：
+
+```bash
+cargo run -p flashcast-platform --bin flashcast-platform-check -- --allow-hotkey-registration
+```
+
+该命令只验证注册和注销，不证明真实按键唤起。`cargo test -p flashcast-platform --test wayland_portal` 在隔离 D-Bus 总线上验证身份、授权响应、事件会话隔离、令牌传递及注销，不向实际桌面注入按键。

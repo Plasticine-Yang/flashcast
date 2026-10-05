@@ -118,7 +118,7 @@ pub fn run() {
             host.start_clipboard_capture();
             app.manage(AppState::new(host, platform));
 
-            // 托盘是 Linux 上的必需备用入口（Wayland 下快捷键注册会失败）。
+            // 托盘是 Linux 上的备用入口（快捷键门户不可用或授权被取消时）。
             tray::create(&handle)?;
             // 注册全局快捷键；失败只会产生可展示的错误，不影响托盘入口。
             hotkey::apply_from_settings(&handle);

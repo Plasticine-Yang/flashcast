@@ -58,7 +58,7 @@ export interface HostApi {
   refresh_state(): Promise<QueryView>;
   get_capabilities(): Promise<Capabilities>;
   get_settings(): Promise<Settings>;
-  set_settings(settings: Settings): Promise<{ label: string; error: string | null; registered: boolean }>;
+  set_settings(settings: Settings): Promise<StatusView["hotkey"]>;
   get_status(): Promise<StatusView>;
   /** 当前主题状态：选中主题、CSS 自定义属性与可选主题列表。 */
   get_theme(): Promise<ThemeState>;
@@ -1896,7 +1896,7 @@ class MockHost implements HostApi {
     return this.settings;
   }
 
-  async set_settings(settings: Settings): Promise<{ label: string; error: string | null; registered: boolean }> {
+  async set_settings(settings: Settings): Promise<StatusView["hotkey"]> {
     // 与宿主一致：无效设置被拒绝，保留上一次有效状态。
     if (!looksLikeHotkey(settings.hotkey)) {
       throw `快捷键无效：无法识别的写法「${settings.hotkey}」`;
