@@ -44,6 +44,7 @@ impl CapabilityProbe for LinuxCapabilityProbe {
         }
         if session == SessionType::Wayland {
             notes.push(WAYLAND_FOCUS_REASON.to_string());
+            notes.push("剪贴板后台捕获需要 data-control；缺少该协议时停止后台读取，避免临时窗口夺走焦点。手动写入和历史查询仍可使用。".into());
             if has_x11_display {
                 notes.push(
                     "检测到 XWayland 的 DISPLAY，但 X11 检查结果不能推断 Wayland 下的行为。"

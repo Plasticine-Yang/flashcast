@@ -23,7 +23,7 @@
 //! 因此恢复时写文本并如实报告 HTML/RTF 未同时提供——富文本载荷仍在本机历史里。
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use crate::capability::SessionType;
 use crate::clipboard::{
@@ -390,6 +390,7 @@ pub struct LinuxClipboardWatcher {
     own: Mutex<Vec<u64>>,
     /// 由 Flashcast 自己写入、尚未被 `poll` 消费掉的文件列表指纹。
     own_files: Mutex<Vec<u64>>,
+    background_support: OnceLock<Result<(), ClipboardError>>,
 }
 
 impl Default for LinuxClipboardWatcher {
@@ -407,6 +408,7 @@ impl LinuxClipboardWatcher {
             last_files: Mutex::new(None),
             own: Mutex::new(Vec::new()),
             own_files: Mutex::new(Vec::new()),
+            background_support: OnceLock::new(),
         }
     }
 
@@ -418,6 +420,7 @@ impl LinuxClipboardWatcher {
             last_files: Mutex::new(None),
             own: Mutex::new(Vec::new()),
             own_files: Mutex::new(Vec::new()),
+            background_support: OnceLock::new(),
         }
     }
 
@@ -495,7 +498,26 @@ impl LinuxClipboardWatcher {
 }
 
 impl ClipboardWatcher for LinuxClipboardWatcher {
+    fn check_background_support(&self) -> Result<(), ClipboardError> {
+        // wl-paste 没有 data-control 时会创建临时窗口取选区；后台轮询会夺焦点，
+        // 触发宿主的「失焦隐藏」。先用不创建窗口的 watch 路径探测，禁止该回退。
+        // 手动写入仍走原来的 ClipboardAccess，不受后台捕获限制影响。
+        self.background_support
+            .get_or_init(|| {
+                if self.session != SessionType::Wayland || self.force_x11 {
+                    return Ok(());
+                }
+                let program =
+                    find_program("wl-paste").ok_or_else(|| ClipboardError::ToolMissing {
+                        reason: "Wayland 后台捕获需要 wl-paste".into(),
+                    })?;
+                probe_background_capture(&program)
+            })
+            .clone()
+    }
+
     fn poll(&self) -> Result<ClipboardPoll, ClipboardError> {
+        self.check_background_support()?;
         // 文件列表优先：文件管理器复制文件时剪贴板里同时有 `text/uri-list` 与一段
         // 可读文字（URI 本身）。先按文件捕获，才能把「复制文件」与「复制这段文字」
         // 区分开，而不是把文件列表存成一条文字历史。
@@ -592,5 +614,109 @@ impl ClipboardWatcher for LinuxClipboardWatcher {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .push(fingerprint_files(paths));
+    }
+}
+
+/// watch 路径在缺失 data-control 时直接失败，不会像普通读取一样创建临时窗口。
+/// 可用时它保持监听；限时中止这次探测，不运行任何会读取/写入内容的回调。
+fn probe_background_capture(program: &std::path::Path) -> Result<(), ClipboardError> {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let mut child = Command::new(program)
+        .args(["--watch", "true"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| ClipboardError::ReadFailed(format!("后台捕获预检失败：{error}")))?;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let mut message = String::new();
+                if let Some(stderr) = child.stderr.take() {
+                    use std::io::Read;
+                    let _ = stderr.take(4096).read_to_string(&mut message);
+                }
+                if message.contains("data-control") {
+                    return Err(ClipboardError::Unsupported {
+                        reason: "当前 Wayland 桌面未提供 data-control，后台捕获已停止，避免读取工具夺走焦点。已有历史仍可使用；可在支持该协议的桌面或 X11 会话记录剪贴板。".into(),
+                    });
+                }
+                return Err(ClipboardError::ReadFailed(format!(
+                    "后台捕获预检失败：{}",
+                    if message.trim().is_empty() {
+                        "监听工具提前退出"
+                    } else {
+                        message.trim()
+                    }
+                )));
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(());
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ClipboardError::ReadFailed(format!(
+                    "后台捕获预检失败：{error}"
+                )));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    fn tool(body: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "flashcast-clipboard-probe-{}-{}",
+            std::process::id(),
+            fingerprint(body)
+        ));
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+    #[test]
+    fn background_probe_rejects_compositor_without_data_control() {
+        let path = tool("echo 'Watch mode requires a compositor that supports the wlroots data-control protocol' >&2; exit 1");
+        let result = probe_background_capture(&path);
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            matches!(result, Err(ClipboardError::Unsupported { .. })),
+            "must reject focus-stealing fallback: {result:?}"
+        );
+    }
+    #[test]
+    fn rejected_background_support_prevents_all_clipboard_reads() {
+        let watcher = LinuxClipboardWatcher::with_session(SessionType::Wayland, false);
+        let error = ClipboardError::Unsupported {
+            reason: "data-control unavailable".into(),
+        };
+        watcher.background_support.set(Err(error.clone())).unwrap();
+        assert_eq!(watcher.poll(), Err(error));
+    }
+    #[test]
+    fn background_probe_accepts_a_running_watch_and_reaps_it() {
+        let path = tool("exec sleep 5");
+        let result = probe_background_capture(&path);
+        std::fs::remove_file(path).unwrap();
+        assert!(result.is_ok());
+    }
+    #[test]
+    fn background_probe_reports_failed_connection_instead_of_allowing_read() {
+        let path = tool("echo 'Failed to connect to a Wayland server' >&2; exit 1");
+        let result = probe_background_capture(&path);
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            result.is_err(),
+            "failed probe cannot permit background capture"
+        );
     }
 }

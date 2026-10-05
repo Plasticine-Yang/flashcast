@@ -6,6 +6,7 @@ interface Props {
   clipboard: ClipboardStateView | null;
   busy: boolean;
   onTogglePaused: (paused: boolean) => void;
+  onEnable: () => void;
   onSaveLimits: (retentionDays: number, capacity: number) => void;
   onPin: (id: string, pinned: boolean) => void;
   onDelete: (id: string) => void;
@@ -59,6 +60,7 @@ export function ClipboardPanel({
   clipboard,
   busy,
   onTogglePaused,
+  onEnable,
   onSaveLimits,
   onPin,
   onDelete,
@@ -94,18 +96,14 @@ export function ClipboardPanel({
 
   return (
     <section className="settings-section" data-testid="clipboard-section">
-      <h2 className="settings-section-title">剪贴板历史</h2>
+      <header className="panel-heading"><h2 className="settings-section-title">剪贴板历史</h2><span>{clipboard.entries} 条记录</span></header>
 
-      <p className="settings-hint" data-testid="clipboard-state-summary">
-        状态：
-        {clipboard.enabled ? "已启用" : "未启用（默认关闭，启用后才会后台记录）"}
-        {" · "}
-        {clipboard.enabled ? (clipboard.paused ? "已暂停记录" : (clipboard.captureActive ? "正在记录" : "等待后台捕获")) : "未记录"}
-        {" · "}
-        {clipboard.captureActive ? "后台捕获运行中" : "后台捕获未运行"}
-        {" · "}
-        本机条目 {clipboard.entries}/{clipboard.capacity}
-      </p>
+      <div className="capture-status" data-testid="clipboard-state-summary" data-active={clipboard.enabled && !clipboard.paused && clipboard.captureActive}>
+        <span className="status-dot" />
+        <div><strong>{!clipboard.enabled ? "记录未启用" : clipboard.paused ? "记录已暂停" : clipboard.captureActive ? "正在记录" : clipboard.lastError ? "后台记录不可用" : "等待后台捕获"}</strong>
+        <p>{!clipboard.enabled ? "启用剪贴板插件后，开始保存复制内容。" : clipboard.paused ? "已有历史仍可搜索和粘贴。" : clipboard.captureActive ? "复制的文字、图片和文件会出现在历史中。" : "已有历史仍可搜索和粘贴。"}</p></div>
+        <span className="capture-count">{clipboard.entries}<small> / {clipboard.capacity}</small></span>
+      </div>
 
       {/* 存储失败、容量触顶与最近一次捕获失败各有独立提示，绝不静默成功。 */}
       {!clipboard.storageOk && clipboard.storageError ? (
@@ -125,6 +123,7 @@ export function ClipboardPanel({
       ) : null}
 
       <div className="settings-row">
+        {!clipboard.enabled ? <button className="primary-button" type="button" data-testid="clipboard-enable" disabled={busy} onClick={onEnable}>启用记录</button> : (
         <button
           type="button"
           className="secondary-button"
@@ -134,6 +133,7 @@ export function ClipboardPanel({
         >
           {clipboard.paused ? "恢复记录" : "暂停记录"}
         </button>
+        )}
         <button
           type="button"
           className="secondary-button"
@@ -152,7 +152,8 @@ export function ClipboardPanel({
         </button>
       </div>
 
-      <div className="settings-row">
+      <details className="storage-details"><summary>保留与容量 <span>{clipboard.retentionDays} 天 · {clipboard.capacity} 条</span></summary>
+      <div className="retention-fields">
         <label className="settings-label" htmlFor="clipboard-retention">
           保留期限（天）
         </label>
@@ -186,17 +187,15 @@ export function ClipboardPanel({
           disabled={busy}
           onClick={() => onSaveLimits(Number(retentionDraft), Number(capacityDraft))}
         >
-          保存范围
+          保存设置
         </button>
       </div>
+      </details>
 
       {clipboard.items.length === 0 ? (
-        <p className="settings-hint" data-testid="clipboard-empty">
-          还没有记录到内容。启用插件并在任意应用里复制文字或文件，历史会出现在「剪贴板」或
-          「剪切板」关键词下。文件条目默认只是对原文件的引用，需要时可显式保存本机副本。
-        </p>
+        <div className="content-empty" data-testid="clipboard-empty"><strong>复制过的内容，在这里找回</strong><p>{clipboard.enabled ? "复制一段文字后，返回查看历史。" : "在功能插件中启用剪贴板历史，开始记录。"}</p></div>
       ) : (
-        <ul className="theme-list" data-testid="clipboard-list">
+        <ul className="theme-list clipboard-history-list" data-testid="clipboard-list">
           {clipboard.items.map((entry) => (
             <li
               className={`theme-item${entry.files.length > 0 ? " clipboard-item-files" : ""}`}
@@ -297,18 +296,7 @@ export function ClipboardPanel({
         </ul>
       )}
 
-      <p className="settings-hint">
-        历史与索引保存在本机数据目录（
-        <code>{clipboard.storagePath}</code>
-        ），不进入配置工作区；只有「暂停、保留期限、容量」这些可迁移偏好写在
-        settings.toml 里。重复内容会自动去重，Flashcast 自己的粘贴写入不会被再次记录。
-      </p>
-
-      <p className="settings-hint">
-        文件条目默认只是对原文件的引用：原文件被移动或删除后就无法恢复。
-        「保存本机副本」会把文件复制到本机数据目录（受单份与总容量限制，本机专用），
-        原文件只会被读取，不会被移动或删除；删除、清空与过期回收只清理不再被引用的副本。
-      </p>
+      <details className="storage-details"><summary>存储与文件说明</summary><p className="settings-hint">历史只保存在本机，不随配置同步。重复内容会去重，Flashcast 的粘贴不会再次记录。</p><code className="storage-path">{clipboard.storagePath}</code><p className="settings-hint">文件默认保存引用；移动或删除原文件后无法恢复。需要时可保存本机副本。</p></details>
     </section>
   );
 }

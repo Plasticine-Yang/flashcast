@@ -2620,6 +2620,10 @@ impl ClipboardRuntime {
 
     /// 启动后台轮询。已经在跑时是空操作。
     pub fn start(self: &Arc<Self>) {
+        if let Err(error) = self.watcher.check_background_support() {
+            self.record_failure(error.to_string());
+            return;
+        }
         let mut pump = self.pump.lock().unwrap_or_else(|p| p.into_inner());
         if pump
             .as_ref()

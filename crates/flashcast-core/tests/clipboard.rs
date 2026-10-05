@@ -1736,3 +1736,40 @@ fn image_history_is_not_searched_from_the_home_screen() {
     let scoped = harness.host.query("剪贴板");
     assert_eq!(scoped.items.len(), 1);
 }
+
+#[test]
+fn unsupported_background_capture_preserves_plugin_and_history_without_polling() {
+    let harness = clipboard_host(fast_settings());
+    harness.enable();
+    harness.copy("已有内容仍可取用");
+    harness.host.stop_clipboard_capture();
+    let polls = harness.watcher.poll_count();
+    harness
+        .watcher
+        .set_background_error(ClipboardError::Unsupported {
+            reason: "data-control unavailable".into(),
+        });
+    harness.host.start_clipboard_capture();
+    let state = harness.host.clipboard_state();
+    assert!(state.enabled);
+    assert!(!state.capture_active);
+    assert!(state
+        .last_error
+        .as_deref()
+        .unwrap()
+        .contains("data-control"));
+    assert_eq!(
+        harness.watcher.poll_count(),
+        polls,
+        "unsafe background reads must not run"
+    );
+    let results = harness.host.query("剪贴板");
+    assert!(
+        !results.items.is_empty(),
+        "existing history remains searchable"
+    );
+    assert_eq!(
+        results.items[0].default_action,
+        flashcast_core::DefaultAction::Paste
+    );
+}

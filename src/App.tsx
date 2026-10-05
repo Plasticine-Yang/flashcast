@@ -23,6 +23,7 @@ import type {
   ClipboardStateView,
 } from "./types";
 import { ActionBar } from "./components/ActionBar";
+import { MemoWorkbench } from "./components/MemoWorkbench";
 import { MemoPreview } from "./components/MemoPreview";
 import { ResultList } from "./components/ResultList";
 import {
@@ -112,6 +113,7 @@ export default function App() {
   const [plugins, setPlugins] = useState<PluginView[]>([]);
   const [memos, setMemos] = useState<Memo[]>([]);
   const [memoProblems, setMemoProblems] = useState<MemoProblem[]>([]);
+  const [memoEditing, setMemoEditing] = useState(false);
   const [chrome, setChrome] = useState<ChromeState | null>(null);
   /** 剪贴板历史状态与管理列表（ticket 09）。 */
   const [clipboard, setClipboard] = useState<ClipboardStateView | null>(null);
@@ -447,6 +449,7 @@ export default function App() {
       () => api.create_memo(title, tags, body),
       async (memo) => {
         await loadMemos();
+        apply(await api.query(input));
         setSettingsMessage({ level: "info", text: `已创建备忘录：${memo.title}` });
       },
     );
@@ -456,6 +459,7 @@ export default function App() {
       () => api.update_memo(id, title, tags, body),
       async (memo) => {
         await loadMemos();
+        apply(await api.query(input));
         setSettingsMessage({ level: "info", text: `已保存备忘录：${memo.title}` });
       },
     );
@@ -465,6 +469,7 @@ export default function App() {
       () => api.delete_memo(id),
       async () => {
         await loadMemos();
+        apply(await api.query(input));
         setSettingsMessage({ level: "info", text: `已删除备忘录：${id}` });
       },
     );
@@ -661,6 +666,8 @@ export default function App() {
   /** 设置页的入口动作：进入前先建立一次基线。 */
   const runSettingsAction = async <T,>(action: () => Promise<T>, done: (result: T) => void | Promise<void>): Promise<boolean> => {
     setSettingsBusy(true);
+    setSettingsMessage(null);
+    setFeedback(null);
     try {
       await done(await action());
       return true;
@@ -911,7 +918,7 @@ export default function App() {
       return;
     }
     // 设置页有自己的 window 级 Escape（返回搜索首屏），这里完全不接管。
-    if (screen !== "search") {
+    if (screen !== "search" || memoEditing) {
       return;
     }
     // Ctrl+, 打开设置（与常见桌面应用一致）。
@@ -1016,6 +1023,11 @@ export default function App() {
     };
   }, [selectedId]);
 
+  const memoView = (response.scope.kind === "plugin" && response.scope.id === "memo") || response.items.some(item => item.kind === "memo");
+  useEffect(() => {
+    if (screen === "search" && memoView) { void loadMemos(); setSettingsMessage(null); }
+  }, [screen, memoView, workspace?.path]);
+
   const scopeLabel = useMemo(() => response.scopeLabel, [response.scopeLabel]);
 
   return (
@@ -1025,6 +1037,7 @@ export default function App() {
       data-window-visible={visible ? "true" : "false"}
       data-focused={focused ? "true" : "false"}
       data-screen={screen}
+      data-memo-editing={memoEditing}
       data-browser-preview={isBrowserMock ? "true" : "false"}
     >
       <header className="search-row">
@@ -1040,6 +1053,7 @@ export default function App() {
           spellCheck={false}
           placeholder="搜索软件、备忘录、剪贴板…"
           value={input}
+          disabled={memoEditing}
           aria-label="搜索"
           aria-controls="result-list"
           aria-activedescendant={selected ? `item-${selected.id}` : undefined}
@@ -1062,6 +1076,7 @@ export default function App() {
           type="button"
           className="ghost-button"
           data-testid="open-settings"
+          disabled={memoEditing}
           aria-label="设置"
           title="设置（Ctrl+,）"
           onClick={openSettings}
@@ -1144,6 +1159,12 @@ export default function App() {
               aria-pressed={response.scope.kind === "plugin" && response.scope.id === plugin.id}
               onClick={() => void switchScope(plugin)}>{plugin.name}</button>)}
           </div>
+          {memoView ? <MemoWorkbench items={response.items} selection={response.selection} memos={memos} problems={memoProblems}
+            workspaceKey={workspace?.path ?? null} enabled={memoPlugin?.enabled ?? false} busy={settingsBusy} message={settingsMessage}
+            onSelect={index => { void api.set_selection(index).then(apply); }} onPaste={item => void runExecute(item)}
+            onCreate={handleCreateMemo} onUpdate={handleUpdateMemo} onDelete={handleDeleteMemo}
+            onEditingChange={setMemoEditing}
+            onOpenWorkspace={() => { setSettingsSection("workspace"); openSettings(); }} /> : (
           <div className="search-body" data-has-preview={selected && ["memo", "bookmark", "clipboardEntry"].includes(selected.kind) ? "true" : "false"}>
             <ResultList
               items={response.items}
@@ -1167,7 +1188,9 @@ export default function App() {
             </aside>
           </div>
 
-          <ActionBar selected={selected} count={response.items.length} />
+          )}
+
+          <ActionBar selected={selected} count={response.items.length} editing={memoEditing} />
         </>
       )}
 

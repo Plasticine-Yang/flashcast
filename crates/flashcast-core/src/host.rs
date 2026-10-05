@@ -3357,8 +3357,7 @@ impl Host {
             QueryScope::Plugin { id, .. } => self.search_plugin_scope(inner, &ctx, &id),
         };
         if let (Some(manifest), Some(keyword)) = (keyword_entry, collision_keyword.as_ref()) {
-            // 插件入口排在最前（匹配层级相同，相关度最高）：直接回车仍然进入插件范围，
-            // 往下选择则可以使用标签命中的备忘录。
+            // 标签命中的正文优先，直接回车粘贴；仍保留插件入口供显式进入范围。
             ranked.push(RankedItem {
                 item: plugin_entry_item(&manifest, keyword),
                 source_order: 0,
@@ -3571,9 +3570,7 @@ pub const PLUGIN_ENTRY_PREFIX: &str = "flashcast.plugin.";
 
 /// 关键词与标签冲突时，首屏给出的插件入口条目（ADR §4）。
 ///
-/// 相关度给到最高、来源优先级为宿主自身，因此它排在标签命中的备忘录之前：用户按输入
-/// 关键词时的第一反应（回车进入插件）保持不变，同时标签命中的备忘录就在下面，不会被
-/// 静默丢弃。
+/// 保持精确匹配层级，但相关度低于标签命中的备忘录，默认选择正文以便回车粘贴。
 pub fn plugin_entry_item(manifest: &crate::plugin::PluginManifest, keyword: &str) -> SearchItem {
     SearchItem {
         id: format!("{PLUGIN_ENTRY_PREFIX}{}", manifest.id),
@@ -3584,7 +3581,7 @@ pub fn plugin_entry_item(manifest: &crate::plugin::PluginManifest, keyword: &str
         kind: ItemKind::Command,
         default_action: DefaultAction::Open,
         preview: Preview::None,
-        score: Score::new(MatchTier::KeywordOrTagExact, u8::MAX),
+        score: Score::new(MatchTier::KeywordOrTagExact, 0),
     }
 }
 

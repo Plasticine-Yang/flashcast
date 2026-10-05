@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="blueprint" data-mode="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="Answer me with HTML 0.4.3">
+<title>Flashcast 插件机制与开发工作流</title>
+<style>
+html[data-theme="blueprint"], html[data-theme="blueprint"][data-mode="light"] {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --radius: 0px;
+  --shadow: none;
+  --bw: 1.5px;
+  --head-font: var(--font-sans);
+  --bg: #f6f6f3;
+  --paper: #ffffff;
+  --ink: #16181d;
+  --ink-2: #4b5260;
+  --ink-3: #8b929e;
+  --line: #1d2026;
+  --line-2: #d6dae1;
+  --fill: #f3f5f8;
+  --accent: #1d5fbf;
+  --accent-bg: #e4ecf8;
+  --ok: #1d5fbf;
+  --ok-bg: #e4ecf8;
+  --err: #c62828;
+  --err-bg: #fbeaea;
+  --warn: #a8620a;
+  --warn-bg: #fdf3e2;
+  --head-bg: #16181d;
+  --head-fg: #ffffff;
+}
+html[data-theme="blueprint"][data-mode="dark"] {
+  --bg: #081322;
+  --paper: #0d1c31;
+  --ink: #e6edf7;
+  --ink-2: #a9b8cc;
+  --ink-3: #6b7f99;
+  --line: #c9d6e8;
+  --line-2: #23385a;
+  --fill: #12253f;
+  --accent: #6ea8ff;
+  --accent-bg: #16305a;
+  --ok: #6ea8ff;
+  --ok-bg: #16305a;
+  --err: #ff7070;
+  --err-bg: #3b1620;
+  --warn: #f0b14a;
+  --warn-bg: #3a2a10;
+  --head-bg: #e6edf7;
+  --head-fg: #081322;
+}
+@media (prefers-color-scheme: dark) {
+html[data-theme="blueprint"][data-mode="auto"] {
+  --bg: #081322;
+  --paper: #0d1c31;
+  --ink: #e6edf7;
+  --ink-2: #a9b8cc;
+  --ink-3: #6b7f99;
+  --line: #c9d6e8;
+  --line-2: #23385a;
+  --fill: #12253f;
+  --accent: #6ea8ff;
+  --accent-bg: #16305a;
+  --ok: #6ea8ff;
+  --ok-bg: #16305a;
+  --err: #ff7070;
+  --err-bg: #3b1620;
+  --warn: #f0b14a;
+  --warn-bg: #3a2a10;
+  --head-bg: #e6edf7;
+  --head-fg: #081322;
+}
+}
+
+html[data-theme="shadcn"], html[data-theme="shadcn"][data-mode="light"] {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --radius: 8px;
+  --shadow: 0 1px 2px 0 rgba(0,0,0,0.05);
+  --bw: 1px;
+  --head-font: var(--font-sans);
+  --bg: #fafafa;
+  --paper: #ffffff;
+  --ink: #09090b;
+  --ink-2: #71717a;
+  --ink-3: #a1a1aa;
+  --line: #e4e4e7;
+  --line-2: #f0f0f2;
+  --fill: #f4f4f5;
+  --accent: #2563eb;
+  --accent-bg: #eff6ff;
+  --ok: #16a34a;
+  --ok-bg: #f0fdf4;
+  --err: #dc2626;
+  --err-bg: #fef2f2;
+  --warn: #d97706;
+  --warn-bg: #fffbeb;
+  --head-bg: #18181b;
+  --head-fg: #fafafa;
+}
+html[data-theme="shadcn"][data-mode="dark"] {
+  --bg: #09090b;
+  --paper: #121215;
+  --ink: #fafafa;
+  --ink-2: #a1a1aa;
+  --ink-3: #71717a;
+  --line: #27272a;
+  --line-2: #1c1c1f;
+  --fill: #18181b;
+  --accent: #60a5fa;
+  --accent-bg: #172554;
+  --ok: #4ade80;
+  --ok-bg: #052e16;
+  --err: #f87171;
+  --err-bg: #450a0a;
+  --warn: #fbbf24;
+  --warn-bg: #451a03;
+  --head-bg: #fafafa;
+  --head-fg: #18181b;
+}
+@media (prefers-color-scheme: dark) {
+html[data-theme="shadcn"][data-mode="auto"] {
+  --bg: #09090b;
+  --paper: #121215;
+  --ink: #fafafa;
+  --ink-2: #a1a1aa;
+  --ink-3: #71717a;
+  --line: #27272a;
+  --line-2: #1c1c1f;
+  --fill: #18181b;
+  --accent: #60a5fa;
+  --accent-bg: #172554;
+  --ok: #4ade80;
+  --ok-bg: #052e16;
+  --err: #f87171;
+  --err-bg: #450a0a;
+  --warn: #fbbf24;
+  --warn-bg: #451a03;
+  --head-bg: #fafafa;
+  --head-fg: #18181b;
+}
+}
+
+/* Answer me with HTML base — 只引用主题变量，禁止写死颜色（主题 token 见 themes/index.js） */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-sans); font-size: 14px; line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+code, pre, kbd { font-family: var(--font-mono); }
+
+/* ── 工具栏 ─────────────────────────────── */
+.am-toolbar {
+  position: fixed; top: 12px; right: 12px; z-index: 10; display: flex; gap: 6px;
+}
+.am-btn {
+  font: 12px/1 var(--font-sans); color: var(--ink); background: var(--paper);
+  border: 1px solid var(--line-2); border-radius: var(--radius); padding: 7px 10px; cursor: pointer;
+}
+.am-btn:hover { border-color: var(--ink-3); }
+.am-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── 页头 ───────────────────────────────── */
+.am-head { margin: 0 0 20px; padding-right: 260px; }
+.am-head h1 { margin: 0; font-size: 24px; line-height: 1.25; letter-spacing: -0.01em; }
+.am-sub { margin: 4px 0 0; color: var(--ink-2); }
+.am-head-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12px; color: var(--ink-2); }
+.am-head-meta b { font-family: var(--font-mono); font-weight: 400; color: var(--ink-3); margin-right: 6px; }
+.am-intro { margin-top: 12px; max-width: 80ch; }
+
+/* ── sheet 图纸板 ────────────────────────── */
+.am-sheet { max-width: 1680px; margin: 0 auto; padding: 32px 28px 40px; }
+.am-frame { position: relative; }
+.am-grid {
+  display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr));
+  gap: 20px; align-items: start;
+}
+.am-ruler { display: none; }
+html[data-theme="blueprint"] .am-frame { border: 1px solid var(--line); padding: 30px; }
+html[data-theme="blueprint"] .am-frame::before {
+  content: ""; position: absolute; inset: 18px; border: 1px solid var(--line); pointer-events: none;
+}
+html[data-theme="blueprint"] .am-ruler {
+  display: flex; position: absolute; font: 10px/1 var(--font-mono); color: var(--ink-3);
+}
+.am-ruler span { flex: 1; display: flex; align-items: center; justify-content: center; }
+.am-ruler--top, .am-ruler--bottom { left: 18px; right: 18px; height: 18px; }
+.am-ruler--top { top: 0; }
+.am-ruler--bottom { bottom: 0; }
+.am-ruler--left, .am-ruler--right { top: 18px; bottom: 18px; width: 18px; flex-direction: column; }
+.am-ruler--left { left: 0; }
+.am-ruler--right { right: 0; }
+.am-ruler--top span + span, .am-ruler--bottom span + span { border-left: 1px solid var(--line); }
+.am-ruler--left span + span, .am-ruler--right span + span { border-top: 1px solid var(--line); }
+
+/* ── 面板 ───────────────────────────────── */
+.am-panel {
+  background: var(--paper); border: var(--bw) solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); min-width: 0; overflow: hidden;
+}
+.am-panel-head {
+  display: flex; align-items: stretch; gap: 0; border-bottom: var(--bw) solid var(--line); min-height: 34px;
+}
+.am-panel-id {
+  display: flex; align-items: center; justify-content: center; min-width: 34px; padding: 0 8px;
+  background: var(--head-bg); color: var(--head-fg); font-weight: 600; font-size: 14px;
+}
+html[data-theme="shadcn"] .am-panel-id { border-radius: 6px; min-width: 24px; height: 24px; margin: 9px 0 9px 14px; font-size: 12px; }
+html[data-theme="shadcn"] .am-panel-head { border-bottom-width: 1px; }
+.am-panel-head h2 { margin: 0; padding: 7px 12px; font-size: 15px; font-weight: 600; flex: 1; display: flex; align-items: center; }
+.am-panel-meta { align-self: center; padding: 0 12px; font: 11px/1.3 var(--font-mono); color: var(--ink-2); text-align: right; }
+.am-panel-body { padding: 14px 16px 16px; }
+.am-panel-body > * + * { margin-top: 12px; }
+
+/* ── Markdown 正文 ───────────────────────── */
+.am-md > :first-child { margin-top: 0; }
+.am-md > :last-child { margin-bottom: 0; }
+.am-md p { margin: 0 0 8px; }
+.am-md ul, .am-md ol { margin: 0 0 8px; padding-left: 20px; }
+.am-md li + li { margin-top: 3px; }
+.am-md h3, .am-md h4 { margin: 14px 0 6px; font-size: 13px; }
+.am-md a { color: var(--accent); }
+.am-md blockquote { margin: 0 0 8px; padding: 2px 12px; border-left: 3px solid var(--line-2); color: var(--ink-2); }
+.am-md :not(pre) > code { font-size: 0.9em; background: var(--fill); padding: 1px 5px; border-radius: 4px; }
+.am-md hr { border: 0; border-top: 1px solid var(--line-2); margin: 12px 0; }
+.am-md table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.am-md th {
+  text-align: left; font: 11px/1.3 var(--font-mono); color: var(--ink-2); font-weight: 400;
+  padding: 6px 10px; border-bottom: 1px solid var(--line-2);
+}
+.am-md td { padding: 7px 10px; border-bottom: 1px solid var(--line-2); vertical-align: top; }
+.am-md tbody tr:nth-child(even) td { background: var(--fill); }
+.am-table-wrap { overflow-x: auto; }
+.am-code {
+  margin: 0; padding: 12px 14px; background: var(--fill); border: 1px solid var(--line-2);
+  border-radius: var(--radius); overflow-x: auto; font-size: 12.5px; line-height: 1.5;
+}
+
+/* ── 状态徽章 ok / no / warn ──────────────── */
+.am-status { white-space: nowrap; font-weight: 500; }
+.am-status--ok { color: var(--ok); }
+.am-status--no { color: var(--err); }
+.am-status--warn { color: var(--warn); }
+.am-status-icon { display: inline-block; width: 1.1em; font-weight: 700; }
+
+/* ── callout ─────────────────────────────── */
+.am-callout {
+  border: 1px solid var(--line-2); border-left: 3px solid var(--accent); background: var(--accent-bg);
+  padding: 10px 14px; border-radius: var(--radius);
+}
+.am-callout--ok { border-left-color: var(--ok); background: var(--ok-bg); }
+.am-callout--warn { border-left-color: var(--warn); background: var(--warn-bg); }
+.am-callout--err { border-left-color: var(--err); background: var(--err-bg); }
+.am-callout-title { font-weight: 600; margin-bottom: 4px; }
+
+/* ── kv 标题栏格 ─────────────────────────── */
+.am-kv {
+  display: grid; grid-template-columns: repeat(var(--kv-cols, 2), minmax(0, 1fr)); margin: 0;
+  border-top: var(--bw) solid var(--line); border-left: var(--bw) solid var(--line);
+}
+.am-kv-cell { border-right: var(--bw) solid var(--line); border-bottom: var(--bw) solid var(--line); padding: 6px 10px 8px; min-width: 0; }
+.am-kv-cell--wide { grid-column: 1 / -1; }
+.am-kv dt { font: 11px/1.4 var(--font-mono); color: var(--ink-2); }
+.am-kv dd { margin: 2px 0 0; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.am-kv-cell--wide dd { font-size: 17px; font-weight: 600; }
+html[data-theme="shadcn"] .am-kv { border-color: var(--line); border-radius: var(--radius); overflow: hidden; }
+
+/* ── timeline ────────────────────────────── */
+.am-timeline { list-style: none; margin: 0; padding: 0; }
+.am-timeline--h { display: grid; grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr)); padding-top: 4px; }
+.am-timeline--h li { position: relative; text-align: center; padding: 0 6px; }
+.am-timeline--h li::before {
+  content: ""; position: absolute; top: 31px; left: 0; right: 0; border-top: var(--bw) solid var(--line);
+}
+.am-timeline--h li:first-child::before { left: 50%; }
+.am-timeline--h li:last-child::before { right: 50%; }
+.am-tl-when { display: block; font-size: 15px; font-weight: 500; height: 24px; }
+.am-tl-dot {
+  position: relative; display: block; width: 11px; height: 11px; margin: 2px auto 8px;
+  border: var(--bw) solid var(--line); border-radius: 50%; background: var(--paper);
+}
+.am-tl-item--hi .am-tl-dot { background: var(--accent); border-color: var(--accent); }
+.am-tl-title { display: block; font-size: 12.5px; font-weight: 500; }
+.am-tl-text { display: block; font-size: 12px; color: var(--ink-2); line-height: 1.45; }
+.am-timeline--v li { position: relative; padding: 0 0 14px 22px; }
+.am-timeline--v li::before { content: ""; position: absolute; left: 5px; top: 6px; bottom: -6px; border-left: var(--bw) solid var(--line-2); }
+.am-timeline--v li:last-child::before { display: none; }
+.am-timeline--v .am-tl-dot { position: absolute; left: 0; top: 4px; margin: 0; }
+.am-timeline--v .am-tl-when { display: inline; height: auto; font: 12px var(--font-mono); color: var(--ink-2); margin-right: 8px; }
+.am-timeline--v .am-tl-title { display: inline; font-size: 14px; }
+.am-timeline--v .am-tl-text { margin-top: 2px; }
+
+/* ── annot 句子标注 ──────────────────────── */
+.am-annot + .am-annot { border-top: 1px solid var(--line-2); padding-top: 12px; }
+.am-annot-head { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.am-annot-meta { font: 11px var(--font-mono); font-weight: 400; color: var(--ink-2); }
+.am-annot-scroll { overflow-x: auto; }
+.am-annot-line {
+  position: relative; display: inline-block; white-space: pre; font: 14px/1.6 var(--font-mono);
+  padding-bottom: calc(var(--rows, 0) * 17px + 14px);
+}
+.am-annot-line--wrap { display: block; white-space: normal; padding-bottom: 10px; }
+.am-annot-line--wrap .am-seg { white-space: nowrap; }
+.am-seg { position: relative; }
+.am-seg::after {
+  content: ""; position: absolute; left: 1px; right: 1px; top: calc(100% + 1px); height: 5px;
+  border: 1px solid var(--accent); border-top: 0;
+}
+.am-seg-n {
+  position: absolute; left: 0; top: calc(100% + 8px + var(--row, 0) * 17px);
+  font: 11px/16px var(--font-sans); color: var(--accent); white-space: nowrap;
+}
+.am-seg--err { color: var(--err); }
+.am-seg--err::after { border-color: var(--err); }
+.am-seg--err .am-seg-n { color: var(--err); }
+.am-annot-caption { font-size: 12px; color: var(--ink-2); }
+
+/* ── limits 限值条 ───────────────────────── */
+.am-lim + .am-lim { margin-top: 14px; }
+.am-lim-head { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; margin-bottom: 4px; }
+.am-lim-val { font: 12px var(--font-mono); color: var(--accent); white-space: nowrap; }
+.am-lim-track { position: relative; height: 12px; border: 1px solid var(--line-2); background: var(--fill); border-radius: calc(var(--radius) / 2); }
+.am-lim-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent-bg); border-right: 1px solid var(--accent); }
+.am-lim-mark { position: absolute; top: -4px; bottom: -4px; border-left: 2px solid var(--accent); }
+.am-lim.is-over .am-lim-fill { background: var(--err-bg); border-right-color: var(--err); }
+.am-lim.is-over .am-lim-val { color: var(--err); }
+.am-lim-ticks { position: relative; height: 16px; font: 10px/16px var(--font-mono); color: var(--ink-3); }
+.am-lim-ticks span { position: absolute; transform: translateX(-50%); }
+.am-lim-ticks span:first-child { transform: none; }
+.am-lim-note { font-size: 11px; color: var(--ink-2); margin-left: 6px; }
+
+/* ── tree 结构树 ─────────────────────────── */
+.am-tree { font-size: 13px; }
+.am-tree-root { display: flex; justify-content: center; position: relative; padding-bottom: 18px; }
+.am-tree-root::after { content: ""; position: absolute; bottom: 0; left: 50%; height: 18px; border-left: var(--bw) solid var(--line); }
+.am-tree-root--solo { padding-bottom: 12px; }
+.am-tree-root--solo::after { display: none; }
+.am-tree-box {
+  border: var(--bw) solid var(--line); background: var(--paper); padding: 6px 14px; text-align: center;
+  border-radius: var(--radius); font-weight: 600;
+}
+.am-tree-box small { display: block; font-weight: 400; color: var(--ink-2); font-size: 12px; }
+.am-tree-box--root { background: var(--accent-bg); font-size: 15px; padding: 8px 28px; }
+.am-tree-cols { display: grid; grid-template-columns: repeat(var(--n, 1), minmax(0, 1fr)); }
+.am-tree-col { position: relative; padding: 18px 8px 0; min-width: 0; }
+.am-tree-col::before { content: ""; position: absolute; top: 0; left: 0; right: 0; border-top: var(--bw) solid var(--line); }
+.am-tree-col:first-child::before { left: 50%; }
+.am-tree-col:last-child::before { right: 50%; }
+.am-tree-col::after { content: ""; position: absolute; top: 0; left: 50%; height: 18px; border-left: var(--bw) solid var(--line); }
+.am-tree-list, .am-tree-list ul { list-style: none; margin: 0; padding: 0; }
+.am-tree-col > .am-tree-list { margin: 8px 0 0 14px; }
+.am-tree-list ul { margin-left: 16px; }
+.am-tree-list li { position: relative; padding: 3px 0 3px 18px; }
+.am-tree-list li::before { content: ""; position: absolute; left: 0; top: 0.95em; width: 12px; border-top: 1px solid var(--ink-3); }
+.am-tree-list li::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--ink-3); }
+.am-tree-list li:last-child::after { bottom: auto; height: 0.95em; }
+.am-tree-tag { font: 11px var(--font-mono); color: var(--ink-3); margin-right: 4px; }
+.am-tree code { font: 12px var(--font-mono); }
+.am-tree-sub { display: block; font-size: 11.5px; color: var(--ink-2); }
+.am-tree-hi > .am-tree-label { color: var(--accent); font-weight: 600; }
+
+/* ── 图（flow / sequence）───────────────── */
+.am-diagram { margin: 0; overflow-x: auto; text-align: center; }
+.am-diagram svg { max-width: 100%; height: auto; font-family: var(--font-sans); }
+.am-diagram text { fill: var(--ink); font-size: 13px; }
+.am-node-shape { fill: var(--paper); stroke: var(--line); stroke-width: var(--bw); }
+.am-node--hi .am-node-shape { fill: var(--accent-bg); stroke: var(--accent); }
+.am-node--hi text { fill: var(--accent); font-weight: 600; }
+.am-edge { fill: none; stroke: var(--ink-2); stroke-width: 1.3; }
+.am-edge--dashed { stroke-dasharray: 5 4; }
+.am-arrow { fill: var(--ink-2); }
+.am-edge-label rect { fill: var(--paper); }
+.am-diagram .am-edge-label text { fill: var(--accent); font-size: 11.5px; }
+.am-cluster { fill: var(--fill); stroke: var(--line-2); stroke-width: 1; stroke-dasharray: 4 3; }
+.am-diagram .am-cluster-label { fill: var(--ink-2); font: 11px var(--font-mono); }
+.am-lifeline { stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 4 4; }
+.am-actor { fill: var(--paper); stroke: var(--line); stroke-width: var(--bw); }
+.am-note { fill: var(--warn-bg); stroke: var(--warn); stroke-width: 1; }
+.am-diagram .am-step { fill: var(--ink-3); font: 10px var(--font-mono); }
+
+/* ── doc 线性讲解 ────────────────────────── */
+.am-doc { max-width: 1120px; margin: 0 auto; padding: 40px 28px 64px; }
+.am-doc-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 32px; align-items: start; }
+.am-doc-layout--notoc { grid-template-columns: minmax(0, 1fr); max-width: 860px; }
+.am-toc { position: sticky; top: 24px; font-size: 13px; }
+.am-toc a { display: block; color: var(--ink-2); text-decoration: none; padding: 4px 0 4px 10px; border-left: 2px solid var(--line-2); }
+.am-toc a:hover { color: var(--ink); border-left-color: var(--accent); }
+.am-doc-body > .am-panel + .am-panel { margin-top: 20px; }
+
+/* ── 响应式与打印 ─────────────────────────── */
+@media (max-width: 1100px) {
+  .am-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .am-grid > .am-panel { grid-column: auto !important; }
+  .am-grid > .am-panel.am-span-wide { grid-column: 1 / -1 !important; }
+}
+@media (max-width: 760px) {
+  .am-sheet, .am-doc { padding: 56px 12px 24px; }
+  .am-head { padding-right: 0; }
+  .am-grid { grid-template-columns: minmax(0, 1fr); }
+  .am-grid > .am-panel.am-span-wide { grid-column: auto !important; }
+  html[data-theme="blueprint"] .am-frame { padding: 0; border: 0; }
+  html[data-theme="blueprint"] .am-frame::before, html[data-theme="blueprint"] .am-ruler { display: none; }
+  .am-doc-layout { grid-template-columns: minmax(0, 1fr); }
+  .am-toc { position: static; }
+  .am-timeline--h { grid-template-columns: minmax(0, 1fr); }
+  .am-tree-cols { grid-template-columns: minmax(0, 1fr); }
+}
+.am-colophon { text-align: center; padding: 0 0 28px; font: 11px var(--font-mono); color: var(--ink-3); }
+
+@media print {
+  .am-toolbar { display: none; }
+  body { background: var(--paper); }
+  .am-panel { break-inside: avoid; box-shadow: none; }
+}
+.am-panel--bare { border: 0; background: transparent; box-shadow: none; }
+.am-panel--bare > .am-panel-body { padding: 0; }
+.am-panel--bare .am-kv { background: var(--paper); }
+
+</style>
+</head>
+<body>
+<div class="am-toolbar">
+<button class="am-btn" type="button" data-am="theme" data-labels="{&quot;blueprint&quot;:&quot;主题：图纸&quot;,&quot;shadcn&quot;:&quot;主题：卡片&quot;}">主题：图纸</button>
+<button class="am-btn" type="button" data-am="mode" data-labels="{&quot;auto&quot;:&quot;明暗：跟随系统&quot;,&quot;light&quot;:&quot;明暗：亮&quot;,&quot;dark&quot;:&quot;明暗：暗&quot;}">明暗：跟随系统</button>
+<button class="am-btn" type="button" data-am="copy" data-done="已复制 ✓">复制源稿</button>
+</div>
+<main class="am-doc">
+<header class="am-head"><h1>Flashcast 插件机制与开发工作流</h1><p class="am-sub">依据当前仓库实现，区分现有能力与未来扩展</p></header>
+<div class="am-doc-layout">
+<nav class="am-toc" aria-label="目录"><a href="#panel-A">A · 先看结论</a><a href="#panel-B">B · 三个内置插件怎样工作</a><a href="#panel-C">C · 查询与执行链</a><a href="#panel-D">D · 统一规范覆盖了什么</a><a href="#panel-E">E · 在当前仓库继续扩展</a><a href="#panel-F">F · 用独立仓库写插件</a><a href="#panel-G">G · 以后开放独立安装，需要补什么</a><a href="#panel-H">H · 本页依据</a></nav><div class="am-doc-body">
+<section class="am-panel" id="panel-A">
+<header class="am-panel-head"><span class="am-panel-id">A</span><h2>先看结论</h2></header>
+<div class="am-panel-body"><div class="am-callout am-callout--info" role="note"><div class="am-callout-title">有统一契约，功能插件仍随宿主编译</div><div class="am-callout-body am-md"><p>三个内置功能插件遵守相同 Rust 接口。
+功能插件清单记录版本、关键词和能力。
+清单文件不能加载新的可执行代码。
+主题插件使用声明式数据，可以安装主题包。
+独立仓库可提供 Rust crate，仍需接入并编译宿主。</p>
+</div></div></div>
+</section>
+<section class="am-panel" id="panel-B">
+<header class="am-panel-head"><span class="am-panel-id">B</span><h2>三个内置插件怎样工作</h2></header>
+<div class="am-panel-body"><div class="am-md"><div class="am-table-wrap"><table>
+<thead>
+<tr>
+<th>插件</th>
+<th>搜索数据</th>
+<th>首屏贡献</th>
+<th>默认操作</th>
+<th>后台与持久化</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>备忘录</td>
+<td>MemoBook 的只读快照</td>
+<td>完整标签命中</td>
+<td>粘贴正文</td>
+<td>宿主管理工作区的 Markdown 文件</td>
+</tr>
+<tr>
+<td>剪贴板历史</td>
+<td>ClipboardStore</td>
+<td>不参与</td>
+<td>粘贴历史内容</td>
+<td>宿主启动捕获；SQLite 与附件留在本机</td>
+</tr>
+<tr>
+<td>Chrome 书签</td>
+<td>BookmarkBook 的只读快照</td>
+<td>不参与</td>
+<td>在关联用户中打开链接</td>
+<td>宿主读取 Bookmarks 并刷新索引</td>
+</tr>
+</tbody></table></div>
+<p>插件负责提供结果。宿主负责排序、选择、预览和执行。
+新增能力先在平台适配层实现，再由宿主授权使用。
+剪贴板默认关闭。停用后停止搜索与后台捕获。</p>
+</div></div>
+</section>
+<section class="am-panel" id="panel-C">
+<header class="am-panel-head"><span class="am-panel-id">C</span><h2>查询与执行链</h2></header>
+<div class="am-panel-body"><figure class="am-diagram am-seq"><svg viewBox="0 0 698 390" width="698" height="390" role="img" aria-label="时序图：界面、宿主、注册表、功能插件、平台适配层" xmlns="http://www.w3.org/2000/svg"><defs><marker id="am1-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="am-arrow" d="M0,0 L10,5 L0,10 z"/></marker></defs><line class="am-lifeline" x1="54" y1="42" x2="54" y2="386"/><g data-key="界面"><rect class="am-actor" x="12" y="8" width="84" height="34" rx="2"/><text x="54" y="25" text-anchor="middle" dominant-baseline="central" font-weight="600">界面</text></g><line class="am-lifeline" x1="231" y1="42" x2="231" y2="386"/><g data-key="宿主"><rect class="am-actor" x="189" y="8" width="84" height="34" rx="2"/><text x="231" y="25" text-anchor="middle" dominant-baseline="central" font-weight="600">宿主</text></g><line class="am-lifeline" x1="395" y1="42" x2="395" y2="386"/><g data-key="注册表"><rect class="am-actor" x="353" y="8" width="84" height="34" rx="2"/><text x="395" y="25" text-anchor="middle" dominant-baseline="central" font-weight="600">注册表</text></g><line class="am-lifeline" x1="522.6" y1="42" x2="522.6" y2="386"/><g data-key="功能插件"><rect class="am-actor" x="480.6" y="8" width="84" height="34" rx="2"/><text x="522.6" y="25" text-anchor="middle" dominant-baseline="central" font-weight="600">功能插件</text></g><line class="am-lifeline" x1="639.1" y1="42" x2="639.1" y2="386"/><g data-key="平台适配层"><rect class="am-actor" x="592.6" y="8" width="93" height="34" rx="2"/><text x="639.1" y="25" text-anchor="middle" dominant-baseline="central" font-weight="600">平台适配层</text></g><g data-step="0"><text x="142.5" y="70" text-anchor="middle">query(input)</text><path class="am-edge" d="M54,80 L229,80" marker-end="url(#am1-arrow)"/><text class="am-step" x="60" y="74" text-anchor="start">1</text></g><g data-step="1"><text x="313" y="110" text-anchor="middle">解析关键词与查询范围</text><path class="am-edge" d="M231,120 L393,120" marker-end="url(#am1-arrow)"/><text class="am-step" x="237" y="114" text-anchor="start">2</text></g><g data-step="2"><text x="458.8" y="150" text-anchor="middle">search(context)</text><path class="am-edge" d="M395,160 L520.6,160" marker-end="url(#am1-arrow)"/><text class="am-step" x="401" y="154" text-anchor="start">3</text></g><g data-step="3"><text x="376.8" y="190" text-anchor="middle">SearchItem 列表</text><path class="am-edge am-edge--dashed" d="M522.6,200 L233,200" marker-end="url(#am1-arrow)"/><text class="am-step" x="516.6" y="194" text-anchor="end">4</text></g><g data-step="4"><text x="142.5" y="230" text-anchor="middle">排序后的结果与选择位置</text><path class="am-edge am-edge--dashed" d="M231,240 L56,240" marker-end="url(#am1-arrow)"/><text class="am-step" x="225" y="234" text-anchor="end">5</text></g><g data-step="5"><text x="142.5" y="270" text-anchor="middle">execute(item)</text><path class="am-edge" d="M54,280 L229,280" marker-end="url(#am1-arrow)"/><text class="am-step" x="60" y="274" text-anchor="start">6</text></g><g data-step="6"><text x="435.1" y="310" text-anchor="middle">校验能力后打开或粘贴</text><path class="am-edge" d="M231,320 L637.1,320" marker-end="url(#am1-arrow)"/><text class="am-step" x="237" y="314" text-anchor="start">7</text></g><g data-step="7"><text x="346.6" y="350" text-anchor="middle">操作结果或失败原因</text><path class="am-edge am-edge--dashed" d="M639.1,360 L56,360" marker-end="url(#am1-arrow)"/><text class="am-step" x="633.1" y="354" text-anchor="end">8</text></g></svg></figure>
+<div class="am-md"><p>标签与关键词同名时，两类结果都保留。
+本轮把标签对应的正文放在前面，回车优先粘贴。
+Wayland 自动粘贴仍受平台限制，失败时提示手动粘贴。</p>
+</div></div>
+</section>
+<section class="am-panel" id="panel-D">
+<header class="am-panel-head"><span class="am-panel-id">D</span><h2>统一规范覆盖了什么</h2></header>
+<div class="am-panel-body"><div class="am-md"><div class="am-table-wrap"><table>
+<thead>
+<tr>
+<th>部分</th>
+<th>当前约定</th>
+<th>边界</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>插件身份</td>
+<td>id、kind、name、version</td>
+<td>校验清单；重复 id 保留先注册的实现</td>
+</tr>
+<tr>
+<td>版本契约</td>
+<td>apiVersion=1、configVersion=1</td>
+<td>宿主兼容范围为 &gt;=0.3.0, &lt;0.4.0</td>
+</tr>
+<tr>
+<td>查询接口</td>
+<td>FeaturePlugin 与 PluginScope</td>
+<td>首屏贡献与范围搜索分开</td>
+</tr>
+<tr>
+<td>结果规范</td>
+<td>SearchItem</td>
+<td>来源、匹配分数、预览、默认操作统一</td>
+</tr>
+<tr>
+<td>原生权限</td>
+<td>capabilities</td>
+<td>宿主在平台调用前校验声明</td>
+</tr>
+<tr>
+<td>搜索隔离</td>
+<td>独立线程、超时、panic 捕获</td>
+<td>超时不强制终止线程，也不是安全沙箱</td>
+</tr>
+<tr>
+<td>配置</td>
+<td>manifest.json 与工作区设置</td>
+<td>启用状态可以随配置同步</td>
+</tr>
+<tr>
+<td>生命周期</td>
+<td>宿主管理后台服务</td>
+<td>接口没有通用的 start / stop 钩子</td>
+</tr>
+<tr>
+<td>设置界面</td>
+<td>宿主的 React 页面</td>
+<td>没有第三方 UI 扩展接口</td>
+</tr>
+</tbody></table></div>
+</div>
+<div class="am-callout am-callout--warn" role="note"><div class="am-callout-title">规范不等于第三方运行时</div><div class="am-callout-body am-md"><p>Rust 插件在宿主进程中运行。
+当前没有动态加载器、稳定 ABI 或独立插件 SDK。
+不要把搜索超时隔离理解成不可信代码隔离。</p>
+</div></div></div>
+</section>
+<section class="am-panel" id="panel-E">
+<header class="am-panel-head"><span class="am-panel-id">E</span><h2>在当前仓库继续扩展</h2></header>
+<div class="am-panel-body"><figure class="am-diagram am-flow"><svg viewBox="0 0 1761 63" width="1761" height="63" role="img" aria-label="流程图：确定用户任务、定义插件清单、实现查询接口、注册插件、接入宿主操作、接入设置界面、验证并提交" xmlns="http://www.w3.org/2000/svg"><defs><marker id="am2-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="am-arrow" d="M0,0 L10,5 L0,10 z"/></marker></defs><g></g><g><g data-step="0"><path class="am-edge" d="M120,31.5 L160.4,31.5 Q200.8,31.5 241.1,31.5 L281.5,31.5" marker-end="url(#am2-arrow)"/><g class="am-edge-label"><rect x="144" y="22.5" width="113.5" height="18" rx="3"/><text x="200.8" y="31.5" text-anchor="middle" dominant-baseline="central">身份、关键词、能力</text></g></g><g data-step="1"><path class="am-edge" d="M387.5,31.5 L442.5,31.5 Q497.5,31.5 552.4,31.5 L607.4,31.5" marker-end="url(#am2-arrow)"/><g class="am-edge-label"><rect x="411.5" y="22.5" width="171.9" height="18" rx="3"/><text x="497.5" y="31.5" text-anchor="middle" dominant-baseline="central">FeaturePlugin 与 PluginScope</text></g></g><g data-step="2"><path class="am-edge" d="M713.4,31.5 L748.6,31.5 Q783.7,31.5 818.8,31.5 L854,31.5" marker-end="url(#am2-arrow)"/><g class="am-edge-label"><rect x="737.4" y="22.5" width="92.6" height="18" rx="3"/><text x="783.7" y="31.5" text-anchor="middle" dominant-baseline="central">plugins/mod.rs</text></g></g><g data-step="3"><path class="am-edge" d="M934,31.5 L974.4,31.5 Q1014.7,31.5 1055.1,31.5 L1095.5,31.5" marker-end="url(#am2-arrow)"/><g class="am-edge-label"><rect x="958" y="22.5" width="113.5" height="18" rx="3"/><text x="1014.7" y="31.5" text-anchor="middle" dominant-baseline="central">复用或新增默认操作</text></g></g><g data-step="4"><path class="am-edge" d="M1201.5,31.5 L1239,31.5 Q1276.5,31.5 1314,31.5 L1351.5,31.5" marker-end="url(#am2-arrow)"/><g class="am-edge-label"><rect x="1225.5" y="22.5" width="102" height="18" rx="3"/><text x="1276.5" y="31.5" text-anchor="middle" dominant-baseline="central">有管理需求时添加</text></g></g><g data-step="5"><path class="am-edge" d="M1457.5,31.5 L1506.5,31.5 Q1555.5,31.5 1604.5,31.5 L1653.5,31.5" marker-end="url(#am2-arrow)"/><g class="am-edge-label"><rect x="1481.5" y="22.5" width="148" height="18" rx="3"/><text x="1555.5" y="31.5" text-anchor="middle" dominant-baseline="central">宿主入口检查与浏览器走查</text></g></g></g><g><g class="am-node am-node--rect" data-key="确定用户任务" data-step="0"><rect class="am-node-shape" x="14" y="14" width="106" height="35" rx="3"/><text x="67" y="31.5" text-anchor="middle" dominant-baseline="central">确定用户任务</text></g><g class="am-node am-node--rect" data-key="定义插件清单" data-step="0"><rect class="am-node-shape" x="281.5" y="14" width="106" height="35" rx="3"/><text x="334.5" y="31.5" text-anchor="middle" dominant-baseline="central">定义插件清单</text></g><g class="am-node am-node--rect" data-key="实现查询接口" data-step="1"><rect class="am-node-shape" x="607.4" y="14" width="106" height="35" rx="3"/><text x="660.4" y="31.5" text-anchor="middle" dominant-baseline="central">实现查询接口</text></g><g class="am-node am-node--rect" data-key="注册插件" data-step="2"><rect class="am-node-shape" x="854" y="14" width="80" height="35" rx="3"/><text x="894" y="31.5" text-anchor="middle" dominant-baseline="central">注册插件</text></g><g class="am-node am-node--rect" data-key="接入宿主操作" data-step="3"><rect class="am-node-shape" x="1095.5" y="14" width="106" height="35" rx="3"/><text x="1148.5" y="31.5" text-anchor="middle" dominant-baseline="central">接入宿主操作</text></g><g class="am-node am-node--rect" data-key="接入设置界面" data-step="4"><rect class="am-node-shape" x="1351.5" y="14" width="106" height="35" rx="3"/><text x="1404.5" y="31.5" text-anchor="middle" dominant-baseline="central">接入设置界面</text></g><g class="am-node am-node--rect" data-key="验证并提交" data-step="5"><rect class="am-node-shape" x="1653.5" y="14" width="93" height="35" rx="3"/><text x="1700" y="31.5" text-anchor="middle" dominant-baseline="central">验证并提交</text></g></g></svg></figure>
+<div class="am-md"><ol>
+<li>在 core 的 plugins 目录实现插件。</li>
+<li>在 register_official 中注册它。</li>
+<li>从宿主共享快照读取查询数据。</li>
+<li>让宿主执行带权限的原生操作。</li>
+<li>为新能力实现各平台适配与降级。</li>
+<li>在宿主入口验证查询、操作和启停。</li>
+<li>用浏览器检查界面，并更新 ticket。</li>
+<li>验证后创建中文 Git commit。</li>
+</ol>
+<p>需要新结果种类时，扩展宿主模型与界面。
+需要后台任务时，明确启动、停止和错误上报。
+不要在插件搜索中直接启动后台服务。</p>
+</div></div>
+</section>
+<section class="am-panel" id="panel-F">
+<header class="am-panel-head"><span class="am-panel-id">F</span><h2>用独立仓库写插件</h2></header>
+<div class="am-panel-body"><figure class="am-diagram am-flow"><svg viewBox="0 0 1455 63" width="1455" height="63" role="img" aria-label="流程图：独立 Rust 仓库、插件 crate、宿主依赖、注册表、宿主集成、编译验证" xmlns="http://www.w3.org/2000/svg"><defs><marker id="am3-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="am-arrow" d="M0,0 L10,5 L0,10 z"/></marker></defs><g></g><g><g data-step="0"><path class="am-edge" d="M129.4,31.5 L178.9,31.5 Q228.4,31.5 277.9,31.5 L327.4,31.5" marker-end="url(#am3-arrow)"/><g class="am-edge-label"><rect x="153.4" y="22.5" width="150.1" height="18" rx="3"/><text x="228.4" y="31.5" text-anchor="middle" dominant-baseline="central">依赖兼容的 flashcast-core</text></g></g><g data-step="1"><path class="am-edge" d="M415.5,31.5 L466.8,31.5 Q518.1,31.5 569.4,31.5 L620.7,31.5" marker-end="url(#am3-arrow)"/><g class="am-edge-label"><rect x="439.5" y="22.5" width="157.2" height="18" rx="3"/><text x="518.1" y="31.5" text-anchor="middle" dominant-baseline="central">path 本地联调，git 固定提交</text></g></g><g data-step="2"><path class="am-edge" d="M700.7,31.5 L738.7,31.5 Q776.6,31.5 814.6,31.5 L852.5,31.5" marker-end="url(#am3-arrow)"/><g class="am-edge-label"><rect x="724.7" y="22.5" width="103.8" height="18" rx="3"/><text x="776.6" y="31.5" text-anchor="middle" dominant-baseline="central">接入 Arc 功能插件</text></g></g><g data-step="3"><path class="am-edge" d="M919.5,31.5 L965.7,31.5 Q1011.8,31.5 1057.9,31.5 L1104,31.5" marker-end="url(#am3-arrow)"/><g class="am-edge-label"><rect x="943.5" y="22.5" width="136.5" height="18" rx="3"/><text x="1011.8" y="31.5" text-anchor="middle" dominant-baseline="central">配置、能力、操作与界面</text></g></g><g data-step="4"><path class="am-edge" d="M1184,31.5 L1228.1,31.5 Q1272.1,31.5 1316.2,31.5 L1360.3,31.5" marker-end="url(#am3-arrow)"/><g class="am-edge-label"><rect x="1208" y="22.5" width="128.2" height="18" rx="3"/><text x="1272.1" y="31.5" text-anchor="middle" dominant-baseline="central">随 Flashcast 一起交付</text></g></g></g><g><g class="am-node am-node--rect" data-key="独立 Rust 仓库" data-step="0"><rect class="am-node-shape" x="14" y="14" width="115.4" height="35" rx="3"/><text x="71.7" y="31.5" text-anchor="middle" dominant-baseline="central">独立 Rust 仓库</text></g><g class="am-node am-node--rect" data-key="插件 crate" data-step="0"><rect class="am-node-shape" x="327.4" y="14" width="88.1" height="35" rx="3"/><text x="371.5" y="31.5" text-anchor="middle" dominant-baseline="central">插件 crate</text></g><g class="am-node am-node--rect" data-key="宿主依赖" data-step="1"><rect class="am-node-shape" x="620.7" y="14" width="80" height="35" rx="3"/><text x="660.7" y="31.5" text-anchor="middle" dominant-baseline="central">宿主依赖</text></g><g class="am-node am-node--rect" data-key="注册表" data-step="2"><rect class="am-node-shape" x="852.5" y="14" width="67" height="35" rx="3"/><text x="886" y="31.5" text-anchor="middle" dominant-baseline="central">注册表</text></g><g class="am-node am-node--rect" data-key="宿主集成" data-step="3"><rect class="am-node-shape" x="1104" y="14" width="80" height="35" rx="3"/><text x="1144" y="31.5" text-anchor="middle" dominant-baseline="central">宿主集成</text></g><g class="am-node am-node--rect" data-key="编译验证" data-step="4"><rect class="am-node-shape" x="1360.3" y="14" width="80" height="35" rx="3"/><text x="1400.3" y="31.5" text-anchor="middle" dominant-baseline="central">编译验证</text></g></g></svg></figure>
+<div class="am-md"><div class="am-table-wrap"><table>
+<thead>
+<tr>
+<th>维度</th>
+<th>当前仓库内实现</th>
+<th>独立仓库提供 crate</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>修改位置</td>
+<td>core 与宿主同仓库</td>
+<td>插件源码独立；宿主仍需接入</td>
+</tr>
+<tr>
+<td>本地联调</td>
+<td>直接使用 workspace</td>
+<td>通过 Cargo path 依赖</td>
+</tr>
+<tr>
+<td>版本固定</td>
+<td>跟随宿主提交</td>
+<td>宿主用 git rev 固定插件提交</td>
+</tr>
+<tr>
+<td>类型兼容</td>
+<td>同一份 Rust 类型</td>
+<td>需要统一 core 的依赖来源与版本</td>
+</tr>
+<tr>
+<td>安装方式</td>
+<td>编译宿主</td>
+<td>同样编译宿主，没有独立安装入口</td>
+</tr>
+<tr>
+<td>原生能力</td>
+<td>宿主提供</td>
+<td>不能只靠声明创造新能力</td>
+</tr>
+</tbody></table></div>
+<p>建议先用一个小插件验证这条接入路径。
+独立仓库工作流目前是可行的源码组织方式。
+仓库还没有可直接套用的插件模板或完整接入示例。</p>
+</div></div>
+</section>
+<section class="am-panel" id="panel-G">
+<header class="am-panel-head"><span class="am-panel-id">G</span><h2>以后开放独立安装，需要补什么</h2></header>
+<div class="am-panel-body"><div class="am-tree"><div class="am-tree-root am-tree-root--solo"><div class="am-tree-box am-tree-box--root" data-key="第三方功能插件生态" data-step="0">第三方功能插件生态</div></div><ul class="am-tree-list"><li data-key="稳定 SDK" data-step="1"><span class="am-tree-label">稳定 SDK</span><span class="am-tree-sub">从宿主实现中提取契约与兼容测试</span></li><li data-key="加载运行时" data-step="2"><span class="am-tree-label">加载运行时</span><span class="am-tree-sub">选择子进程、WASM 或其他执行边界</span></li><li data-key="权限与资源限制" data-step="3"><span class="am-tree-label">权限与资源限制</span><span class="am-tree-sub">用户授权、文件访问、超时与取消</span></li><li data-key="贡献协议" data-step="4"><span class="am-tree-label">贡献协议</span><span class="am-tree-sub">查询、操作、预览、配置与生命周期</span></li><li data-key="包管理" data-step="5"><span class="am-tree-label">包管理</span><span class="am-tree-sub">安装、更新、版本固定与移除</span></li></ul></div>
+<div class="am-md"><p>这部分属于未来架构工作，不是当前已有功能。
+应先确认运行边界，再设计分发与安装流程。</p>
+</div></div>
+</section>
+<section class="am-panel" id="panel-H">
+<header class="am-panel-head"><span class="am-panel-id">H</span><h2>本页依据</h2></header>
+<div class="am-panel-body"><div class="am-md"><div class="am-table-wrap"><table>
+<thead>
+<tr>
+<th>位置</th>
+<th>可核对的事实</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>crates/flashcast-core/src/plugin.rs</td>
+<td>清单、版本、能力、查询接口</td>
+</tr>
+<tr>
+<td>crates/flashcast-core/src/registry.rs</td>
+<td>注册、搜索超时与 panic 隔离</td>
+</tr>
+<tr>
+<td>crates/flashcast-core/src/plugins/</td>
+<td>三个内置插件的查询实现</td>
+</tr>
+<tr>
+<td>crates/flashcast-core/src/host.rs</td>
+<td>注册、清单启停、排序和操作执行</td>
+</tr>
+<tr>
+<td>crates/flashcast-platform/src/</td>
+<td>原生能力与各平台限制</td>
+</tr>
+<tr>
+<td>src-tauri/src/lib.rs</td>
+<td>外壳启动与插件安装入口</td>
+</tr>
+<tr>
+<td>docs/adr/0001-architecture.md</td>
+<td>宿主与功能插件职责</td>
+</tr>
+<tr>
+<td>docs/adr/0002-plugin-appearance-contract.md</td>
+<td>声明式主题与功能插件编译注册</td>
+</tr>
+</tbody></table></div>
+</div></div>
+</section>
+</div>
+</div>
+</main>
+<footer class="am-colophon">Generated by Answer me with HTML 0.4.3 · 2026-10-05 23:25</footer>
+<textarea id="am-source" hidden readonly aria-hidden="true">---
+template: doc
+theme: blueprint
+title: Flashcast 插件机制与开发工作流
+subtitle: 依据当前仓库实现，区分现有能力与未来扩展
+lang: zh
+---
+
+## A 先看结论
+```callout info 有统一契约，功能插件仍随宿主编译
+三个内置功能插件遵守相同 Rust 接口。
+功能插件清单记录版本、关键词和能力。
+清单文件不能加载新的可执行代码。
+主题插件使用声明式数据，可以安装主题包。
+独立仓库可提供 Rust crate，仍需接入并编译宿主。
+```
+
+## B 三个内置插件怎样工作
+| 插件 | 搜索数据 | 首屏贡献 | 默认操作 | 后台与持久化 |
+|---|---|---|---|---|
+| 备忘录 | MemoBook 的只读快照 | 完整标签命中 | 粘贴正文 | 宿主管理工作区的 Markdown 文件 |
+| 剪贴板历史 | ClipboardStore | 不参与 | 粘贴历史内容 | 宿主启动捕获；SQLite 与附件留在本机 |
+| Chrome 书签 | BookmarkBook 的只读快照 | 不参与 | 在关联用户中打开链接 | 宿主读取 Bookmarks 并刷新索引 |
+
+插件负责提供结果。宿主负责排序、选择、预览和执行。
+新增能力先在平台适配层实现，再由宿主授权使用。
+剪贴板默认关闭。停用后停止搜索与后台捕获。
+
+## C 查询与执行链
+```sequence num
+界面 -&gt; 宿主: query(input)
+宿主 -&gt; 注册表: 解析关键词与查询范围
+注册表 -&gt; 功能插件: search(context)
+功能插件 --&gt; 宿主: SearchItem 列表
+宿主 --&gt; 界面: 排序后的结果与选择位置
+界面 -&gt; 宿主: execute(item)
+宿主 -&gt; 平台适配层: 校验能力后打开或粘贴
+平台适配层 --&gt; 界面: 操作结果或失败原因
+```
+标签与关键词同名时，两类结果都保留。
+本轮把标签对应的正文放在前面，回车优先粘贴。
+Wayland 自动粘贴仍受平台限制，失败时提示手动粘贴。
+
+## D 统一规范覆盖了什么
+| 部分 | 当前约定 | 边界 |
+|---|---|---|
+| 插件身份 | id、kind、name、version | 校验清单；重复 id 保留先注册的实现 |
+| 版本契约 | apiVersion=1、configVersion=1 | 宿主兼容范围为 &gt;=0.3.0, &lt;0.4.0 |
+| 查询接口 | FeaturePlugin 与 PluginScope | 首屏贡献与范围搜索分开 |
+| 结果规范 | SearchItem | 来源、匹配分数、预览、默认操作统一 |
+| 原生权限 | capabilities | 宿主在平台调用前校验声明 |
+| 搜索隔离 | 独立线程、超时、panic 捕获 | 超时不强制终止线程，也不是安全沙箱 |
+| 配置 | manifest.json 与工作区设置 | 启用状态可以随配置同步 |
+| 生命周期 | 宿主管理后台服务 | 接口没有通用的 start / stop 钩子 |
+| 设置界面 | 宿主的 React 页面 | 没有第三方 UI 扩展接口 |
+
+```callout warn 规范不等于第三方运行时
+Rust 插件在宿主进程中运行。
+当前没有动态加载器、稳定 ABI 或独立插件 SDK。
+不要把搜索超时隔离理解成不可信代码隔离。
+```
+## E 在当前仓库继续扩展
+```flow LR
+确定用户任务 -&gt; 定义插件清单: 身份、关键词、能力
+定义插件清单 -&gt; 实现查询接口: FeaturePlugin 与 PluginScope
+实现查询接口 -&gt; 注册插件: plugins/mod.rs
+注册插件 -&gt; 接入宿主操作: 复用或新增默认操作
+接入宿主操作 -&gt; 接入设置界面: 有管理需求时添加
+接入设置界面 -&gt; 验证并提交: 宿主入口检查与浏览器走查
+```
+
+1. 在 core 的 plugins 目录实现插件。
+2. 在 register_official 中注册它。
+3. 从宿主共享快照读取查询数据。
+4. 让宿主执行带权限的原生操作。
+5. 为新能力实现各平台适配与降级。
+6. 在宿主入口验证查询、操作和启停。
+7. 用浏览器检查界面，并更新 ticket。
+8. 验证后创建中文 Git commit。
+
+需要新结果种类时，扩展宿主模型与界面。
+需要后台任务时，明确启动、停止和错误上报。
+不要在插件搜索中直接启动后台服务。
+
+## F 用独立仓库写插件
+```flow LR
+独立 Rust 仓库 -&gt; 插件 crate: 依赖兼容的 flashcast-core
+插件 crate -&gt; 宿主依赖: path 本地联调，git 固定提交
+宿主依赖 -&gt; 注册表: 接入 Arc 功能插件
+注册表 -&gt; 宿主集成: 配置、能力、操作与界面
+宿主集成 -&gt; 编译验证: 随 Flashcast 一起交付
+```
+
+| 维度 | 当前仓库内实现 | 独立仓库提供 crate |
+|---|---|---|
+| 修改位置 | core 与宿主同仓库 | 插件源码独立；宿主仍需接入 |
+| 本地联调 | 直接使用 workspace | 通过 Cargo path 依赖 |
+| 版本固定 | 跟随宿主提交 | 宿主用 git rev 固定插件提交 |
+| 类型兼容 | 同一份 Rust 类型 | 需要统一 core 的依赖来源与版本 |
+| 安装方式 | 编译宿主 | 同样编译宿主，没有独立安装入口 |
+| 原生能力 | 宿主提供 | 不能只靠声明创造新能力 |
+
+建议先用一个小插件验证这条接入路径。
+独立仓库工作流目前是可行的源码组织方式。
+仓库还没有可直接套用的插件模板或完整接入示例。
+
+## G 以后开放独立安装，需要补什么
+```tree
+第三方功能插件生态
+  稳定 SDK | 从宿主实现中提取契约与兼容测试
+  加载运行时 | 选择子进程、WASM 或其他执行边界
+  权限与资源限制 | 用户授权、文件访问、超时与取消
+  贡献协议 | 查询、操作、预览、配置与生命周期
+  包管理 | 安装、更新、版本固定与移除
+```
+这部分属于未来架构工作，不是当前已有功能。
+应先确认运行边界，再设计分发与安装流程。
+
+## H 本页依据
+| 位置 | 可核对的事实 |
+|---|---|
+| crates/flashcast-core/src/plugin.rs | 清单、版本、能力、查询接口 |
+| crates/flashcast-core/src/registry.rs | 注册、搜索超时与 panic 隔离 |
+| crates/flashcast-core/src/plugins/ | 三个内置插件的查询实现 |
+| crates/flashcast-core/src/host.rs | 注册、清单启停、排序和操作执行 |
+| crates/flashcast-platform/src/ | 原生能力与各平台限制 |
+| src-tauri/src/lib.rs | 外壳启动与插件安装入口 |
+| docs/adr/0001-architecture.md | 宿主与功能插件职责 |
+| docs/adr/0002-plugin-appearance-contract.md | 声明式主题与功能插件编译注册 |
+</textarea>
+<script>
+(() => {
+  const root = document.documentElement;
+  const cycle = (list, cur) => list[(list.indexOf(cur) + 1) % list.length];
+  const label = (btn, value) => {
+    const map = JSON.parse(btn.dataset.labels || '{}');
+    btn.textContent = map[value] || value;
+  };
+  const bind = (name, attr, values) => {
+    const btn = document.querySelector(`[data-am="${name}"]`);
+    if (!btn) return;
+    label(btn, root.getAttribute(attr));
+    btn.addEventListener('click', () => {
+      const next = cycle(values, root.getAttribute(attr));
+      root.setAttribute(attr, next);
+      label(btn, next);
+    });
+  };
+  bind('theme', 'data-theme', ['blueprint', 'shadcn']);
+  bind('mode', 'data-mode', ['auto', 'light', 'dark']);
+
+  const copyBtn = document.querySelector('[data-am="copy"]');
+  copyBtn?.addEventListener('click', async () => {
+    const text = document.getElementById('am-source').value;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = Object.assign(document.createElement('textarea'), { value: text });
+      document.body.append(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    const original = copyBtn.textContent;
+    copyBtn.textContent = copyBtn.dataset.done;
+    setTimeout(() => { copyBtn.textContent = original; }, 1400);
+  });
+})();
+</script>
+</body>
+</html>

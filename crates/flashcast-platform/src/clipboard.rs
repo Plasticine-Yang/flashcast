@@ -837,6 +837,11 @@ pub enum ClipboardPoll {
 ///    报错，不能挂住调用方；
 /// 2. `note_own_write` 之后再 `poll` **不能**把那次写入报告成新的复制事件。
 pub trait ClipboardWatcher: Send + Sync {
+    /// 后台读取必须不改变前台焦点；不支持时保留历史并报告原因。
+    fn check_background_support(&self) -> Result<(), ClipboardError> {
+        Ok(())
+    }
+
     /// 轮询一次剪贴板。
     fn poll(&self) -> Result<ClipboardPoll, ClipboardError>;
 
@@ -1103,7 +1108,7 @@ fn cf_html_offset(head: &str, key: &str) -> Option<usize> {
 /// 剪贴板操作的失败原因。全部为面向用户的中文描述。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ClipboardError {
-    #[error("当前会话不支持写入剪贴板：{reason}")]
+    #[error("当前会话不支持此剪贴板操作：{reason}")]
     Unsupported { reason: String },
     #[error("未找到可用的剪贴板工具：{reason}")]
     ToolMissing { reason: String },

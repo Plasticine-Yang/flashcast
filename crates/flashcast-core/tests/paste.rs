@@ -632,8 +632,8 @@ fn keyword_and_tag_collision_keeps_both_sides() {
     assert_eq!(entry.title, "备忘录");
     assert_eq!(
         response.items.first().map(|item| item.id.clone()),
-        Some(entry_id.clone()),
-        "插件入口必须排在最前：直接回车的行为与「输入关键词进入范围」一致"
+        Some(memo_item_id(&tagged)),
+        "标签命中的备忘录必须排在最前：直接回车粘贴正文"
     );
     let memo_item = response
         .items

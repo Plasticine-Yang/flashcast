@@ -555,6 +555,7 @@ struct FakeWatcherState {
     /// 独立成立（真实适配层失效时也不能形成自身写入循环）。
     suppress_own: bool,
     error: Option<ClipboardError>,
+    background_error: Option<ClipboardError>,
 }
 
 impl Default for FakeClipboardWatcher {
@@ -575,6 +576,7 @@ impl Default for FakeClipboardWatcher {
                 own_files: Vec::new(),
                 suppress_own: true,
                 error: None,
+                background_error: None,
             }),
             polls: AtomicUsize::new(0),
             captures: AtomicUsize::new(0),
@@ -601,6 +603,11 @@ impl FakeClipboardWatcher {
         let watcher = Self::default();
         lock(&watcher.state).error = Some(error);
         watcher
+    }
+
+    /// 后台读取不支持，但历史查询和手动写入仍可用。
+    pub fn set_background_error(&self, error: ClipboardError) {
+        lock(&self.state).background_error = Some(error);
     }
 
     /// 模拟一次外部复制：序号自增，下一次 `poll` 报告变化。
@@ -712,6 +719,13 @@ impl FakeClipboardWatcher {
 }
 
 impl ClipboardWatcher for FakeClipboardWatcher {
+    fn check_background_support(&self) -> Result<(), ClipboardError> {
+        match lock(&self.state).background_error.clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     fn poll(&self) -> Result<ClipboardPoll, ClipboardError> {
         self.polls.fetch_add(1, Ordering::SeqCst);
         let mut state = lock(&self.state);

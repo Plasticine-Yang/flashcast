@@ -137,16 +137,11 @@ export function ChromePanel({ chrome, busy, onAssociate, onRefresh }: Props) {
         </p>
       ) : null}
 
-      <p className="settings-hint">
-        关联只记录在本机（设备本地存储），不进入配置工作区，也不会随配置同步；书签索引
-        可从 Chrome 的 Bookmarks 文件随时重建。Flashcast 只读取这些文件，绝不修改或删除；
-        结果里按标题、网址与目录检索，回车在关联的 profile 里打开链接——参数以 argv 数组
-        传给 Chrome，链接不经 shell 拼接。
-      </p>
+      {bookmarks?.status.kind === "missing" ? <div className="content-empty" data-testid="chrome-missing-explanation"><strong>这个用户目录没有书签文件</strong><p>Flashcast 读取 Chrome 的原生书签。请先在该用户中收藏一个网页，再重新读取。</p><p>若 Chrome 中已有书签，请在 chrome://version 核对「个人资料路径」是否与上方目录一致。扩展中保存的链接不属于原生书签。</p></div> : null}
+      <details className="storage-details"><summary>读取方式与本机路径</summary><p className="settings-hint">关联只保存在本机。Flashcast 只读取 Bookmarks 文件；回车在关联的用户中打开书签。</p></details>
     </section>
   );
 }
-
 /** 未关联时的占位状态，避免在渲染里到处判空。 */
 const EMPTY_CHROME: ChromeState = {
   available: false,

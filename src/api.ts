@@ -947,8 +947,7 @@ class MockHost implements HostApi {
             item: this.memoItem(memo, { tier: "keywordOrTagExact" as const, relevance: 90 }),
           }))
       : [];
-    // 关键词与标签冲突（ADR §4）：同时给出插件入口，且入口排在最前——直接回车的行为
-    // 与「输入关键词进入范围」一致，标签命中的备忘录就在它下面，不会被静默丢弃。
+    // 标签正文优先，插件入口仍可显式选择。
     const collisionEntry =
       this.memoPluginEnabled && MOCK_MEMO_KEYWORDS.includes(query) && memoScored.length > 0
         ? {
@@ -961,7 +960,7 @@ class MockHost implements HostApi {
             kind: "command" as const,
             defaultAction: "open" as const,
             defaultActionLabel: "打开",
-            score: { tier: "keywordOrTagExact" as const, relevance: 255 },
+            score: { tier: "keywordOrTagExact" as const, relevance: 0 },
           }
         : null;
     const ranked = [
@@ -980,7 +979,7 @@ class MockHost implements HostApi {
         a.title.localeCompare(b.title),
     );
     const items = ranked.map((entry) => entry.item);
-    return collisionEntry ? [collisionEntry, ...items] : items;
+    return collisionEntry ? [...items, collisionEntry] : items;
   }
 
   /** 剪贴板历史范围内的一条结果：默认操作是粘贴（复用备忘录的粘贴路径）。 */

@@ -1035,6 +1035,7 @@ export function SettingsScreen({
           <ClipboardPanel
             clipboard={clipboard}
             busy={busy}
+            onEnable={() => onToggleFeaturePlugin("clipboard", true)}
             onTogglePaused={onToggleClipboardPaused}
             onSaveLimits={onSaveClipboardLimits}
             onPin={onPinClipboardEntry}

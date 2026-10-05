@@ -14,7 +14,7 @@ export function AppearanceControls({ theme, busy, materialNotice, onChange }: Pr
       <span className="setting-label">深浅模式</span>
       <div className="appearance-segment" role="group" aria-label="深浅模式">
         {([['system', '跟随系统'], ['light', '浅色'], ['dark', '深色']] as const).map(([value, label]) =>
-          <button key={value} type="button" aria-pressed={theme.preference === value}
+          <button key={value} type="button" data-appearance={value} aria-pressed={theme.preference === value}
             disabled={busy || legacy} onClick={() => onChange(value, theme.style, theme.reduceTransparency)}>{label}</button>)}
       </div>
     </div>

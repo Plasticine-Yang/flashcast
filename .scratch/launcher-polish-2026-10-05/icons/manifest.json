@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 1,
+  "project": "Flashcast · 10 版应用图标",
+  "brief": "简洁、精致、契合闪电与快速投射；同时比较浅深背景和小尺寸识别。",
+  "round": "图标 01",
+  "candidates": [
+    {
+      "id": "current",
+      "name": "当前图标",
+      "concept": "保留当前图标作为基线，比较轮廓和小尺寸辨识。",
+      "typography": "系统无衬线；标题30px、说明16px",
+      "palette": [
+        "#181b24",
+        "#ffc94b"
+      ],
+      "traits": [
+        "旧版黄色闪电",
+        "尖角触及背景边缘"
+      ],
+      "kind": "html",
+      "source": "current.html",
+      "baseline": true
+    },
+    {
+      "id": "icon-01",
+      "name": "切光",
+      "concept": "让一道断开的电光成为品牌记忆。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#172734",
+        "#66dcf1",
+        "#eef9ff"
+      ],
+      "traits": [
+        "断开的闪电轮廓",
+        "冷青与深墨底"
+      ],
+      "kind": "html",
+      "source": "01.html"
+    },
+    {
+      "id": "icon-02",
+      "name": "疾行 F",
+      "concept": "把 Flashcast 的 F 压成前进的楔形。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#e5f1ff",
+        "#285ccc",
+        "#8bb5ff"
+      ],
+      "traits": [
+        "斜切 F 字母",
+        "独立的下行电光"
+      ],
+      "kind": "html",
+      "source": "02.html"
+    },
+    {
+      "id": "icon-03",
+      "name": "快门",
+      "concept": "将瞬间唤起转译为四片打开的快门。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#171c33",
+        "#f3f4ff",
+        "#869bff"
+      ],
+      "traits": [
+        "四向旋转的实心叶片",
+        "中央菱形光点"
+      ],
+      "kind": "html",
+      "source": "03.html"
+    },
+    {
+      "id": "icon-04",
+      "name": "双轨",
+      "concept": "两道快进轨道指向下一次行动。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#ffefe1",
+        "#d45b27",
+        "#e99045"
+      ],
+      "traits": [
+        "双楔形箭头",
+        "暖色速度标记"
+      ],
+      "kind": "html",
+      "source": "04.html"
+    },
+    {
+      "id": "icon-05",
+      "name": "投射",
+      "concept": "从一点把内容投射到目标，呼应 cast。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#142a2c",
+        "#b6f4df",
+        "#58c8b2"
+      ],
+      "traits": [
+        "圆点与展开光束",
+        "非对称构图"
+      ],
+      "kind": "html",
+      "source": "05.html"
+    },
+    {
+      "id": "icon-06",
+      "name": "指令",
+      "concept": "保留键盘启动器的命令语言，压缩为一个动作。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#1d2431",
+        "#e8f0ff",
+        "#73ccea"
+      ],
+      "traits": [
+        "命令提示符与光标",
+        "宽笔画，无细节噪音"
+      ],
+      "kind": "html",
+      "source": "06.html"
+    },
+    {
+      "id": "icon-07",
+      "name": "电路环",
+      "concept": "把连续可用的入口做成一道开放的电路。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#e7edf4",
+        "#344e70",
+        "#528bcc"
+      ],
+      "traits": [
+        "断开的圆环",
+        "环内小闪电"
+      ],
+      "kind": "html",
+      "source": "07.html"
+    },
+    {
+      "id": "icon-08",
+      "name": "折带",
+      "concept": "一条折起的带子，形成速度和空间感。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#f0f3f9",
+        "#3470d0",
+        "#183855"
+      ],
+      "traits": [
+        "连续带状轮廓",
+        "单处深色折面"
+      ],
+      "kind": "html",
+      "source": "08.html"
+    },
+    {
+      "id": "icon-09",
+      "name": "负形电光",
+      "concept": "用整块亮色与切口，在小尺寸上保持冲击力。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#447fce",
+        "#f4f8ff",
+        "#c8e7ff"
+      ],
+      "traits": [
+        "亮色底与白色切口",
+        "宽大的闪电负形"
+      ],
+      "kind": "html",
+      "source": "09.html"
+    },
+    {
+      "id": "icon-10",
+      "name": "FC 联结",
+      "concept": "把 F 和 C 合成一个可独立识别的符号。",
+      "typography": "系统无衬线；标题 30px，说明 16px",
+      "palette": [
+        "#202733",
+        "#b4d5fc",
+        "#ffffff"
+      ],
+      "traits": [
+        "F 与开放 C 的联字",
+        "C 内指向右侧的箭头"
+      ],
+      "kind": "html",
+      "source": "10.html"
+    }
+  ]
+}
