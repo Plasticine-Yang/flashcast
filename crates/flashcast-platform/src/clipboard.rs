@@ -842,6 +842,10 @@ pub trait ClipboardWatcher: Send + Sync {
         Ok(())
     }
 
+    /// 可选后台桥接在暂停、停用时停止读取并释放缓存。其它后端维持现有语义。
+    fn set_capture_paused(&self, _paused: bool) {}
+    fn stop_background_capture(&self) {}
+
     /// 轮询一次剪贴板。
     fn poll(&self) -> Result<ClipboardPoll, ClipboardError>;
 

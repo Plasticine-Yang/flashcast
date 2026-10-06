@@ -155,9 +155,9 @@ pub struct ChromeProfile {
     pub managed: bool,
     /// `Bookmarks` 文件路径（可能不存在：全新 profile 是正常状态）。
     pub bookmarks: PathBuf,
-    /// 文件是否存在。
+    /// 本地或账号书签文件是否存在。
     pub has_bookmarks: bool,
-    /// 文件是否能打开（权限不足时为 false）。
+    /// 所有已存在的书签文件是否能打开（权限不足时为 false）。
     pub bookmarks_readable: bool,
     /// 无法读取时的中文原因。
     pub unreadable_reason: Option<String>,
@@ -322,7 +322,7 @@ pub fn discover_from_paths(
 /// 枚举 profile：`Local State` 的 `profile.info_cache` 与目录本身取并集。
 ///
 /// 研究笔记 §2：`info_cache` 会滞后于磁盘（它在 profile 变化时才重写），因此目录里
-/// 含有 `Preferences` 或 `Bookmarks` 的子目录也算 profile。目录不可读时只用
+/// 含有 `Preferences`、`Bookmarks` 或 `AccountBookmarks` 的子目录也算 profile。目录不可读时只用
 /// `info_cache`，并返回可报告的中文原因（不是致命错误）。
 pub fn enumerate_profiles(user_data_dir: &Path) -> (Vec<ChromeProfile>, Vec<String>) {
     let mut warnings = Vec::new();
@@ -346,8 +346,9 @@ pub fn enumerate_profiles(user_data_dir: &Path) -> (Vec<ChromeProfile>, Vec<Stri
                     continue;
                 };
                 // 目录名不是 profile 的（缓存目录、`GrShaderCache` 等）用内容判断。
-                let looks_like_profile =
-                    path.join("Preferences").is_file() || path.join("Bookmarks").is_file();
+                let looks_like_profile = path.join("Preferences").is_file()
+                    || path.join("Bookmarks").is_file()
+                    || path.join("AccountBookmarks").is_file();
                 if looks_like_profile && !dirs.contains(&name) {
                     dirs.push(name);
                 }
@@ -369,15 +370,17 @@ pub fn enumerate_profiles(user_data_dir: &Path) -> (Vec<ChromeProfile>, Vec<Stri
             let info = info_cache.get(&dir).cloned().unwrap_or_default();
             let profile_dir = user_data_dir.join(&dir);
             let bookmarks = profile_dir.join("Bookmarks");
-            let has_bookmarks = bookmarks.is_file();
-            let (bookmarks_readable, unreadable_reason) = if !has_bookmarks {
-                (true, None)
-            } else {
-                match std::fs::File::open(&bookmarks) {
-                    Ok(_) => (true, None),
-                    Err(error) => (false, Some(format!("无法读取书签文件：{error}"))),
-                }
-            };
+            let sources = [bookmarks.clone(), profile_dir.join("AccountBookmarks")];
+            let has_bookmarks = sources.iter().any(|path| path.is_file());
+            let unreadable_reason = sources
+                .iter()
+                .filter(|path| path.exists())
+                .find_map(|path| {
+                    std::fs::File::open(path)
+                        .err()
+                        .map(|error| format!("无法读取书签文件 {}：{error}", path.display()))
+                });
+            let bookmarks_readable = unreadable_reason.is_none();
             let display_name = info
                 .name
                 .clone()

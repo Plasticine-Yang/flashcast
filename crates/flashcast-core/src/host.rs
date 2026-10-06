@@ -180,7 +180,7 @@ pub struct Host {
     /// 备忘录的**生效内容**。宿主在成功写入工作区之后更新它，功能插件只读快照：
     /// 插件因此不持有工作区路径，也无法绕过宿主直接改文件（ADR §6）。
     memos: Arc<MemoBook>,
-    /// Chrome 书签索引：可随时从 `Bookmarks` 文件重建（文件是唯一事实来源）。
+    /// Chrome 书签索引：可随时从本地与账号书签文件重建。
     bookmarks: Arc<BookmarkIndex>,
     /// 剪贴板历史的本机存储与后台捕获运行时（ticket 09）。
     ///

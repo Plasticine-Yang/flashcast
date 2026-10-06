@@ -23,6 +23,7 @@
 //! 因此恢复时写文本并如实报告 HTML/RTF 未同时提供——富文本载荷仍在本机历史里。
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::capability::SessionType;
@@ -391,6 +392,8 @@ pub struct LinuxClipboardWatcher {
     /// 由 Flashcast 自己写入、尚未被 `poll` 消费掉的文件列表指纹。
     own_files: Mutex<Vec<u64>>,
     background_support: OnceLock<Result<(), ClipboardError>>,
+    gnome: super::gnome_clipboard::GnomeClipboard,
+    gnome_backend: AtomicBool,
 }
 
 impl Default for LinuxClipboardWatcher {
@@ -409,6 +412,8 @@ impl LinuxClipboardWatcher {
             own: Mutex::new(Vec::new()),
             own_files: Mutex::new(Vec::new()),
             background_support: OnceLock::new(),
+            gnome: super::gnome_clipboard::GnomeClipboard::default(),
+            gnome_backend: AtomicBool::new(false),
         }
     }
 
@@ -421,6 +426,8 @@ impl LinuxClipboardWatcher {
             own: Mutex::new(Vec::new()),
             own_files: Mutex::new(Vec::new()),
             background_support: OnceLock::new(),
+            gnome: super::gnome_clipboard::GnomeClipboard::default(),
+            gnome_backend: AtomicBool::new(false),
         }
     }
 
@@ -507,17 +514,66 @@ impl ClipboardWatcher for LinuxClipboardWatcher {
                 if self.session != SessionType::Wayland || self.force_x11 {
                     return Ok(());
                 }
+                let gnome_desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default()
+                    .split(':').any(|s| s.eq_ignore_ascii_case("gnome"));
+                if gnome_desktop && self.gnome.available() {
+                    self.gnome_backend.store(true, Ordering::SeqCst);
+                    return Ok(());
+                }
                 let program =
                     find_program("wl-paste").ok_or_else(|| ClipboardError::ToolMissing {
                         reason: "Wayland 后台捕获需要 wl-paste".into(),
                     })?;
-                probe_background_capture(&program)
+                probe_background_capture(&program).map_err(|error| {
+                    if gnome_desktop && matches!(error, ClipboardError::Unsupported { .. }) {
+                        ClipboardError::Unsupported { reason: "当前 GNOME 会话不能通过 wl-paste 在后台记录。请安装并启用 Flashcast Clipboard Bridge 扩展：运行 scripts/gnome/install-clipboard-bridge.sh；首次安装后重新登录，再重启 Flashcast。已有历史仍可使用。".into() }
+                    } else { error }
+                })
             })
             .clone()
     }
 
     fn poll(&self) -> Result<ClipboardPoll, ClipboardError> {
         self.check_background_support()?;
+        if self.gnome_backend.load(Ordering::SeqCst) {
+            let poll = self.gnome.poll()?;
+            if let ClipboardPoll::Changed(capture) = &poll {
+                let suppressed = if !capture.files.is_empty() {
+                    let paths: Vec<_> =
+                        capture.files.iter().map(|file| file.path.clone()).collect();
+                    let print = fingerprint_files(&paths);
+                    let mut own = self.own_files.lock().unwrap_or_else(|p| p.into_inner());
+                    own.iter()
+                        .position(|value| *value == print)
+                        .map(|index| {
+                            own.remove(index);
+                        })
+                        .is_some()
+                } else {
+                    let print = capture
+                        .text
+                        .as_ref()
+                        .map(|text| fingerprint(text))
+                        .or_else(|| {
+                            capture
+                                .image
+                                .as_ref()
+                                .map(|image| fingerprint_bytes(&image.bytes))
+                        });
+                    let mut own = self.own.lock().unwrap_or_else(|p| p.into_inner());
+                    print
+                        .and_then(|print| own.iter().position(|value| *value == print))
+                        .map(|index| {
+                            own.remove(index);
+                        })
+                        .is_some()
+                };
+                if suppressed {
+                    return Ok(ClipboardPoll::Unchanged);
+                }
+            }
+            return Ok(poll);
+        }
         // 文件列表优先：文件管理器复制文件时剪贴板里同时有 `text/uri-list` 与一段
         // 可读文字（URI 本身）。先按文件捕获，才能把「复制文件」与「复制这段文字」
         // 区分开，而不是把文件列表存成一条文字历史。
@@ -604,6 +660,19 @@ impl ClipboardWatcher for LinuxClipboardWatcher {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .push(fingerprint(text));
+    }
+
+    fn set_capture_paused(&self, paused: bool) {
+        self.gnome.set_paused(paused);
+        if paused && self.gnome_backend.load(Ordering::SeqCst) {
+            self.gnome.stop();
+        }
+    }
+
+    fn stop_background_capture(&self) {
+        if self.gnome_backend.load(Ordering::SeqCst) {
+            self.gnome.stop();
+        }
     }
 
     fn note_own_write_files(&self, paths: &[PathBuf]) {

@@ -1,0 +1,7 @@
+{
+  "uuid": "flashcast-clipboard@flashcast.app",
+  "name": "Flashcast Clipboard Bridge",
+  "description": "在 GNOME Wayland 中为 Flashcast 提供不夺焦点的剪贴板捕获。仅在 Flashcast 请求记录时读取，不保存历史。",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1
+}

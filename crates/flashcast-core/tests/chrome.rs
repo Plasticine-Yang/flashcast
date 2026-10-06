@@ -977,3 +977,90 @@ fn explicit_page_lists_more_than_fifty_bookmarks_and_blank_query_keeps_the_page(
     assert_eq!(all.items.len(), 75);
     fixture.cleanup();
 }
+
+#[test]
+fn account_bookmarks_are_discovered_searched_and_opened_without_local_bookmarks() {
+    let (host, chrome, _device, fixture) = host_with_fixture("account-only");
+    std::fs::remove_file(fixture.bookmarks_path("Default")).unwrap();
+    write(
+        &fixture.udd.join("Default/AccountBookmarks"),
+        DEFAULT_BOOKMARKS,
+    );
+    let state = host.associate_chrome_profile("Default").unwrap();
+    assert!(
+        state
+            .profiles
+            .iter()
+            .find(|p| p.dir == "Default")
+            .unwrap()
+            .has_bookmarks
+    );
+    let response = search(&host, "Rust 官网");
+    assert_eq!(response.items.len(), 1, "账号书签必须进入插件页面");
+    assert_eq!(response.items[0].id, "chrome-bookmark:account:7");
+    assert_eq!(host.execute(&response.items[0]).status, ActionStatus::Done);
+    assert_eq!(
+        chrome.last_launch().unwrap().args.last().unwrap(),
+        "https://www.rust-lang.org/"
+    );
+    fixture.assert_untouched("Default", &["AccountBookmarks"]);
+    fixture.cleanup();
+}
+
+#[test]
+fn local_and_account_bookmarks_keep_distinct_ids_and_refresh_both_sources() {
+    let (host, chrome, _device, fixture) = linked_host("account-merge");
+    let account_path = fixture.udd.join("Default/AccountBookmarks");
+    let account = r#"{"roots":{"bookmark_bar":{"children":[{"id":"7","name":"账号书签","type":"url","url":"https://account.example.com/"}]}}}"#;
+    write(&account_path, account);
+    let all = search(&host, "");
+    assert_eq!(all.items.len(), 5);
+    let item = all
+        .items
+        .iter()
+        .find(|i| i.id == "chrome-bookmark:account:7")
+        .unwrap();
+    assert_eq!(host.execute(item).status, ActionStatus::Done);
+    assert_eq!(
+        chrome.last_launch().unwrap().args.last().unwrap(),
+        "https://account.example.com/"
+    );
+    let local = all
+        .items
+        .iter()
+        .find(|i| i.id == "chrome-bookmark:7")
+        .unwrap();
+    assert_eq!(host.execute(local).status, ActionStatus::Done);
+    assert_eq!(
+        chrome.last_launch().unwrap().args.last().unwrap(),
+        "https://www.rust-lang.org/"
+    );
+    write(&account_path, &account.replace("账号书签", "账号新增书签"));
+    assert_eq!(search(&host, "账号新增").items.len(), 1);
+    std::fs::remove_file(&account_path).unwrap();
+    assert_eq!(search(&host, "").items.len(), 4);
+    write(&account_path, account);
+    std::fs::remove_file(fixture.bookmarks_path("Default")).unwrap();
+    assert_eq!(search(&host, "").items.len(), 1);
+    fixture.cleanup();
+}
+
+#[test]
+fn corrupt_account_bookmarks_report_the_source_and_keep_the_previous_merged_index() {
+    let (host, _chrome, _device, fixture) = linked_host("account-corrupt");
+    let account_path = fixture.udd.join("Default/AccountBookmarks");
+    write(&account_path, WORK_BOOKMARKS);
+    assert_eq!(search(&host, "").items.len(), 5);
+    write(&account_path, "{partial write");
+    let state = host.refresh_chrome_bookmarks();
+    assert_eq!(state.bookmarks.entries.len(), 5);
+    match state.bookmarks.status {
+        flashcast_core::BookmarksStatus::Corrupt { reason } => {
+            assert!(reason.contains("AccountBookmarks"))
+        }
+        other => panic!("应报告账号文件损坏，实际为 {other:?}"),
+    }
+    write(&account_path, WORK_BOOKMARKS);
+    assert_eq!(search(&host, "").items.len(), 5);
+    fixture.cleanup();
+}

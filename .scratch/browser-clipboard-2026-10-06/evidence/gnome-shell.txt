@@ -1,0 +1,4 @@
+PASS: production extension loaded in private GNOME Shell
+PASS: expected fixture text captured without printing clipboard content
+compositor_focus_preserved=True
+PASS: real GNOME Shell selection captured and compositor focus preserved

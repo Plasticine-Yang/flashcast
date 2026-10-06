@@ -2,7 +2,7 @@
 //!
 //! 依据 `notes/research/chrome-bookmarks.md`：
 //!
-//! - **`Bookmarks` 文件是唯一事实来源**，索引可以随时从它重建，因此这里只保存
+//! - **`Bookmarks` 与 `AccountBookmarks` 是事实来源**，索引可以随时重建，因此这里只保存
 //!   内存索引 + 文件指纹（mtime + size），不落盘、也不改动 Chrome 的任何文件；
 //! - **`checksum` / `checksum_sha256` 永不校验**：序列化细节是 Chromium 内部实现，
 //!   校验失败只会让用户看不到自己的书签；
@@ -105,7 +105,7 @@ impl Node {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookmarkEntry {
-    /// Chrome 节点 id（十进制字符串）。同一文件内唯一。
+    /// 本地节点保留 Chrome id；账号节点使用 `account:<id>`，避免跨文件冲突。
     pub id: String,
     pub title: String,
     pub url: String,
@@ -133,7 +133,7 @@ impl BookmarkEntry {
 pub enum BookmarksStatus {
     /// 还没有关联 profile。
     NotAssociated,
-    /// 文件不存在：全新 profile 的正常空状态。
+    /// 两份文件都不存在：全新 profile 的正常空状态。
     Missing,
     /// 已读到 N 条书签。
     Ok { count: usize },
@@ -491,12 +491,12 @@ struct IndexInner {
     path: Option<PathBuf>,
     entries: Vec<BookmarkEntry>,
     status: BookmarksStatus,
-    fingerprint: Option<Fingerprint>,
+    fingerprint: Option<Vec<Option<Fingerprint>>>,
 }
 
 /// 可重建的书签索引。
 ///
-/// 索引是**内存**的：`Bookmarks` 文件本身是唯一事实来源，进程重启后重新读取即可
+/// 索引是**内存**的：本地与账号书签文件是事实来源，进程重启后重新读取即可
 /// 重建（ticket 13 的关联记录保存在设备本地存储里）。不落盘的另一层原因是索引
 /// 可能包含敏感 URL（研究笔记 §5），少一处副本就少一处泄露面。
 pub struct BookmarkIndex {
@@ -596,7 +596,8 @@ impl BookmarkIndex {
             };
         };
 
-        let current = fingerprint_of(&path);
+        let paths = source_paths(&path);
+        let current = Some(paths.iter().map(|p| fingerprint_of(p)).collect());
         {
             let inner = lock(&self.inner);
             if inner.fingerprint == current && inner.status.is_ok() {
@@ -607,14 +608,14 @@ impl BookmarkIndex {
             }
         }
 
-        let mut attempt = read_bookmarks(&path);
+        let mut attempt = read_sources(&paths);
         if retry {
             if let Err(reason) = &attempt {
                 // 可能是「写入中途读到半个文件」：等约 500ms 再读一次。
                 // 这里刻意不释放任何锁的情况下休眠是安全的：reload 不持有 inner 守卫。
                 let _ = reason;
                 std::thread::sleep(PARSE_RETRY_DELAY);
-                attempt = read_bookmarks(&path);
+                attempt = read_sources(&paths);
             }
         }
 
@@ -665,6 +666,42 @@ enum ReadFailure {
     Corrupt(String),
 }
 
+/// 旧关联仍保存 Bookmarks 路径；读取时纳入同 profile 的账号文件。
+fn source_paths(path: &Path) -> Vec<PathBuf> {
+    if path.file_name().is_some_and(|name| name == "Bookmarks") {
+        vec![path.to_path_buf(), path.with_file_name("AccountBookmarks")]
+    } else {
+        vec![path.to_path_buf()]
+    }
+}
+
+fn read_sources(paths: &[PathBuf]) -> Result<Parsed, ReadFailure> {
+    let mut entries = Vec::new();
+    let mut found = false;
+    for path in paths {
+        match read_bookmarks(path)? {
+            Parsed::Missing => {}
+            Parsed::Entries(mut source_entries) => {
+                found = true;
+                if path
+                    .file_name()
+                    .is_some_and(|name| name == "AccountBookmarks")
+                {
+                    for entry in &mut source_entries {
+                        entry.id = format!("account:{}", entry.id);
+                    }
+                }
+                entries.extend(source_entries);
+            }
+        }
+    }
+    Ok(if found {
+        Parsed::Entries(entries)
+    } else {
+        Parsed::Missing
+    })
+}
+
 /// 读取并解析一次。`Bookmarks` 缺失是**正常**结果（[`Parsed::Missing`]）。
 ///
 /// 文件在读取前打开、读完立刻 drop：绝不长期持有，也绝不 `mmap`。
@@ -674,16 +711,27 @@ fn read_bookmarks(path: &Path) -> Result<Parsed, ReadFailure> {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Parsed::Missing),
-        Err(error) => return Err(ReadFailure::Unreadable(error.to_string())),
+        Err(error) => {
+            return Err(ReadFailure::Unreadable(format!(
+                "{}：{error}",
+                path.display()
+            )))
+        }
     };
     let mut bytes = Vec::new();
     if let Err(error) = file.read_to_end(&mut bytes) {
-        return Err(ReadFailure::Unreadable(error.to_string()));
+        return Err(ReadFailure::Unreadable(format!(
+            "{}：{error}",
+            path.display()
+        )));
     }
     drop(file);
     match parse_bookmarks(&bytes) {
         Ok(entries) => Ok(Parsed::Entries(entries)),
-        Err(reason) => Err(ReadFailure::Corrupt(reason)),
+        Err(reason) => Err(ReadFailure::Corrupt(format!(
+            "{}：{reason}",
+            path.display()
+        ))),
     }
 }
 

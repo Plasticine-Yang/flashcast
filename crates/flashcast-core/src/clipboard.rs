@@ -2448,6 +2448,7 @@ impl ClipboardRuntime {
 
     /// 更新暂停开关、保留期限与容量。每次成功保存后按它们回收。
     pub fn configure(&self, paused: bool, retention_days: u32, capacity: usize) {
+        self.watcher.set_capture_paused(paused);
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         state.paused = paused;
         state.retention_days = retention_days;
@@ -2687,6 +2688,7 @@ impl ClipboardRuntime {
         if let Some(mut pump) = pump {
             pump.stop_and_join();
         }
+        self.watcher.stop_background_capture();
     }
 
     /// 后台轮询是否正在运行。

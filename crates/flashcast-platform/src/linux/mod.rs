@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod chrome;
 pub mod clipboard;
 pub mod focus;
+mod gnome_clipboard;
 mod gnome_hotkeys;
 pub mod hotkeys;
 pub mod launcher;

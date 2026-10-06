@@ -162,6 +162,21 @@ fn profile_directory_without_local_state_entry_is_still_listed() {
 }
 
 #[test]
+fn account_only_profile_without_local_state_is_discovered() {
+    let root = unique_dir("account-only-no-info");
+    let udd = root.join("udd");
+    write(&udd.join("Profile 2/AccountBookmarks"), BOOKMARKS);
+    let (profiles, _warnings) = flashcast_platform::chrome::enumerate_profiles(&udd);
+    let profile = profiles
+        .iter()
+        .find(|p| p.dir == "Profile 2")
+        .expect("账号文件也是 profile 发现依据");
+    assert!(profile.has_bookmarks && profile.bookmarks_readable);
+    assert!(!profile.bookmarks.exists(), "保留旧的本地文件定位接口");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn corrupt_local_state_is_a_warning_and_directory_scan_still_works() {
     let (root, binaries, user_data) = machine("corrupt-local-state");
     write(&root.join("udd").join("Local State"), "{ 这不是 JSON");
