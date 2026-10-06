@@ -86,11 +86,13 @@ export async function releaseChecks({
       "粘贴必须对应预览",
     );
   });
-  await check("备忘录弹窗新增、改名后实时预览及确认删除", async () => {
+  await check("备忘录正文新增、摘要与预览实时更新及确认删除", async () => {
     await fresh(true);
     await enter("备忘录", "memo");
     await page.getByTestId("memo-new").click();
-    await page.getByTestId("memo-title").fill("发版回复");
+    assert(await page.getByTestId("memo-body").evaluate(n => n === document.activeElement), "新建须聚焦正文");
+    assert((await page.getByTestId("memo-title").count()) === 0, "编辑器不再要求独立标题");
+    assert(await page.getByTestId("memo-save").isDisabled(), "空正文不可保存");
     await page.getByTestId("memo-tags").fill("memo、发版");
     await page.getByTestId("memo-body").fill("版本已发布。");
     await page.getByTestId("memo-save").click();
@@ -100,9 +102,9 @@ export async function releaseChecks({
         document.querySelector('[data-testid="memo-preview-body"]')
           ?.textContent === "版本已发布。",
     );
-    await tray();
+    const createdId = await page.locator('[data-selected="true"][data-item-id]').getAttribute("data-item-id");
+    assert((await page.locator('[data-selected="true"] .result-title').textContent()) === "版本已发布。", "列表摘要须来自正文");
     await page.getByTestId("memo-edit").click();
-    await page.getByTestId("memo-title").fill("更新回复");
     await page.getByTestId("memo-tags").fill("新标签");
     await page.getByTestId("memo-body").fill("当前正文，已更新。");
     await page.getByTestId("memo-save").click();
@@ -112,15 +114,13 @@ export async function releaseChecks({
         document.querySelector('[data-testid="memo-preview-body"]')
           ?.textContent === "当前正文，已更新。",
     );
-    await tray();
+    assert((await page.locator('[data-selected="true"] .result-title').textContent()) === "当前正文，已更新。", "更新后摘要须同步");
     await page.getByTestId("memo-delete").click();
     assert(await page.getByTestId("confirm-delete").isVisible(), "删除须确认");
     await page.getByTestId("confirm-delete").click();
     await page.waitForFunction(
-      () =>
-        !Array.from(
-          document.querySelectorAll('[data-testid="result-item"]'),
-        ).some((n) => n.textContent.includes("更新回复")),
+      id => !Array.from(document.querySelectorAll('[data-item-id]')).some(n => n.dataset.itemId === id),
+      createdId,
     );
   });
   await check(
@@ -129,8 +129,8 @@ export async function releaseChecks({
       await fresh(true);
       await enter("memo", "memo");
       await tray();
-      await page.getByTestId("memo-edit").click();
-      await page.getByTestId("memo-title").fill("保留草稿");
+      await page.getByTestId("memo-edit-menu").click();
+      await page.getByTestId("memo-tags").fill("保留标签");
       await page.getByTestId("memo-body").fill("草稿正文");
       await page.evaluate(() =>
         window.__flashcastMock.simulateMemoSaveError("写入失败：目录只读"),
@@ -141,6 +141,8 @@ export async function releaseChecks({
         (await page.getByTestId("memo-body").inputValue()) === "草稿正文",
         "失败应保留正文草稿",
       );
+      assert((await page.getByTestId("memo-tags").inputValue()) === "保留标签", "失败应保留标签草稿");
+      assert((await page.getByRole("alert").count()) === 1, "错误只展示一次");
       await page.evaluate(() =>
         window.__flashcastMock.simulateMemoSaveError(null),
       );
@@ -159,7 +161,6 @@ export async function releaseChecks({
       await fresh(true);
       await enter("memo", "memo");
       await page.getByTestId("memo-new").click();
-      await page.getByTestId("memo-title").fill("同名标签");
       await page.getByTestId("memo-tags").fill("memo");
       await page.getByTestId("memo-body").fill("同名标签正文");
       await page.getByTestId("memo-save").click();
