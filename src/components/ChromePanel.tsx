@@ -11,7 +11,7 @@ interface Props {
 /** 关联状态的简短说明。 */
 function associationLabel(chrome: ChromeState): string {
   if (chrome.associated === null) {
-    return "尚未关联 profile";
+    return "尚未关联 Chrome 用户";
   }
   return `${chrome.associatedName ?? chrome.associated}（目录名 ${chrome.associated}）`;
 }
@@ -30,30 +30,11 @@ export function ChromePanel({ chrome, busy, onAssociate, onRefresh }: Props) {
     <section className="settings-section" data-testid="chrome-section">
       <h2 className="settings-section-title">Chrome 书签</h2>
 
-      <dl className="settings-facts">
-        <div className="settings-fact">
-          <dt>Chrome</dt>
-          <dd data-testid="chrome-availability">
-            {available
-              ? `${chrome?.brandLabel ?? "Chrome"}（${chrome?.binary ?? ""}）`
-              : "未找到 Chrome 可执行文件"}
-          </dd>
-        </div>
-        <div className="settings-fact">
-          <dt>用户数据目录</dt>
-          <dd data-testid="chrome-user-data-dir">
-            {chrome?.userDataDir ?? "未知"}
-            {chrome?.customUserDataDir ? "（默认位置之外，打开时会传 --user-data-dir）" : ""}
-          </dd>
-        </div>
-        <div className="settings-fact">
-          <dt>已关联 profile</dt>
-          <dd data-testid="chrome-association">{associationLabel(chrome ?? EMPTY_CHROME)}</dd>
-        </div>
+      <dl className="settings-facts chrome-index">
         <div className="settings-fact">
           <dt>书签索引</dt>
-          <dd data-testid="chrome-bookmarks-status">
-            {chrome?.bookmarksLabel ?? "尚未读取"}{" "}
+          <dd className="chrome-index-status" data-testid="chrome-bookmarks-status">
+            <span>{chrome?.bookmarksLabel ?? "尚未读取"}</span>
             <button
               type="button"
               className="secondary-button"
@@ -65,12 +46,6 @@ export function ChromePanel({ chrome, busy, onAssociate, onRefresh }: Props) {
             </button>
           </dd>
         </div>
-        {bookmarks?.path ? (
-          <div className="settings-fact">
-            <dt>书签文件</dt>
-            <dd data-testid="chrome-bookmarks-path">{bookmarks.path}</dd>
-          </div>
-        ) : null}
       </dl>
 
       {chrome?.error ? (
@@ -84,7 +59,8 @@ export function ChromePanel({ chrome, busy, onAssociate, onRefresh }: Props) {
         </div>
       ))}
 
-      <ul className="theme-list" data-testid="chrome-profile-list">
+      <h3 className="settings-section-title">Chrome 用户</h3>
+      <ul className="theme-list chrome-profiles" data-testid="chrome-profile-list">
         {(chrome?.profiles ?? []).map((profile) => (
           <li
             className="theme-item"
@@ -100,45 +76,75 @@ export function ChromePanel({ chrome, busy, onAssociate, onRefresh }: Props) {
                 目录 {profile.dir}
                 {profile.userName ? ` · ${profile.userName}` : " · 未登录账号"}
                 {profile.hasBookmarks ? "" : " · 还没有书签文件"}
+                {profile.managed ? (
+                  <span data-testid="chrome-managed-badge"> · 企业管理</span>
+                ) : null}
               </span>
             </span>
-            {profile.associated ? (
-              <span className="theme-badge" data-testid="chrome-associated-badge">
-                已关联
-              </span>
-            ) : null}
-            {profile.managed ? (
-              <span className="theme-badge" data-testid="chrome-managed-badge">
-                企业管理
-              </span>
-            ) : null}
             {!profile.bookmarksReadable ? (
               <span className="theme-badge theme-badge-error" data-testid="chrome-unreadable">
                 不可读
               </span>
             ) : null}
-            <button
-              type="button"
-              className="primary-button"
-              data-testid="chrome-associate"
-              disabled={busy || profile.associated}
-              onClick={() => onAssociate(profile.dir)}
-            >
-              {profile.associated ? "当前使用" : "关联"}
-            </button>
+            {profile.associated ? (
+              <span className="theme-badge chrome-current" data-testid="chrome-associated-badge">
+                当前使用
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="primary-button"
+                data-testid="chrome-associate"
+                disabled={busy}
+                onClick={() => onAssociate(profile.dir)}
+              >
+                关联
+              </button>
+            )}
           </li>
         ))}
       </ul>
       {chrome && chrome.profiles.length === 0 ? (
         <p className="settings-hint" data-testid="chrome-no-profiles">
           {available
-            ? "没有发现任何 profile：启动一次 Chrome 后这里会列出它的 profile。"
-            : "没有找到 Chrome，无法列出 profile。请安装 Chrome，或确认当前用户能读取它的用户数据目录。"}
+            ? "尚未发现 Chrome 用户，启动一次 Chrome 后重新读取。"
+            : "未找到 Chrome。请安装 Chrome，并确认可以读取用户数据目录。"}
         </p>
       ) : null}
 
       {bookmarks?.status.kind === "missing" ? <div className="content-empty" data-testid="chrome-missing-explanation"><strong>这个用户目录没有书签文件</strong><p>Flashcast 读取 Chrome 的原生书签。请先在该用户中收藏一个网页，再重新读取。</p><p>若 Chrome 中已有书签，请在 chrome://version 核对「个人资料路径」是否与上方目录一致。扩展中保存的链接不属于原生书签。</p></div> : null}
-      <details className="storage-details"><summary>读取方式与本机路径</summary><p className="settings-hint">关联只保存在本机。Flashcast 只读取 Bookmarks 文件；回车在关联的用户中打开书签。</p></details>
+      <details className="storage-details chrome-source">
+        <summary>来源与本机路径</summary>
+        <dl className="settings-facts">
+          <div className="settings-fact">
+            <dt>Chrome</dt>
+            <dd data-testid="chrome-availability">
+              {available
+                ? `${chrome?.brandLabel ?? "Chrome"}（${chrome?.binary ?? ""}）`
+                : "未找到 Chrome 可执行文件"}
+            </dd>
+          </div>
+          <div className="settings-fact">
+            <dt>用户数据目录</dt>
+            <dd data-testid="chrome-user-data-dir">
+              {chrome?.userDataDir ?? "未知"}
+              {chrome?.customUserDataDir ? "（默认位置之外，打开时会传 --user-data-dir）" : ""}
+            </dd>
+          </div>
+          <div className="settings-fact">
+            <dt>已关联用户</dt>
+            <dd data-testid="chrome-association">{associationLabel(chrome ?? EMPTY_CHROME)}</dd>
+          </div>
+          {bookmarks?.path ? (
+            <div className="settings-fact">
+              <dt>书签文件</dt>
+              <dd data-testid="chrome-bookmarks-path">{bookmarks.path}</dd>
+            </div>
+          ) : null}
+        </dl>
+
+        <p className="settings-hint">关联只保存在本机。Flashcast 只读取 Chrome 的原生书签。</p>
+      </details>
     </section>
   );
 }
@@ -155,5 +161,5 @@ const EMPTY_CHROME: ChromeState = {
   error: null,
   warnings: [],
   bookmarks: { path: null, status: { kind: "notAssociated" }, entries: [] },
-  bookmarksLabel: "尚未关联 Chrome profile",
+  bookmarksLabel: "尚未关联 Chrome 用户",
 };

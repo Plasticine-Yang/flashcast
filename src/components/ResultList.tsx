@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import type { ItemView } from "../types";
+import type { ItemView, Memo } from "../types";
+import { memoSummary } from "../memoSummary";
 import { Glyph } from "./Glyph";
 
 interface Props {
@@ -9,6 +10,7 @@ interface Props {
   onActivate: (item: ItemView) => void;
   /** 当前查询：用于突出命中的字符。 */
   query?: string;
+  memos?: Memo[];
 }
 
 /** 语义占位图标。真实图标由宿主以 data URL 提供。 */
@@ -100,6 +102,7 @@ export function ResultList({
   onActivate,
   onSelect,
   query,
+  memos = [],
 }: Props) {
   useEffect(() => {
     document
@@ -129,6 +132,12 @@ export function ResultList({
     >
       {items.map((item, index) => {
         const selected = index === selection;
+        const memo =
+          item.kind === "memo"
+            ? memos.find((entry) => `memo:${entry.id}` === item.id)
+            : undefined;
+        const title = memo ? memoSummary(memo.body) : item.title;
+        const subtitle = memo ? memo.tags.join(" · ") : item.subtitle;
         return (
           <li
             key={item.id}
@@ -168,11 +177,11 @@ export function ResultList({
             )}
             <span className="result-text">
               <span className="result-title">
-                {highlight(item.title, query)}
+                {highlight(title, query)}
               </span>
-              {item.subtitle ? (
+              {subtitle ? (
                 <span className="result-subtitle">
-                  {item.subtitle.replace(/^标签：/, "")}
+                  {subtitle.replace(/^标签：/, "")}
                 </span>
               ) : null}
             </span>
@@ -186,9 +195,6 @@ export function ResultList({
                     clipboardEntry: "剪切板",
                     bookmark: "书签",
                   }[item.kind]}
-            </span>
-            <span className="result-enter" aria-hidden="true">
-              ↵
             </span>
           </li>
         );

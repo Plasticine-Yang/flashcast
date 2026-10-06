@@ -9,6 +9,8 @@ import type {
 import { parseTags } from "../memoTags";
 import { ResultList } from "./ResultList";
 import { MemoPreview } from "./MemoPreview";
+import { Glyph } from "./Glyph";
+import { memoSummary } from "../memoSummary";
 
 interface Props {
   id: string;
@@ -44,22 +46,23 @@ interface Props {
 }
 interface Draft {
   id: string | null;
-  title: string;
   tags: string;
   body: string;
 }
 export function PluginPage(p: Props) {
   const [draft, setDraft] = useState<Draft | null>(null);
-  useEffect(() => {
-    if (p.menuOpen)
-      document
-        .querySelector<HTMLElement>(
-          ".action-tray [role=menuitem]:not(:disabled)",
-        )
-        ?.focus();
-    else if (!draft) document.getElementById("search-input")?.focus();
-  }, [p.menuOpen, !!draft]);
   const [confirm, setConfirm] = useState<"delete" | "clear" | null>(null);
+  useEffect(() => {
+    // 等父级解除搜索框的 disabled，再恢复键盘入口。
+    const frame = requestAnimationFrame(() => {
+      if (p.menuOpen)
+        document.querySelector<HTMLElement>(
+          '.action-tray [data-testid="confirm-delete"], .action-tray [role=menuitem]:not(:disabled)',
+        )?.focus();
+      else if (!draft) document.getElementById("search-input")?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [p.menuOpen, !!draft, confirm]);
   const selected = p.items[p.selection];
   const memo = p.memos.find((m) => `memo:${m.id}` === selected?.id);
   const entry = p.clipboard?.items.find(
@@ -80,14 +83,13 @@ export function PluginPage(p: Props) {
   }, [!!draft, p.onEditing]);
   const startNew = () => {
     p.onMenu(false);
-    setDraft({ id: null, title: "", tags: "", body: "" });
+    setDraft({ id: null, tags: "", body: "" });
   };
   const startEdit = () => {
     if (memo && writable) {
       p.onMenu(false);
       setDraft({
         id: memo.id,
-        title: memo.title,
         tags: memo.tags.join("、"),
         body: memo.body,
       });
@@ -123,15 +125,19 @@ export function PluginPage(p: Props) {
     return () => window.removeEventListener("keydown", key, true);
   }, [draft, p.menuOpen, confirm, memo, writable, p.busy]);
   const save = async () => {
-    if (!draft || p.busy) return;
+    if (!draft || p.busy || !draft.body.trim()) return;
     const ok = draft.id
       ? await p.onUpdate(
           draft.id,
-          draft.title,
+          memoSummary(draft.body),
           parseTags(draft.tags),
           draft.body,
         )
-      : await p.onCreate(draft.title, parseTags(draft.tags), draft.body);
+      : await p.onCreate(
+          memoSummary(draft.body),
+          parseTags(draft.tags),
+          draft.body,
+        );
     if (ok) setDraft(null);
   };
   const remove = async () => {
@@ -158,11 +164,12 @@ export function PluginPage(p: Props) {
     >
       <header className="plugin-page-header">
         <button
-          className="ghost-button plugin-back"
+          className="ghost-button navigation-back plugin-back"
           aria-label="返回主搜索"
+          title="返回主搜索"
           onClick={p.onBack}
         >
-          ‹
+          <Glyph name="back" />
         </button>
         <h1>{p.title}</h1>
         <span>{p.items.length} 条</span>
@@ -173,7 +180,7 @@ export function PluginPage(p: Props) {
             disabled={!writable}
             onClick={startNew}
           >
-            ＋ 新建
+            新建
           </button>
         ) : null}
       </header>
@@ -215,6 +222,7 @@ export function PluginPage(p: Props) {
       <div className="plugin-columns">
         <ResultList
           items={p.items}
+          memos={p.memos}
           selection={p.selection}
           query={p.query}
           onSelect={p.onSelect}
@@ -229,15 +237,39 @@ export function PluginPage(p: Props) {
                 open={true}
                 onToggle={() => {}}
               />
-              <div className="plugin-primary">
-                <button
-                  className="primary-button"
-                  disabled={p.busy}
-                  onClick={() => p.onExecute(selected)}
-                >
-                  {selected.defaultActionLabel} <kbd>↵</kbd>
-                </button>
-              </div>
+              {p.id === "memo" ? (
+                <div className="memo-detail-actions">
+                  <button
+                    className="secondary-button"
+                    data-testid="memo-edit"
+                    disabled={!memo || !writable}
+                    onClick={startEdit}
+                  >
+                    <Glyph name="edit" />编辑
+                  </button>
+                  <button
+                    className="ghost-button danger-button"
+                    data-testid="memo-delete"
+                    disabled={!memo || !writable}
+                    onClick={() => {
+                      p.onMenu(true);
+                      setConfirm("delete");
+                    }}
+                  >
+                    <Glyph name="trash" />删除
+                  </button>
+                </div>
+              ) : (
+                <div className="plugin-primary">
+                  <button
+                    className="primary-button"
+                    disabled={p.busy}
+                    onClick={() => p.onExecute(selected)}
+                  >
+                    {selected.defaultActionLabel} <kbd>↵</kbd>
+                  </button>
+                </div>
+              )}
             </>
           ) : (
             <div className="content-empty">
@@ -322,7 +354,7 @@ export function PluginPage(p: Props) {
                 <p>
                   {confirm === "clear"
                     ? "清空全部剪切板历史？此操作无法撤销。"
-                    : `删除「${selected?.title}」？此操作无法撤销。`}
+                    : `删除「${memo ? memoSummary(memo.body) : selected?.title}」？此操作无法撤销。`}
                 </p>
                 <button
                   className="danger-button secondary-button"
@@ -370,7 +402,7 @@ export function PluginPage(p: Props) {
                     </button>
                     <button
                       role="menuitem"
-                      data-testid="memo-edit"
+                      data-testid="memo-edit-menu"
                       disabled={!memo || !writable}
                       onClick={startEdit}
                     >
@@ -395,7 +427,7 @@ export function PluginPage(p: Props) {
                     className="danger-button"
                     role="menuitem"
                     disabled={p.busy || (!!memo && !writable)}
-                    data-testid="memo-delete"
+                    data-testid="delete-menu"
                     onClick={() => void remove()}
                   >
                     删除
@@ -472,34 +504,26 @@ export function PluginPage(p: Props) {
                 {p.message.text}
               </p>
             ) : null}
-            <label>
-              标题
-              <input
+            <label className="memo-body-field">
+              正文
+              <textarea
                 disabled={p.busy}
                 autoFocus
                 required
-                data-testid="memo-title"
-                value={draft.title}
-                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                placeholder="写下要记住的内容…"
+                data-testid="memo-body"
+                value={draft.body}
+                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
               />
             </label>
             <label>
-              标签
+              <span>标签 <small>可选</small></span>
               <input
                 disabled={p.busy}
                 data-testid="memo-tags"
                 placeholder="工作、常用回复"
                 value={draft.tags}
                 onChange={(e) => setDraft({ ...draft, tags: e.target.value })}
-              />
-            </label>
-            <label className="memo-body-field">
-              正文
-              <textarea
-                disabled={p.busy}
-                data-testid="memo-body"
-                value={draft.body}
-                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
               />
             </label>
             <footer>
@@ -509,7 +533,7 @@ export function PluginPage(p: Props) {
               <button
                 className="primary-button"
                 data-testid="memo-save"
-                disabled={p.busy}
+                disabled={p.busy || !draft.body.trim()}
               >
                 {p.busy ? "保存中…" : "保存备忘录"}
               </button>

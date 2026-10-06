@@ -38,23 +38,25 @@ export function MemoPreview({ item, preview, open, onToggle }: Props) {
       data-open={open ? "true" : "false"}
       data-kind={image ? "image" : "text"}
     >
-      <header className="preview-header">
-        <span className="preview-title" data-testid="memo-preview-title">
-          {text?.title ?? item.title}
-        </span>
-        <span className="preview-meta" data-testid="memo-preview-action">
-          {item.defaultActionLabel}{image ? "完整图片" : "完整内容"}
-        </span>
-        <button
-          type="button"
-          className="ghost-button"
-          data-testid="memo-preview-toggle"
-          aria-expanded={open}
-          onClick={onToggle}
-        >
-          {open ? "收起预览" : "展开预览"}
-        </button>
-      </header>
+      {item.kind !== "memo" ? (
+        <header className="preview-header">
+          <span className="preview-title" data-testid="memo-preview-title">
+            {text?.title ?? item.title}
+          </span>
+          <span className="preview-meta" data-testid="memo-preview-action">
+            {item.defaultActionLabel}{image ? "完整图片" : "完整内容"}
+          </span>
+          <button
+            type="button"
+            className="ghost-button"
+            data-testid="memo-preview-toggle"
+            aria-expanded={open}
+            onClick={onToggle}
+          >
+            {open ? "收起预览" : "展开预览"}
+          </button>
+        </header>
+      ) : null}
       {open ? (
         image ? (
           <img

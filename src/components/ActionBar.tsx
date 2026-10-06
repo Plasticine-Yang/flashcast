@@ -1,18 +1,12 @@
-import type { ItemView } from "../types";
-
 interface Props {
-  selected: ItemView | null;
-  count: number;
   editing?: boolean;
   plugin?: boolean;
   onActions?: () => void;
   menuOpen?: boolean;
 }
 
-/** 操作栏：始终显示当前选中结果的默认操作（打开 / 在 Chrome 打开 / 粘贴）。 */
+/** 安静的品牌底栏；插件的次要管理操作集中在动作入口。 */
 export function ActionBar({
-  selected,
-  count,
   editing = false,
   plugin = false,
   onActions,
@@ -37,23 +31,7 @@ export function ActionBar({
           <kbd>Ctrl</kbd>
           <kbd>Enter</kbd> 保存
         </span>
-      ) : (
-        <>
-          <span className="action-hint">
-            <kbd>↑</kbd>
-            <kbd>↓</kbd> 选择
-          </span>
-          <span className="action-hint">
-            <kbd>Enter</kbd>
-            <span data-testid="default-action-label">
-              {selected ? selected.defaultActionLabel : "打开"}
-            </span>
-          </span>
-        </>
-      )}
-      <span className="action-hint">
-        <kbd>Esc</kbd> {editing ? "取消编辑" : plugin ? "返回" : "关闭"}
-      </span>
+      ) : null}
       {plugin && !editing ? (
         <button
           className="action-toggle"
@@ -64,9 +42,6 @@ export function ActionBar({
           动作 <kbd>Ctrl K</kbd>
         </button>
       ) : null}
-      <span className="action-count" data-testid="result-count">
-        {count} 条
-      </span>
     </footer>
   );
 }

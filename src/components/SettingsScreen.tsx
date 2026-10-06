@@ -430,11 +430,13 @@ export function SettingsScreen({
         <h1 className="settings-title">设置</h1>
         <button
           type="button"
-          className="ghost-button"
+          className="ghost-button navigation-back"
           data-testid="settings-back"
+          aria-label="返回搜索"
+          title="返回搜索"
           onClick={onBack}
         >
-          ‹ 搜索
+          <Glyph name="back" />
         </button>
         <span className="settings-signature">FLASHCAST</span>
       </header>

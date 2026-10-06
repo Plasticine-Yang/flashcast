@@ -35,16 +35,26 @@
   margin-left: auto;
   padding: 5px 11px;
 }
-.plugin-back {
-  font-size: 22px;
-  line-height: 1;
-  padding: 0 5px;
+/* 用同一 SVG 与正方形点击区统一两个页面的返回入口。 */
+.navigation-back,
+.settings-header .navigation-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  flex: none;
+  border: 0;
+  border-radius: var(--fc-radius-control);
+  color: var(--fc-text-muted);
 }
+.navigation-back .glyph { width: 20px; height: 20px; }
 .plugin-columns {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 44% 56%;
+  grid-template-columns: 40% 60%;
 }
 .plugin-columns > .result-list {
   min-width: 0;
@@ -56,7 +66,7 @@
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--fc-border);
-  padding: 18px 18px 12px;
+  padding: 18px;
   overflow: hidden;
 }
 .plugin-detail .preview {
@@ -143,9 +153,6 @@
   background: var(--fc-selection-bg);
   color: var(--fc-accent);
   cursor: pointer;
-}
-.action-count {
-  margin-left: 0;
 }
 .tray-dismiss {
   position: fixed;
@@ -309,12 +316,14 @@
 }
 .command-shortcuts h3 {
   font-size: 14px;
-  margin: 0 0 10px;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--fc-text);
 }
 .command-shortcut label {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
   font-size: 12px;
 }
 .command-shortcut input {
@@ -324,12 +333,29 @@
 .shortcut-actions {
   display: flex;
   gap: 8px;
-  margin-top: 9px;
+  margin-top: 0;
+  flex-wrap: wrap;
 }
-.command-shortcuts {
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--fc-border);
+.settings-body .command-shortcuts {
+  padding-top: 20px;
+  border-top: 1px solid var(--fc-border);
 }
+.command-shortcut { display: flex; flex-direction: column; gap: 10px; }
+.chrome-index-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chrome-index-status > span { flex: 1; min-width: 100px; }
+.chrome-profiles { gap: 0; }
+.chrome-profiles .theme-item { flex-wrap: wrap; }
+.chrome-profiles .theme-item:last-child { border-bottom: 0; }
+.chrome-profiles .theme-name { flex-basis: 180px; }
+.chrome-profiles [data-testid="chrome-managed-badge"] { display: inline-block; white-space: nowrap; }
+.chrome-current { color: var(--fc-accent); border: 0; background: var(--fc-selection-bg); padding: 4px 8px; }
+.memo-detail-actions { padding-top: 14px; border-top: 1px solid var(--fc-border); }
+.memo-detail-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.memo-detail-actions .glyph { width: 15px; height: 15px; }
+.memo-detail-actions .danger-button { color: var(--fc-error-text); border: 0; }
+.memo-modal label small { margin-left: 4px; font-size: inherit; color: var(--fc-text-disabled); }
+.memo-modal textarea { line-height: 1.7; }
+
 @keyframes plugin-enter {
   from {
     opacity: 0;
@@ -375,12 +401,6 @@
 
 .plugin-columns .result-kind {
   display: none;
-}
-.plugin-columns .result-enter {
-  visibility: hidden;
-}
-.plugin-columns [data-selected="true"] .result-enter {
-  visibility: visible;
 }
 .memo-modal input:focus-visible,
 .memo-modal textarea:focus-visible {

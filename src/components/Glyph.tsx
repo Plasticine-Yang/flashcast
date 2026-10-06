@@ -1,4 +1,7 @@
 const paths: Record<string, string> = {
+  back: "m14 6-6 6 6 6",
+  edit: "m15 4 5 5 M4 20l4-1L20 7l-4-4L4 15z",
+  trash: "M4 6h16 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7",
   application: "M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z",
   browser: "M3 5h18v15H3z M3 9h18 M6 7h1 M9 7h1",
   editor: "m8 7-5 5 5 5 M16 7l5 5-5 5 M14 4l-4 16",

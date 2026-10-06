@@ -156,8 +156,8 @@ export default function App() {
         : api.query("")
     ).then(apply);
     void api.get_plugin_commands().then(setCommands);
+    void loadMemos();
     if (browserPreview) {
-      void loadMemos();
       void loadClipboard();
       void loadChrome();
     }
@@ -236,6 +236,7 @@ export default function App() {
           void loadChanges();
           void loadSync();
           void loadPlugins();
+          void loadMemos();
           if (event.reload?.error) {
             setSettingsMessage({ level: "error", text: event.reload.error });
           } else if (event.reload?.applied) {
@@ -295,6 +296,12 @@ export default function App() {
       inputRef.current?.select();
     });
   }
+
+  useEffect(() => {
+    if (screen === "search" && !memoEditing && !menuOpen) {
+      inputRef.current?.focus();
+    }
+  }, [screen, memoEditing, menuOpen]);
 
   const openSettings = () => {
     setSettingsMessage(null);
@@ -1350,6 +1357,7 @@ export default function App() {
             <div className="search-body home-results">
               <ResultList
                 items={response.items}
+                memos={memos}
                 selection={response.selection}
                 query={response.input}
                 onSelect={(index) => {
@@ -1361,8 +1369,6 @@ export default function App() {
           )}
 
           <ActionBar
-            selected={selected}
-            count={response.items.length}
             editing={memoEditing}
             plugin={response.scope.kind === "plugin"}
             menuOpen={menuOpen}
