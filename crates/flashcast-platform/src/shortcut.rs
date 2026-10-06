@@ -56,7 +56,7 @@ pub enum HotkeyError {
     InvalidSpec(#[from] crate::hotkey::HotkeySpecError),
     #[error("快捷键 {spec} 已被 Flashcast 注册")]
     AlreadyRegistered { spec: String },
-    #[error("快捷键 {spec} 已被其他应用占用，请在设置中改用其他组合")]
+    #[error("快捷键 {spec} 已被占用，无法确认占用者，请在设置中改用其他组合")]
     Conflict { spec: String },
     #[error("当前环境无法注册全局快捷键：{reason}")]
     BackendUnavailable { reason: String },

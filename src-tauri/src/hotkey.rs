@@ -70,7 +70,35 @@ pub fn apply<R: Runtime>(app: &AppHandle<R>, state: &AppState, raw: &str) {
         });
         return;
     }
-    apply_sync(app, state, raw);
+    // 普通后端统一在主线程操作。尤其不能从文件监听线程创建 Windows HWND。
+    let generation = {
+        let mut hotkey = lock(&state.hotkey);
+        hotkey.generation += 1;
+        hotkey.pending = true;
+        if hotkey.handle.is_none() {
+            hotkey.label = raw.to_string();
+        }
+        hotkey.generation
+    };
+    push_status(app, state);
+    let handle = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        let state = handle.state::<AppState>();
+        if lock(&state.hotkey).generation != generation {
+            return;
+        }
+        // 请求排队期间设置可能又有变化，始终应用最新的宿主配置。
+        let raw = state.host.settings().hotkey;
+        apply_sync(&handle, &state, &raw);
+    }) {
+        let mut hotkey = lock(&state.hotkey);
+        if hotkey.generation == generation {
+            hotkey.pending = false;
+            hotkey.error = Some(format!("无法在主线程注册快捷键：{error}"));
+        }
+        drop(hotkey);
+        push_status(app, state);
+    }
 }
 
 fn callback<R: Runtime>(app: &AppHandle<R>) -> PressCallback {
@@ -84,37 +112,45 @@ fn callback<R: Runtime>(app: &AppHandle<R>) -> PressCallback {
 }
 
 fn apply_sync<R: Runtime>(app: &AppHandle<R>, state: &AppState, raw: &str) {
-    // 先注销旧的，避免重新注册时与自身冲突。
-    {
-        let mut hotkey = lock(&state.hotkey);
-        if let Some(handle) = hotkey.handle.take() {
-            let _ = state.platform.hotkeys.unregister(&handle);
-        }
-        hotkey.label = raw.to_string();
-        hotkey.error = None;
-    }
-
+    let _registration = lock(&state.hotkey_registration);
     let spec = match HotkeySpec::parse(raw) {
         Ok(spec) => spec,
         Err(error) => {
             let message = error.to_string();
-            lock(&state.hotkey).error = Some(message.clone());
+            let mut hotkey = lock(&state.hotkey);
+            hotkey.pending = false;
+            hotkey.error = Some(message.clone());
+            drop(hotkey);
             push_status(app, state);
             let _ = app.emit("flashcast://hotkey-error", message);
             return;
         }
     };
 
-    match state.platform.hotkeys.register(&spec, callback(app)) {
+    let previous = lock(&state.hotkey).handle.clone();
+    let result = match previous.as_ref() {
+        Some(handle) => state.platform.hotkeys.update(handle, &spec),
+        None => state.platform.hotkeys.register(&spec, callback(app)),
+    };
+    let mut hotkey = lock(&state.hotkey);
+    hotkey.pending = false;
+    match result {
         Ok(handle) => {
-            let mut hotkey = lock(&state.hotkey);
+            hotkey.label = handle
+                .trigger_description
+                .clone()
+                .unwrap_or_else(|| spec.canonical());
             hotkey.handle = Some(handle);
             hotkey.error = None;
         }
         Err(error) => {
-            lock(&state.hotkey).error = Some(error.to_string());
+            if hotkey.handle.is_none() {
+                hotkey.label = raw.to_string();
+            }
+            hotkey.error = Some(error.to_string());
         }
     }
+    drop(hotkey);
     push_status(app, state);
 }
 
@@ -200,8 +236,11 @@ pub fn sync_commands<R: Runtime>(app: &AppHandle<R>) {
                 entry.hotkey.pending = enabled;
                 entry.hotkey.error = None;
                 if !enabled {
-                    if let Some(old) = entry.hotkey.handle.take() {
-                        let _ = state.platform.hotkeys.unregister(&old);
+                    if let Some(old) = entry.hotkey.handle.as_ref() {
+                        match state.platform.hotkeys.unregister(old) {
+                            Ok(()) => entry.hotkey.handle = None,
+                            Err(error) => entry.hotkey.error = Some(error.to_string()),
+                        }
                     }
                 }
                 entry.hotkey.generation
@@ -260,13 +299,38 @@ fn register_command<R: Runtime>(
             summon::summon_command(&handle, activation.token.as_deref(), &id);
         });
     });
+    let previous = lock(&state.command_hotkeys)
+        .get(&command.id)
+        .and_then(|entry| entry.hotkey.handle.clone());
     let result = HotkeySpec::parse(&command.shortcut)
         .map_err(Into::into)
         .and_then(|spec| {
-            state
-                .platform
-                .hotkeys
-                .register_command(&spec, &command.id, &command.title, callback)
+            if let Some(old) = previous.as_ref() {
+                if old.spec.canonical() == spec.canonical() {
+                    return Ok(old.clone());
+                }
+            }
+            let new_handle = state.platform.hotkeys.register_command(
+                &spec,
+                &command.id,
+                &command.title,
+                callback,
+            )?;
+            // 门户成功后在下面交换句柄；普通后端不能吞掉旧组合的注销失败。
+            #[cfg(target_os = "linux")]
+            let portal = flashcast_platform::linux::detect_session_type()
+                == flashcast_platform::SessionType::Wayland;
+            #[cfg(not(target_os = "linux"))]
+            let portal = false;
+            if !portal {
+                if let Some(old) = previous.as_ref() {
+                    if let Err(error) = state.platform.hotkeys.unregister(old) {
+                        state.platform.hotkeys.unregister(&new_handle)?;
+                        return Err(error);
+                    }
+                }
+            }
+            Ok(new_handle)
         });
     let mut all = lock(&state.command_hotkeys);
     let Some(entry) = all
@@ -286,9 +350,14 @@ fn register_command<R: Runtime>(
                 .trigger_description
                 .clone()
                 .unwrap_or(command.shortcut);
+            let unchanged = entry
+                .hotkey
+                .handle
+                .as_ref()
+                .is_some_and(|old| old.id == handle.id);
             let old = entry.hotkey.handle.replace(handle);
             drop(all);
-            if let Some(old) = old {
+            if let Some(old) = old.filter(|_| !unchanged) {
                 let _ = state.platform.hotkeys.unregister(&old);
             }
         }

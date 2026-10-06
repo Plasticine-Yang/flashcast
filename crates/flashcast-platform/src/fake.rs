@@ -904,15 +904,12 @@ impl HotkeyManager for FakeHotkeyManager {
         handle: &HotkeyHandle,
         spec: &HotkeySpec,
     ) -> Result<HotkeyHandle, HotkeyError> {
-        self.unregister(handle)?;
-        match self.register(spec, handle.callback.clone()) {
-            Ok(new_handle) => Ok(new_handle),
-            Err(error) => {
-                // 更新失败时恢复原快捷键，避免用户失去入口。
-                let _ = self.register(&handle.spec, handle.callback.clone());
-                Err(error)
-            }
+        if handle.spec.canonical() == spec.canonical() {
+            return Ok(handle.clone());
         }
+        let new_handle = self.register(spec, handle.callback.clone())?;
+        self.unregister(handle)?;
+        Ok(new_handle)
     }
 
     fn unregister(&self, handle: &HotkeyHandle) -> Result<(), HotkeyError> {

@@ -943,7 +943,7 @@ export default function App() {
         setSettingsMessage({
           level: "info",
           text: hotkeyStatus.pending
-            ? "快捷键配置已保存，系统授权结果会显示在「当前生效」中。"
+            ? "快捷键配置已保存，注册结果会显示在「当前绑定」中。"
             : hotkeyStatus.error
               ? `快捷键配置已保存，但注册失败：${hotkeyStatus.error}`
               : hotkeyStatus.registered

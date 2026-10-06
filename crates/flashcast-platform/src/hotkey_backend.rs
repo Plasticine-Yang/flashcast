@@ -7,7 +7,7 @@
 //!
 //! 唯一按平台分支的是管理器的生命周期：Linux 与 macOS 可以放心用进程级单例；
 //! Windows 上管理器持有隐藏窗口的 `HWND`，`WM_HOTKEY` 只投递到创建它的线程，
-//! 因此见下面 `#[cfg(target_os = "windows")]` 的 [`manager`]。
+//! 因此由 [`with_manager`] 在原线程保存管理器，并在进程内检查线程归属。
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -32,7 +32,6 @@ fn lock_callbacks() -> MutexGuard<'static, HashMap<u32, PressCallback>> {
 }
 
 /// 进程级后端管理器。初始化失败会被记住并作为可展示原因返回。
-#[cfg(not(target_os = "windows"))]
 #[cfg(not(target_os = "windows"))]
 fn manager() -> Result<&'static GlobalHotKeyManager, HotkeyError> {
     static MANAGER: OnceLock<Result<GlobalHotKeyManager, String>> = OnceLock::new();
@@ -65,18 +64,10 @@ fn with_manager<T>(f: impl FnOnce(&GlobalHotKeyManager) -> T) -> Result<T, Hotke
                 const { RefCell::new(None) };
         }
 
-        thread_local! {
-            static OWNER_THREAD: RefCell<Option<std::thread::ThreadId>> = const { RefCell::new(None) };
-        }
-
+        // 归属必须进程共享；thread_local 会让每个线程都把自己当作 owner。
+        static OWNER_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
         let current = std::thread::current().id();
-        let owner = OWNER_THREAD.with(|cell| *cell.borrow().as_ref().unwrap_or(&current));
-        OWNER_THREAD.with(|cell| {
-            if cell.borrow().is_none() {
-                *cell.borrow_mut() = Some(current);
-            }
-        });
-        if owner != current {
+        if *OWNER_THREAD.get_or_init(|| current) != current {
             return Err(HotkeyError::BackendUnavailable {
                 reason: "全局快捷键后端属于创建它的线程（Windows 的 WM_HOTKEY 只投递到该线程的\
                          消息队列）；请在应用主线程注册快捷键"
@@ -124,10 +115,17 @@ fn ensure_listener() {
 pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHandle, HotkeyError> {
     let hotkey = to_backend_hotkey(spec)?;
     let id = hotkey.id();
-
+    // 只有本进程的成功注册记录可以证明「已被 Flashcast 注册」。
+    let mut callbacks = lock_callbacks();
+    if callbacks.contains_key(&id) {
+        return Err(HotkeyError::AlreadyRegistered {
+            spec: spec.canonical(),
+        });
+    }
     with_manager(|manager| manager.register(hotkey))
         .and_then(|result| result.map_err(|error| classify(error, spec)))?;
-    lock_callbacks().insert(id, on_press);
+    callbacks.insert(id, on_press);
+    drop(callbacks);
     ensure_listener();
     Ok(HotkeyHandle::new(u64::from(id), spec.clone(), {
         // 句柄不自持回调副本，避免重复持有；触发走全局表。
@@ -135,37 +133,37 @@ pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHand
     }))
 }
 
-/// 替换已注册的快捷键。失败时恢复原快捷键，避免用户彻底失去入口。
+/// 新组合注册成功后才释放旧组合；失败保留原注册及回调。
 pub fn update(handle: &HotkeyHandle, spec: &HotkeySpec) -> Result<HotkeyHandle, HotkeyError> {
+    if handle.spec.canonical() == spec.canonical() {
+        return Ok(handle.clone());
+    }
     let callback = lock_callbacks()
         .get(&(handle.id as u32))
         .cloned()
         .unwrap_or_else(|| dummy_callback(handle.id as u32));
-    unregister(handle)?;
-    match register(spec, callback.clone()) {
-        Ok(new_handle) => Ok(new_handle),
-        Err(error) => {
-            let _ = register(&handle.spec, callback);
-            Err(error)
-        }
+    let new_handle = register(spec, callback)?;
+    if let Err(error) = unregister(handle) {
+        // 旧组合仍有效；撤销尚未交给调用方的新组合。
+        unregister(&new_handle)?;
+        return Err(error);
     }
+    Ok(new_handle)
 }
 
 /// 注销快捷键。重复注销不视为错误。
 pub fn unregister(handle: &HotkeyHandle) -> Result<(), HotkeyError> {
     let id = handle.id as u32;
-    lock_callbacks().remove(&id);
-    let hotkey = to_backend_hotkey(&handle.spec)?;
-    match with_manager(|manager| manager.unregister(hotkey)) {
-        Ok(Ok(())) => Ok(()),
-        // 已经不在注册表中不视为错误。
-        Ok(Err(global_hotkey::Error::FailedToUnRegister(_))) => Ok(()),
-        Ok(Err(error)) => Err(HotkeyError::Other {
-            reason: error.to_string(),
-        }),
-        // 后端不可用（或不是创建它的线程）时也视为已注销：清理路径不应报错。
-        Err(_) => Ok(()),
+    let mut callbacks = lock_callbacks();
+    if !callbacks.contains_key(&id) {
+        return Ok(());
     }
+    let hotkey = to_backend_hotkey(&handle.spec)?;
+    with_manager(|manager| manager.unregister(hotkey))?.map_err(|error| HotkeyError::Other {
+        reason: error.to_string(),
+    })?;
+    callbacks.remove(&id);
+    Ok(())
 }
 
 /// 把内部规格转换为后端快捷键。
@@ -269,6 +267,12 @@ pub fn classify(error: global_hotkey::Error, spec: &HotkeySpec) -> HotkeyError {
         global_hotkey::Error::FailedToRegister(_) => HotkeyError::Conflict {
             spec: spec.canonical(),
         },
+        // Windows 的 ERROR_HOTKEY_ALREADY_REGISTERED 不提供占用者身份。
+        #[cfg(target_os = "windows")]
+        global_hotkey::Error::AlreadyRegistered(_) => HotkeyError::Conflict {
+            spec: spec.canonical(),
+        },
+        #[cfg(not(target_os = "windows"))]
         global_hotkey::Error::AlreadyRegistered(_) => HotkeyError::AlreadyRegistered {
             spec: spec.canonical(),
         },

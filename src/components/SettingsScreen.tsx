@@ -873,7 +873,7 @@ export function SettingsScreen({
           <p className="settings-hint" data-testid="hotkey-status">
             当前绑定：
             {hotkey?.pending
-              ? "等待系统授权"
+              ? "正在注册"
               : hotkey?.registered
                 ? (hotkeyConflict?.effective ?? hotkey.label)
                 : "未注册"}

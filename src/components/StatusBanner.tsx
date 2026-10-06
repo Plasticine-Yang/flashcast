@@ -58,12 +58,14 @@ export function StatusBanner({ status, response, feedback, workspaceAlert }: Pro
       ) : null}
       {status?.hotkey.pending ? (
         <div className="banner banner-info" data-testid="hotkey-pending" role="status">
-          正在等待系统快捷键授权，请在系统弹窗中确认「打开 Flashcast」。
+          正在注册全局快捷键；若系统显示授权窗口，请完成授权。
         </div>
       ) : null}
       {hotkeyError ? (
         <div className="banner banner-warning" data-testid="hotkey-warning" role="status">
-          全局快捷键 {status?.hotkey.label} 注册失败：{hotkeyError}
+          {status?.hotkey.registered
+            ? `全局快捷键更新失败：${hotkeyError}；原快捷键仍生效：${status.hotkey.label}`
+            : `全局快捷键 ${status?.hotkey.label} 注册失败：${hotkeyError}`}
           <span className="banner-hint">可用托盘图标「打开 Flashcast」或应用菜单进入。</span>
         </div>
       ) : null}
