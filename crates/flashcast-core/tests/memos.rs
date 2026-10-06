@@ -627,7 +627,11 @@ fn a_hanging_memo_scope_is_timed_out_without_blocking_search() {
     );
 
     let started = Instant::now();
-    let response = support::plugin_query(&mh.host, "备忘录");
+    let outcome = mh
+        .host
+        .execute_plugin_command(&format!("flashcast.plugin.{MEMO_PLUGIN_ID}"));
+    assert_eq!(outcome.status, flashcast_core::ActionStatus::Done);
+    let response = mh.host.snapshot();
     let elapsed = started.elapsed();
 
     assert!(
