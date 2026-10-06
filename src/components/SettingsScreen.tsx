@@ -604,28 +604,34 @@ export function SettingsScreen({
               onChange={(event) => setRemoteUrl(event.target.value)}
             />
           </div>
-          <div className="settings-row">
-            <input
-              id="clone-user"
-              className="path-input"
-              data-testid="clone-user-input"
-              type="text"
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="令牌用户名（可留空，默认 x-access-token）"
-              value={tokenUser}
-              onChange={(event) => setTokenUser(event.target.value)}
-            />
-            <input
-              id="clone-token"
-              className="path-input"
-              data-testid="clone-token-input"
-              type="password"
-              autoComplete="off"
-              placeholder="访问令牌（只保存在本机设备目录）"
-              value={token}
-              onChange={(event) => setToken(event.target.value)}
-            />
+          <div className="credential-fields">
+            <label>
+              用户名（可选）
+              <input
+                id="clone-user"
+                className="path-input"
+                data-testid="clone-user-input"
+                type="text"
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="x-access-token"
+                value={tokenUser}
+                onChange={(event) => setTokenUser(event.target.value)}
+              />
+            </label>
+            <label>
+              访问令牌
+              <input
+                id="clone-token"
+                className="path-input"
+                data-testid="clone-token-input"
+                type="password"
+                autoComplete="off"
+                placeholder="输入令牌"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+              />
+            </label>
           </div>
           <div className="settings-row">
             <button
@@ -665,7 +671,7 @@ export function SettingsScreen({
             </p>
           ) : null}
           <p className="settings-hint">
-            目标目录必须是空目录：已有文件时拒绝克隆，不会覆盖。失败或取消会自动清理
+            用户名留空时使用 x-access-token。目标目录必须是空目录：已有文件时拒绝克隆，不会覆盖。失败或取消会自动清理
             本次创建的内容，当前工作区与设置保持不变。https
             令牌只保存在本机设备目录， 不会写入工作区或日志；ssh 复用 ssh-agent
             与 ~/.ssh 下的密钥。

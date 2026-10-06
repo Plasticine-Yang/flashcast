@@ -1,0 +1,138 @@
+/* 控件的外观与焦点只有这一处定义，保持 Chromium / WebKit 一致。 */
+.app button {
+  -webkit-appearance: none;
+  appearance: none;
+  font-family: inherit;
+  outline: none;
+}
+
+.app :is(input:not(.search-input), textarea, select) {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--fc-border);
+  border-radius: var(--fc-radius-control);
+  background: var(--fc-hover-bg);
+  color: var(--fc-text);
+  font: 13px/1.5 var(--fc-font-family);
+  outline: none;
+  box-shadow: none;
+  transition: border-color 100ms ease-out, box-shadow 100ms ease-out;
+}
+
+.app :is(input, textarea)::placeholder {
+  color: var(--fc-text-disabled);
+  opacity: 1;
+}
+.app textarea { resize: none; }
+
+.app :is(input:not(.search-input), textarea, select):focus {
+  border-color: var(--fc-text-muted);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fc-text-muted) 10%, transparent);
+}
+
+.app :is(button, summary):focus-visible {
+  outline: 1px solid var(--fc-text-muted);
+  outline-offset: 2px;
+}
+
+.app :is(input:not(.search-input), textarea, select):disabled {
+  opacity: var(--fc-disabled-opacity);
+  cursor: not-allowed;
+}
+.app :is(input, textarea, select)[aria-invalid="true"] { border-color: var(--fc-error-text); }
+.field-error { flex-basis: 100%; margin: 0; color: var(--fc-error-text); font-size: 12px; line-height: 1.5; }
+.credential-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.credential-fields label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--fc-text-muted); }
+
+.app input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+  font-variant-numeric: tabular-nums;
+}
+.app input[type="number"]::-webkit-inner-spin-button,
+.app input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.app input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  flex: none;
+  display: inline-grid;
+  place-content: center;
+  padding: 0;
+  margin: 0;
+  border-color: var(--fc-border-strong);
+  border-radius: 4px;
+  background: var(--fc-surface);
+  cursor: pointer;
+}
+.app input[type="checkbox"]::before {
+  content: "";
+  width: 8px;
+  height: 4px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-1px) rotate(-45deg);
+  visibility: hidden;
+}
+.app input[type="checkbox"]:checked {
+  background: var(--fc-accent);
+  border-color: var(--fc-accent);
+  color: var(--fc-accent-ink);
+}
+.app input[type="checkbox"]:checked::before { visibility: visible; }
+.app input[type="checkbox"]:focus-visible {
+  outline: 1px solid var(--fc-text-muted);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+.app :is(.primary-button, .secondary-button, .ghost-button) {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 18px;
+}
+.app .navigation-back { padding: 0; }
+.app .secondary-button {
+  background: transparent;
+  border-color: var(--fc-border-strong);
+}
+.app .ghost-button {
+  border-color: transparent;
+  background: transparent;
+}
+.app :is(.secondary-button, .ghost-button):hover:not(:disabled) {
+  background: var(--fc-hover-bg);
+}
+.app button:disabled { cursor: not-allowed; }
+
+.app summary { list-style: none; }
+.app summary::-webkit-details-marker { display: none; }
+.app summary::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0 8px 2px 1px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(-45deg);
+}
+.app details[open] > summary::before { transform: rotate(45deg); }
+
+@media (forced-colors: active) {
+  .app input[type="checkbox"] { -webkit-appearance: auto; appearance: auto; }
+  .app input[type="checkbox"]::before { display: none; }
+  .app :is(input, textarea, select, button, summary):focus-visible {
+    outline: 1px solid Highlight;
+    outline-offset: 2px;
+  }
+}

@@ -203,7 +203,7 @@ export function PluginPage(p: Props) {
           </p>
         </details>
       ) : null}
-      {p.message ? (
+      {p.message && !draft ? (
         <p
           className={`plugin-message ${p.message.level}`}
           role={p.message.level === "error" ? "alert" : "status"}
@@ -311,8 +311,23 @@ export function PluginPage(p: Props) {
           />
           <div
             className="action-tray"
-            role="menu"
+            role={confirm ? "dialog" : "menu"}
+            aria-modal={confirm ? true : undefined}
             onKeyDown={(e) => {
+              if (confirm) {
+                if (e.key === "Tab") {
+                  const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+                  const first = buttons[0], last = buttons[buttons.length - 1];
+                  if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last?.focus();
+                  } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first?.focus();
+                  }
+                }
+                return;
+              }
               if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key))
                 return;
               e.preventDefault();
@@ -334,7 +349,7 @@ export function PluginPage(p: Props) {
                       buttons.length
               ]?.focus();
             }}
-            aria-label="动作"
+            aria-label={confirm ? "确认操作" : "动作"}
             data-testid="action-tray"
           >
             <div className="tray-heading">
@@ -356,26 +371,28 @@ export function PluginPage(p: Props) {
                     ? "清空全部剪切板历史？此操作无法撤销。"
                     : `删除「${memo ? memoSummary(memo.body) : selected?.title}」？此操作无法撤销。`}
                 </p>
-                <button
-                  className="danger-button secondary-button"
-                  disabled={p.busy}
-                  data-testid="confirm-delete"
-                  onClick={() => {
-                    if (confirm === "clear") {
-                      p.onClear();
-                      setConfirm(null);
-                      p.onMenu(false);
-                    } else void remove();
-                  }}
-                >
-                  确认{confirm === "clear" ? "清空" : "删除"}
-                </button>
-                <button
-                  className="ghost-button"
-                  onClick={() => setConfirm(null)}
-                >
-                  取消
-                </button>
+                <div className="tray-confirm-actions">
+                  <button
+                    className="danger-button secondary-button"
+                    disabled={p.busy}
+                    data-testid="confirm-delete"
+                    onClick={() => {
+                      if (confirm === "clear") {
+                        p.onClear();
+                        setConfirm(null);
+                        p.onMenu(false);
+                      } else void remove();
+                    }}
+                  >
+                    确认{confirm === "clear" ? "清空" : "删除"}
+                  </button>
+                  <button
+                    className="ghost-button"
+                    onClick={() => setConfirm(null)}
+                  >
+                    取消
+                  </button>
+                </div>
               </>
             ) : (
               <>

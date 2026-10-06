@@ -756,7 +756,7 @@ export default function App() {
       return true;
     } catch (error) {
       // 宿主返回的中文原因直接展示；不吞掉、不改写。
-      setSettingsMessage({ level: "error", text: String(error) });
+      setSettingsMessage({ level: "error", text: error instanceof Error ? error.message : String(error) });
       return false;
     } finally {
       setSettingsBusy(false);

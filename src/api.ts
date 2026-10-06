@@ -826,7 +826,19 @@ const MOCK_CHANGES: ChangedFile[] = [
 class MockHost implements HostApi {
   constructor() {
     // 只关联替身的内存工作区，让预览可直接操作；不创建磁盘目录。
-    if (browserPreview) this.link(MOCK_REPO);
+    if (browserPreview) {
+      this.link(MOCK_REPO);
+      // 仅浏览器预览可直达空、失败与确认状态，覆盖正常列表以外的视觉验收。
+      const scenario = new URLSearchParams(window.location.search).get("scenario");
+      if (browserPreview === "chrome" && scenario === "missing") {
+        this.simulateChromeStatus("missing");
+        this.associatedChromeDir = "Default";
+        this.chromeProfiles = this.chromeProfiles.filter((p) => p.dir === "Default")
+          .map((p) => ({ ...p, hasBookmarks: false }));
+      }
+      if (scenario === "hotkey-conflict") this.hotkeyConflictScenario = "conflict";
+      if (scenario === "memo-save-error") this.memoSaveError = "工作区只读，无法保存备忘录";
+    }
   }
   readonly kind = "browser" as const;
   private seq = 0;

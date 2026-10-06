@@ -27,14 +27,14 @@ export function ChromePanel({ chrome, busy, onAssociate, onRefresh }: Props) {
   const bookmarks = chrome?.bookmarks ?? null;
   const available = chrome?.available ?? false;
   return (
-    <section className="settings-section" data-testid="chrome-section">
+    <section className="settings-section chrome-settings" data-testid="chrome-section">
       <h2 className="settings-section-title">Chrome 书签</h2>
 
       <dl className="settings-facts chrome-index">
         <div className="settings-fact">
           <dt>书签索引</dt>
           <dd className="chrome-index-status" data-testid="chrome-bookmarks-status">
-            <span>{chrome?.bookmarksLabel ?? "尚未读取"}</span>
+            <span>{bookmarks?.status.kind === "missing" ? "暂无书签" : chrome?.bookmarksLabel ?? "尚未读取"}</span>
             <button
               type="button"
               className="secondary-button"
@@ -59,51 +59,53 @@ export function ChromePanel({ chrome, busy, onAssociate, onRefresh }: Props) {
         </div>
       ))}
 
-      <h3 className="settings-section-title">Chrome 用户</h3>
-      <ul className="theme-list chrome-profiles" data-testid="chrome-profile-list">
-        {(chrome?.profiles ?? []).map((profile) => (
-          <li
-            className="theme-item"
-            data-testid="chrome-profile"
-            data-profile-dir={profile.dir}
-            data-associated={profile.associated ? "true" : "false"}
-            data-managed={profile.managed ? "true" : "false"}
-            key={profile.dir}
-          >
-            <span className="theme-name">
-              {profile.name}
-              <span className="theme-meta">
-                目录 {profile.dir}
-                {profile.userName ? ` · ${profile.userName}` : " · 未登录账号"}
-                {profile.hasBookmarks ? "" : " · 还没有书签文件"}
-                {profile.managed ? (
-                  <span data-testid="chrome-managed-badge"> · 企业管理</span>
-                ) : null}
+      <div className="chrome-users">
+        <h3 className="settings-section-title">Chrome 用户</h3>
+        <ul className="theme-list chrome-profiles" data-testid="chrome-profile-list">
+          {(chrome?.profiles ?? []).map((profile) => (
+            <li
+              className="theme-item"
+              data-testid="chrome-profile"
+              data-profile-dir={profile.dir}
+              data-associated={profile.associated ? "true" : "false"}
+              data-managed={profile.managed ? "true" : "false"}
+              key={profile.dir}
+            >
+              <span className="theme-name">
+                {profile.name}
+                <span className="theme-meta">
+                  目录 {profile.dir}
+                  {profile.userName ? ` · ${profile.userName}` : " · 未登录账号"}
+                  {profile.hasBookmarks ? "" : " · 还没有书签文件"}
+                  {profile.managed ? (
+                    <span data-testid="chrome-managed-badge"> · 企业管理</span>
+                  ) : null}
+                </span>
               </span>
-            </span>
-            {!profile.bookmarksReadable ? (
-              <span className="theme-badge theme-badge-error" data-testid="chrome-unreadable">
-                不可读
-              </span>
-            ) : null}
-            {profile.associated ? (
-              <span className="theme-badge chrome-current" data-testid="chrome-associated-badge">
-                当前使用
-              </span>
-            ) : (
-              <button
-                type="button"
-                className="primary-button"
-                data-testid="chrome-associate"
-                disabled={busy}
-                onClick={() => onAssociate(profile.dir)}
-              >
-                关联
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
+              {!profile.bookmarksReadable ? (
+                <span className="theme-badge theme-badge-error" data-testid="chrome-unreadable">
+                  不可读
+                </span>
+              ) : null}
+              {profile.associated ? (
+                <span className="theme-badge chrome-current" data-testid="chrome-associated-badge">
+                  当前使用
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="primary-button"
+                  data-testid="chrome-associate"
+                  disabled={busy}
+                  onClick={() => onAssociate(profile.dir)}
+                >
+                  关联
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
       {chrome && chrome.profiles.length === 0 ? (
         <p className="settings-hint" data-testid="chrome-no-profiles">
           {available
@@ -112,7 +114,15 @@ export function ChromePanel({ chrome, busy, onAssociate, onRefresh }: Props) {
         </p>
       ) : null}
 
-      {bookmarks?.status.kind === "missing" ? <div className="content-empty" data-testid="chrome-missing-explanation"><strong>这个用户目录没有书签文件</strong><p>Flashcast 读取 Chrome 的原生书签。请先在该用户中收藏一个网页，再重新读取。</p><p>若 Chrome 中已有书签，请在 chrome://version 核对「个人资料路径」是否与上方目录一致。扩展中保存的链接不属于原生书签。</p></div> : null}
+      {bookmarks?.status.kind === "missing" ? (
+        <div className="chrome-empty" data-testid="chrome-missing-explanation">
+          <p>在当前 Chrome 用户中收藏一个网页，再重新读取。</p>
+          <details>
+            <summary>Chrome 中已经有书签？</summary>
+            <p>在 chrome://version 核对「个人资料路径」是否与下方来源目录一致。扩展中保存的链接不属于原生书签。</p>
+          </details>
+        </div>
+      ) : null}
       <details className="storage-details chrome-source">
         <summary>来源与本机路径</summary>
         <dl className="settings-facts">

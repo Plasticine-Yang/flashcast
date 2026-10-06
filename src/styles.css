@@ -122,11 +122,6 @@ body {
   cursor: pointer;
 }
 
-.browser-recall:focus-visible {
-  outline: 2px solid var(--fc-focus-ring);
-  outline-offset: 2px;
-}
-
 /*
  * 窗口级焦点：搜索输入框就是这扇窗口的主表面，焦点由窗口表达——外框拾取强调色。
  * 条件只看 `data-screen="search"`，不看输入框是否聚焦：键盘入口挂在 window 上，
@@ -595,13 +590,6 @@ kbd {
   border: 1px solid var(--fc-border-strong);
 }
 
-.ghost-button:focus-visible,
-.primary-button:focus-visible,
-.secondary-button:focus-visible {
-  outline: 2px solid var(--fc-focus-ring);
-  outline-offset: 1px;
-}
-
 .primary-button:disabled,
 .secondary-button:disabled {
   opacity: var(--fc-disabled-opacity);
@@ -695,11 +683,6 @@ kbd {
   background: var(--fc-selection-bg);
   color: var(--fc-accent);
   font-weight: 600;
-}
-
-.settings-nav-item:focus-visible {
-  outline: 2px solid var(--fc-focus-ring);
-  outline-offset: 1px;
 }
 
 .settings-body {
@@ -900,19 +883,6 @@ kbd {
 .path-input {
   flex: 1;
   min-width: 0;
-  font-family: inherit;
-  font-size: var(--fc-font-body);
-  color: inherit;
-  background: var(--fc-surface);
-  border: 1px solid var(--fc-border);
-  border-radius: var(--fc-radius-control);
-  padding: 5px 8px;
-  transition: none;
-}
-
-.path-input:focus-visible {
-  outline: 2px solid var(--fc-focus-ring);
-  outline-offset: 1px;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1087,11 +1057,6 @@ kbd {
   transition: none;
 }
 
-.change-path:focus-visible {
-  outline: 2px solid var(--fc-focus-ring);
-  outline-offset: 1px;
-}
-
 .change-code {
   flex: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -1211,7 +1176,6 @@ kbd {
 .scope-strip { display:flex;flex:none;gap:4px;padding:9px 14px 3px;overflow-x:auto; }
 .scope-strip button { border:0;padding:4px 9px;border-radius:5px;background:transparent;color:var(--fc-text-muted);font:12px var(--fc-font-family);white-space:nowrap; }
 .scope-strip button[aria-pressed="true"] { background:var(--fc-selection-bg);color:var(--fc-accent);font-weight:600; }
-.scope-strip button:focus-visible { outline:2px solid var(--fc-focus-ring);outline-offset:1px; }
 .search-body { display:flex;flex-direction:column; }
 .result-list { flex:1 1 auto;padding:6px 10px;gap:2px; }
 .result-band { display:none; }
@@ -1248,7 +1212,7 @@ kbd { border:1px solid var(--fc-border);border-radius:4px;background:transparent
 .settings-body > div:not([hidden]) { display:flex;flex-direction:column;gap:24px; }
 .settings-body .settings-section > .settings-section-title:first-child { font-size:22px;line-height:1.35;margin-bottom:4px;letter-spacing:-.03em; }
 .settings-body .settings-section { gap:14px;flex-shrink:0; }
-.settings-body .settings-section > h3 { margin-top:10px;font-size:14px;color:var(--fc-text);letter-spacing:0; }
+.settings-body .settings-section > h3 { margin-top:4px;font-size:14px;color:var(--fc-text);letter-spacing:0; }
 .settings-body .settings-section > .primary-button { align-self:flex-start; }
 .settings-label + .settings-row { margin-top:-6px; }
 .settings-row + .settings-hint { margin-top:-6px; }
@@ -1261,13 +1225,12 @@ kbd { border:1px solid var(--fc-border);border-radius:4px;background:transparent
 .theme-item[data-selected="true"] { background:transparent; }
 .theme-name { font-weight:500; }
 .theme-meta { font-weight:400;line-height:1.6;margin-top:4px; }
-.appearance-controls { display:flex;flex-direction:column;margin-bottom:10px; }
+.appearance-controls { display:flex;flex-direction:column; }
 .appearance-setting { display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 0;border-bottom:1px solid var(--fc-border); }
 .setting-label { font-size:12px;font-weight:500; }
 .appearance-segment { display:flex;gap:2px;padding:3px;border:1px solid var(--fc-border);border-radius:8px;background:var(--fc-info-bg); }
 .appearance-segment button { font:11px var(--fc-font-family);padding:5px 8px;border:0;border-radius:5px;background:transparent;color:var(--fc-text-muted);white-space:nowrap; }
 .appearance-segment button[aria-pressed="true"] { color:var(--fc-accent);background:var(--fc-selection-bg);font-weight:600; }
-.appearance-segment button:focus-visible { outline:2px solid var(--fc-focus-ring);outline-offset:1px; }
 .appearance-segment button:disabled { opacity:var(--fc-disabled-opacity); }
 .transparency-setting small { display:block;font-size:11px;color:var(--fc-text-muted);margin-top:3px; }
 .transparency-setting input { accent-color:var(--fc-accent);width:17px;height:17px; }
@@ -1348,7 +1311,6 @@ kbd { border:1px solid var(--fc-border);border-radius:4px;background:transparent
 .plugin-switch span { display:block;width:14px;height:14px;border-radius:50%;background:var(--fc-bg);box-shadow:0 1px 3px #0002; }
 .plugin-switch[aria-checked="true"] { background:var(--fc-accent); }
 .plugin-switch[aria-checked="true"] span { transform:translateX(14px);background:white; }
-.plugin-switch:focus-visible { outline:2px solid var(--fc-focus-ring);outline-offset:3px; }
 .plugin-switch:disabled { opacity:var(--fc-disabled-opacity); }
 .panel-footnote { color:var(--fc-text-muted);font-size:12px;line-height:1.6;margin:5px 0 0; }
 .sr-only { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
@@ -1397,7 +1359,6 @@ kbd { border:1px solid var(--fc-border);border-radius:4px;background:transparent
 .memo-editor { display:grid;grid-template-rows:auto auto auto minmax(60px,1fr) auto;gap:7px;height:100%;min-height:0; }
 .memo-editor label { display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--fc-text-muted); }
 .memo-editor input,.memo-editor textarea { min-width:0;width:100%;box-sizing:border-box;border:1px solid var(--fc-border);border-radius:6px;background:var(--fc-info-bg);color:var(--fc-text);padding:7px 9px;font:13px/1.5 var(--fc-font-family); }
-.memo-editor input:focus,.memo-editor textarea:focus { outline:2px solid var(--fc-focus-ring);outline-offset:1px; }
 .memo-editor textarea { flex:1;min-height:0;resize:none; }
 .memo-body-field { min-height:0; }
 .memo-editor > button { justify-self:end;font-size:12px; }

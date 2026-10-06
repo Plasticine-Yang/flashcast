@@ -16,6 +16,9 @@ export function ClipboardPanel({
 }: Props) {
   const [days, setDays] = useState("30"),
     [capacity, setCapacity] = useState("500");
+  const [limitError, setLimitError] = useState<string | null>(null);
+  const daysValid = Number.isInteger(Number(days)) && Number(days) >= 1 && Number(days) <= 3650;
+  const capacityValid = Number.isInteger(Number(capacity)) && Number(capacity) >= 1 && Number(capacity) <= 100000;
   useEffect(() => {
     if (c) {
       setDays(String(c.retentionDays));
@@ -55,8 +58,17 @@ export function ClipboardPanel({
           ) : null}
           <form
             className="clipboard-limits"
+            noValidate
             onSubmit={(e) => {
               e.preventDefault();
+              if (!daysValid || !capacityValid) {
+                setLimitError([
+                  !daysValid ? "保留期限须为 1–3650 天的整数" : null,
+                  !capacityValid ? "容量须为 1–100000 条的整数" : null,
+                ].filter(Boolean).join("；"));
+                return;
+              }
+              setLimitError(null);
               onSaveLimits(Number(days), Number(capacity));
             }}
           >
@@ -67,9 +79,11 @@ export function ClipboardPanel({
                 min="1"
                 max="3650"
                 required
+                aria-invalid={!!limitError && !daysValid}
+                aria-describedby={limitError ? "clipboard-limits-error" : undefined}
                 data-testid="clipboard-retention"
                 value={days}
-                onChange={(e) => setDays(e.target.value)}
+                onChange={(e) => { setDays(e.target.value); setLimitError(null); }}
               />
             </label>
             <label>
@@ -79,9 +93,11 @@ export function ClipboardPanel({
                 min="1"
                 max="100000"
                 required
+                aria-invalid={!!limitError && !capacityValid}
+                aria-describedby={limitError ? "clipboard-limits-error" : undefined}
                 data-testid="clipboard-capacity"
                 value={capacity}
-                onChange={(e) => setCapacity(e.target.value)}
+                onChange={(e) => { setCapacity(e.target.value); setLimitError(null); }}
               />
             </label>
             <button
@@ -91,6 +107,7 @@ export function ClipboardPanel({
             >
               保存范围
             </button>
+            {limitError ? <p className="field-error" id="clipboard-limits-error" role="alert">{limitError}</p> : null}
           </form>
           <p className="settings-hint">
             历史内容在剪切板插件页面查看，不参与配置同步。
