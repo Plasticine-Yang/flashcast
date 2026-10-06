@@ -32,7 +32,7 @@ use std::sync::Arc;
 use crate::clipboard::{ClipboardEvent, ClipboardStore};
 use crate::model::{DefaultAction, ItemKind, Preview, Score, SearchItem};
 use crate::plugin::{
-    strip_keyword, FeaturePlugin, Keyword, PluginError, PluginManifest, PluginScope, SearchContext,
+    FeaturePlugin, Keyword, PluginError, PluginManifest, PluginScope, SearchContext,
     CAP_CLIPBOARD_READ, CAP_CLIPBOARD_WRITE,
 };
 use crate::ranking::score_match;
@@ -51,7 +51,7 @@ pub const CLIPBOARD_KEYWORD_ALT_ZH: &str = "剪切板";
 pub const CLIPBOARD_KEYWORD_EN: &str = "clipboard";
 
 /// 一次插件搜索最多返回多少条。
-const SCOPE_LIMIT: usize = 50;
+const SCOPE_LIMIT: usize = usize::MAX;
 
 /// 剪贴板历史插件的实现。
 pub struct ClipboardPlugin {
@@ -65,7 +65,7 @@ impl ClipboardPlugin {
             store,
             manifest: PluginManifest::feature(
                 CLIPBOARD_PLUGIN_ID,
-                "剪贴板历史",
+                "剪切板",
                 env!("CARGO_PKG_VERSION"),
             )
             // 三个别名进入**同一个**插件（关键需求）。
@@ -81,6 +81,15 @@ impl ClipboardPlugin {
 }
 
 impl FeaturePlugin for ClipboardPlugin {
+    fn commands(&self) -> Vec<crate::PluginCommand> {
+        let mut command = crate::PluginCommand::open_page(&self.manifest);
+        command.defaults = crate::CommandShortcuts {
+            linux: Some("Ctrl+Alt+C".into()),
+            windows: Some("Ctrl+Alt+C".into()),
+            macos: Some("Control+Command+C".into()),
+        };
+        vec![command]
+    }
     fn manifest(&self) -> PluginManifest {
         self.manifest.clone()
     }
@@ -126,7 +135,7 @@ impl PluginScope for ClipboardScope {
     }
 
     fn search(&self, ctx: &SearchContext) -> Result<Vec<SearchItem>, PluginError> {
-        let query = strip_keyword(&ctx.query, self.keyword());
+        let query = ctx.query.clone();
         let limit = ctx.limit.min(SCOPE_LIMIT);
         // 存储失败必须如实上报（宿主会把它记成一次插件失败并在界面上说明原因），
         // 而不是返回空列表假装「没有历史」。

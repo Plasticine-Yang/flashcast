@@ -38,6 +38,8 @@ pub struct Settings {
     pub disabled_plugins: Vec<String>,
     /// 剪贴板历史的记录范围（暂停、保留期限、容量）。见 [`ClipboardSettings`]。
     pub clipboard: ClipboardSettings,
+    /// 按稳定命令标识及平台保存；缺省用插件默认值，空串关闭。
+    pub command_shortcuts: std::collections::BTreeMap<String, crate::CommandShortcuts>,
 }
 
 /// 剪贴板历史的用户控制项。
@@ -82,6 +84,7 @@ impl Default for Settings {
             plugin_timeout_ms: 400,
             disabled_plugins: Vec::new(),
             clipboard: ClipboardSettings::default(),
+            command_shortcuts: Default::default(),
         }
     }
 }
@@ -90,6 +93,8 @@ impl Default for Settings {
 pub enum SettingsError {
     #[error("快捷键无效：{0}")]
     InvalidHotkey(String),
+    #[error("插件快捷键冲突：{0}")]
+    CommandShortcut(String),
     #[error("快速访问项数量必须在 1 到 20 之间，当前为 {0}")]
     InvalidQuickAccessLimit(usize),
     #[error("插件超时必须在 10 到 5000 毫秒之间，当前为 {0}")]
@@ -109,6 +114,17 @@ impl Settings {
     pub fn validate(&self) -> Result<(), SettingsError> {
         HotkeySpec::parse(&self.hotkey)
             .map_err(|error| SettingsError::InvalidHotkey(error.to_string()))?;
+        for shortcuts in self.command_shortcuts.values() {
+            for value in [&shortcuts.linux, &shortcuts.windows, &shortcuts.macos]
+                .into_iter()
+                .flatten()
+            {
+                if !value.is_empty() {
+                    HotkeySpec::parse(value)
+                        .map_err(|e| SettingsError::InvalidHotkey(e.to_string()))?;
+                }
+            }
+        }
         if !(1..=20).contains(&self.quick_access_limit) {
             return Err(SettingsError::InvalidQuickAccessLimit(
                 self.quick_access_limit,

@@ -209,7 +209,14 @@ export interface StatusView {
   plugins: PluginView[];
 }
 
+export interface PluginCommandView {
+  id: string; title: string; pluginId: string; platform: string;
+  defaultShortcut: string; shortcut: string; enabled: boolean;
+  registered: boolean; pending: boolean; effectiveShortcut: string | null; error: string | null;
+}
+
 export interface Settings {
+  commandShortcuts?: Record<string, {linux?: string | null; windows?: string | null; macos?: string | null}>;
   hotkey: string;
   launchAtStartup: boolean;
   quickAccessLimit: number;

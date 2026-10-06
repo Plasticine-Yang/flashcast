@@ -20,12 +20,18 @@ pub fn score_match(query: &str, title: &str, metadata: &[&str]) -> Option<Score>
     }
     if title_lower.starts_with(query) {
         // 越接近完全匹配，相关度越高。
-        let extra = title_lower.chars().count().saturating_sub(query.chars().count());
+        let extra = title_lower
+            .chars()
+            .count()
+            .saturating_sub(query.chars().count());
         let relevance = 80u8.saturating_sub((extra.min(30) as u8).saturating_mul(2));
         return Some(Score::new(MatchTier::TitlePrefix, relevance.max(40)));
     }
     if title_lower.contains(query) {
-        let extra = title_lower.chars().count().saturating_sub(query.chars().count());
+        let extra = title_lower
+            .chars()
+            .count()
+            .saturating_sub(query.chars().count());
         let relevance = 55u8.saturating_sub((extra.min(20) as u8).saturating_mul(2));
         return Some(Score::new(MatchTier::TitleSubstring, relevance.max(20)));
     }

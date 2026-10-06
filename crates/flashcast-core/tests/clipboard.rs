@@ -74,8 +74,8 @@ fn both_chinese_aliases_enter_the_single_clipboard_plugin() {
     }
 
     // 两个写法进入同一个范围对象（同一个插件 id），并且看到同一份历史。
-    let zh = harness.host.query("剪贴板");
-    let alt = harness.host.query("剪切板");
+    let zh = support::plugin_query(&harness.host, "剪贴板");
+    let alt = support::plugin_query(&harness.host, "剪切板");
     assert_eq!(
         zh.scope,
         QueryScope::Plugin {
@@ -87,7 +87,7 @@ fn both_chinese_aliases_enter_the_single_clipboard_plugin() {
         alt.scope,
         QueryScope::Plugin {
             id: "clipboard".to_string(),
-            keyword: "剪切板".to_string()
+            keyword: "剪贴板".to_string()
         }
     );
     let zh_ids: Vec<String> = zh.items.iter().map(|item| item.id.clone()).collect();
@@ -95,8 +95,8 @@ fn both_chinese_aliases_enter_the_single_clipboard_plugin() {
     assert_eq!(zh_ids, alt_ids, "两个别名必须看到同一份历史");
     assert_eq!(zh_ids.len(), 1);
 
-    // 范围标签用用户实际输入的那个写法。
-    assert_eq!(alt.scope.label_zh(), "剪切板 范围");
+    // 页面命令使用稳定的规范范围，与进入时的搜索别名无关。
+    assert_eq!(alt.scope.label_zh(), "剪贴板 范围");
 }
 
 /// 首屏**不**检索全部剪贴板历史：必须经关键词进入（spec 明确要求）。
@@ -126,7 +126,7 @@ fn home_scope_never_lists_clipboard_history() {
     );
 
     // 进入插件范围之后才看得到。
-    let scoped = harness.host.query("剪贴板");
+    let scoped = support::plugin_query(&harness.host, "剪贴板");
     assert!(scoped
         .items
         .iter()
@@ -164,7 +164,7 @@ fn capture_restart_then_search_preview_and_paste() {
         "启用状态记在工作区清单里，重启后仍然有效"
     );
 
-    let listed = restarted.host.query("剪贴板");
+    let listed = support::plugin_query(&restarted.host, "剪贴板");
     assert_eq!(listed.items.len(), 2, "重启后历史必须仍然在");
     let titles: Vec<&str> = listed
         .items
@@ -173,7 +173,7 @@ fn capture_restart_then_search_preview_and_paste() {
         .collect();
     assert_eq!(titles, vec!["第二条内容", "第一条内容"], "最新的排在最前");
 
-    let searched = restarted.host.query("剪贴板 第一条");
+    let searched = support::plugin_query(&restarted.host, "剪贴板 第一条");
     assert_eq!(searched.items.len(), 1);
     let item = searched.items[0].clone();
     assert_eq!(item.kind, ItemKind::ClipboardEntry);
@@ -346,7 +346,7 @@ fn pasting_a_memo_does_not_enter_the_history() {
         .create_memo("常用回复", &["回复".to_string()], "收到，我看一下。")
         .expect("创建备忘录");
 
-    let response = harness.host.query("备忘录");
+    let response = support::plugin_query(&harness.host, "备忘录");
     let memo = response
         .items
         .iter()
@@ -396,7 +396,7 @@ fn pin_delete_and_clear_control_the_history() {
         .host
         .pin_clipboard_entry(&first.id, true)
         .expect("置顶");
-    let listed = harness.host.query("剪贴板");
+    let listed = support::plugin_query(&harness.host, "剪贴板");
     assert_eq!(listed.items[0].title, "第一条", "置顶条目排在最前");
     assert!(listed.items[0]
         .subtitle
@@ -431,7 +431,9 @@ fn pin_delete_and_clear_control_the_history() {
     assert_eq!(removed, 2);
     assert!(harness.entries().is_empty());
     assert_eq!(harness.host.clipboard_state().entries, 0);
-    assert!(harness.host.query("剪贴板").items.is_empty());
+    assert!(support::plugin_query(&harness.host, "剪贴板")
+        .items
+        .is_empty());
 }
 
 #[test]
@@ -640,7 +642,7 @@ fn disabled_plugin_captures_nothing_and_returns_nothing() {
         "插件停用时根本不得读取剪贴板"
     );
 
-    let response = harness.host.query("剪贴板");
+    let response = support::plugin_query(&harness.host, "剪贴板");
     assert!(response.scope.is_home(), "停用后关键词不再进入插件范围");
     assert!(
         !response
@@ -749,7 +751,7 @@ fn storage_failure_is_reported_through_state_and_search() {
     );
 
     // 检索入口同样如实报告：进入范围后插件失败可见，而不是「空历史」。
-    let response = harness.host.query("剪贴板");
+    let response = support::plugin_query(&harness.host, "剪贴板");
     assert!(
         !response.plugin_failures.is_empty(),
         "存储失败必须出现在查询结果的插件失败列表里"
@@ -989,10 +991,10 @@ fn search_uses_indexable_text_and_never_the_rich_payload() {
     let hit = {
         // 范围必须先由精确关键词进入，之后同一个输入框里继续输入检索词。
         assert!(matches!(
-            harness.host.query("剪贴板").scope,
+            support::plugin_query(&harness.host, "剪贴板").scope,
             QueryScope::Plugin { .. }
         ));
-        harness.host.query("剪贴板 可见的正文")
+        support::plugin_query(&harness.host, "剪贴板 可见的正文")
     };
     assert_eq!(hit.items.len(), 1, "按纯文本应当命中这一条");
     assert!(hit.items[0]
@@ -1002,7 +1004,7 @@ fn search_uses_indexable_text_and_never_the_rich_payload() {
         .contains("HTML"));
 
     for marker in ["HTML_ONLY_MARKER", "alert(1)", "b>"] {
-        let miss = harness.host.query(&format!("剪贴板 {marker}"));
+        let miss = support::plugin_query(&harness.host, &format!("剪贴板 {marker}"));
         assert!(
             miss.items.is_empty(),
             "载荷内容「{marker}」不得成为搜索键，实际命中 {} 条",
@@ -1358,7 +1360,7 @@ fn image_capture_restart_list_preview_and_restore() {
 
     // 重启（同一个设备目录 = 同一台机器）后仍然可列出、可预览、可恢复。
     let restarted = clipboard_host_with_device(&device_dir, fast_settings());
-    let listed = restarted.host.query("剪贴板");
+    let listed = support::plugin_query(&restarted.host, "剪贴板");
     assert_eq!(listed.items.len(), 1, "重启后图片历史必须仍然在");
     let item = listed.items[0].clone();
     assert_eq!(item.kind, ItemKind::ClipboardEntry);
@@ -1435,7 +1437,7 @@ fn image_survives_its_source_disappearing() {
         fast_settings(),
         Arc::new(FakeClipboardWatcher::new()),
     );
-    let listed = restarted.host.query("剪贴板");
+    let listed = support::plugin_query(&restarted.host, "剪贴板");
     assert_eq!(listed.items.len(), 1, "来源消失不影响本机历史");
     let item = listed.items[0].clone();
     assert!(attachment.path.is_file(), "本机附件必须仍然存在");
@@ -1733,7 +1735,7 @@ fn image_history_is_not_searched_from_the_home_screen() {
             .any(|item| item.kind == ItemKind::ClipboardEntry),
         "首屏不得出现图片历史"
     );
-    let scoped = harness.host.query("剪贴板");
+    let scoped = support::plugin_query(&harness.host, "剪贴板");
     assert_eq!(scoped.items.len(), 1);
 }
 
@@ -1763,7 +1765,7 @@ fn unsupported_background_capture_preserves_plugin_and_history_without_polling()
         polls,
         "unsafe background reads must not run"
     );
-    let results = harness.host.query("剪贴板");
+    let results = support::plugin_query(&harness.host, "剪贴板");
     assert!(
         !results.items.is_empty(),
         "existing history remains searchable"

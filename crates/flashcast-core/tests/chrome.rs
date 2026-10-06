@@ -205,8 +205,8 @@ fn titles(items: &[flashcast_core::SearchItem]) -> Vec<String> {
 /// 与真实 UI 的输入顺序一致：用户先输入完整关键词进入范围，再继续输入查询
 /// （关键词必须**完整匹配**才进入范围，见 `PluginManifest::matches_keyword`）。
 fn search(host: &Host, query: &str) -> flashcast_core::QueryResponse {
-    host.query("chrome bookmarks");
-    host.query(&format!("chrome bookmarks {query}"))
+    support::plugin_query(&host, "chrome bookmarks");
+    support::plugin_query(&host, &format!("chrome bookmarks {query}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +225,16 @@ fn plugin_is_loaded_from_the_manifest_with_both_aliases_and_its_capability() {
     assert_eq!(entry.0.name, "Chrome 书签");
     assert_eq!(
         entry.0.keywords,
-        vec!["chrome bookmarks".to_string(), "chrome 书签".to_string()],
+        vec![
+            "chrome bookmarks",
+            "chrome 书签",
+            "bookmark",
+            "bookmarks",
+            "书签"
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>(),
         "中英文两个关键词别名都要声明"
     );
     assert!(
@@ -248,10 +257,13 @@ fn both_keyword_aliases_enter_the_scope_but_home_never_searches_bookmarks() {
     let (host, _chrome, _device, fixture) = linked_host("aliases");
 
     for alias in ["chrome bookmarks", "chrome 书签"] {
-        let response = host.query(alias);
+        let _ = host.reset_home();
+        let home = host.query(alias);
+        assert!(home.scope.is_home());
+        let response = support::plugin_query(&host, alias);
         assert_eq!(
             response.scope.label_zh(),
-            format!("{alias} 范围"),
+            "chrome bookmarks 范围".to_string(),
             "完整匹配 {alias} 必须进入插件范围"
         );
         assert!(
@@ -265,7 +277,7 @@ fn both_keyword_aliases_enter_the_scope_but_home_never_searches_bookmarks() {
     }
 
     // 首屏不检索书签：先清空输入回到首屏，再输入书签标题的片段。
-    host.query("");
+    host.reset_home();
     let home = host.query("rust");
     assert!(home.scope.is_home());
     assert!(
@@ -468,7 +480,7 @@ fn missing_bookmarks_file_is_a_normal_empty_state() {
         "{}",
         state.bookmarks_label
     );
-    let response = host.query("chrome bookmarks");
+    let response = support::plugin_query(&host, "chrome bookmarks");
     assert!(
         response.items.is_empty() && response.plugin_failures.is_empty(),
         "缺失书签文件不是错误：{:?}",
@@ -764,7 +776,7 @@ fn disabled_plugin_neither_searches_nor_opens() {
     host.set_plugin_enabled("chrome-bookmarks", false)
         .expect("停用必须成功");
 
-    let response = host.query("chrome 书签");
+    let response = support::plugin_query(&host, "chrome 书签");
     assert!(response.scope.is_home(), "停用后不得进入插件范围");
     assert!(
         response
@@ -944,4 +956,24 @@ fn association_stays_device_local_and_never_touches_the_workspace() {
     }
     fixture.cleanup();
     let _ = std::fs::remove_dir_all(&workspace);
+}
+
+#[test]
+fn explicit_page_lists_more_than_fifty_bookmarks_and_blank_query_keeps_the_page() {
+    let (host, _chrome, _device, fixture) = linked_host("all-bookmarks");
+    let children: Vec<serde_json::Value> = (0..75).map(|id| serde_json::json!({"id":id.to_string(),"name":format!("书签 {id:02}"),"type":"url","url":format!("https://example.com/{id}")})).collect();
+    fixture.write_bookmarks("Default",&serde_json::json!({"roots":{"bookmark_bar":{"type":"folder","name":"书签栏","children":children}}}).to_string());
+    host.refresh_chrome_bookmarks();
+    assert!(host.query("bookmark").scope.is_home());
+    assert_eq!(
+        host.execute_plugin_command("flashcast.plugin.chrome-bookmarks")
+            .status,
+        ActionStatus::Done
+    );
+    assert_eq!(host.snapshot().items.len(), 75);
+    assert_eq!(host.query("74").items.len(), 1);
+    let all = host.query("");
+    assert!(!all.scope.is_home());
+    assert_eq!(all.items.len(), 75);
+    fixture.cleanup();
 }

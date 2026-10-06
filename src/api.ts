@@ -24,6 +24,7 @@ import type {
   Memo,
   MemoProblem,
   PluginView,
+  PluginCommandView,
   Preview,
   PullOutcome,
   PushOutcome,
@@ -41,7 +42,11 @@ import type {
   WorkspaceRemote,
   WorkspaceStatus,
 } from "./types";
-import { MOCK_INSTALLED_THEME, MOCK_THEMES, buildMockThemeState } from "./mockThemes";
+import {
+  MOCK_INSTALLED_THEME,
+  MOCK_THEMES,
+  buildMockThemeState,
+} from "./mockThemes";
 
 const inTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in (window as object);
@@ -51,8 +56,13 @@ export const browserPreview = (() => {
   if (inTauri || typeof window === "undefined") return null;
   const name = new URLSearchParams(window.location.search).get("preview");
   switch (name) {
-    case "plugins": case "clipboard": case "memos": case "chrome": return name;
-    default: return null;
+    case "plugins":
+    case "clipboard":
+    case "memos":
+    case "chrome":
+      return name;
+    default:
+      return null;
   }
 })();
 
@@ -60,6 +70,12 @@ type Handler = (payload: unknown) => void;
 
 export interface HostApi {
   query(input: string): Promise<QueryView>;
+  get_plugin_commands(): Promise<PluginCommandView[]>;
+  set_command_shortcut(
+    id: string,
+    shortcut: string | null,
+  ): Promise<PluginCommandView[]>;
+  execute_plugin_command(id: string): Promise<QueryView>;
   execute(itemId: string): Promise<ActionOutcome>;
   move_selection(delta: number): Promise<QueryView>;
   set_selection(index: number): Promise<QueryView>;
@@ -71,13 +87,22 @@ export interface HostApi {
   set_settings(settings: Settings): Promise<StatusView["hotkey"]>;
   get_status(): Promise<StatusView>;
   get_hotkey_conflict(): Promise<import("./types").HotkeyConflictReport>;
-  resolve_hotkey_conflict(undo: boolean): Promise<import("./types").HotkeyConflictReport>;
+  resolve_hotkey_conflict(
+    undo: boolean,
+  ): Promise<import("./types").HotkeyConflictReport>;
   /** 当前主题状态：选中主题、CSS 自定义属性与可选主题列表。 */
   get_theme(): Promise<ThemeState>;
   /** 选择主题。失败时 reject，原因为中文，且当前外观不变。 */
   select_theme(id: string): Promise<ThemeState>;
-  set_appearance_preferences(appearance: import("./types").ThemeAppearance, style: string, reduceTransparency: boolean): Promise<ThemeState>;
-  sync_window_material(): Promise<{ supported: boolean; reason: string | null }>;
+  set_appearance_preferences(
+    appearance: import("./types").ThemeAppearance,
+    style: string,
+    reduceTransparency: boolean,
+  ): Promise<ThemeState>;
+  sync_window_material(): Promise<{
+    supported: boolean;
+    reason: string | null;
+  }>;
   /** 启用或停用插件（功能插件与主题插件共用）。 */
   set_plugin_enabled(id: string, enabled: boolean): Promise<ThemeState>;
   /** 校验并安装一个本地主题包（目录或 JSON 文件）。 */
@@ -122,7 +147,10 @@ export interface HostApi {
   /** 请求取消正在进行的同步。 */
   cancel_sync(): Promise<void>;
   /** 启用或停用**功能插件**；返回更新后的功能插件列表（含启用状态）。 */
-  set_feature_plugin_enabled(id: string, enabled: boolean): Promise<PluginView[]>;
+  set_feature_plugin_enabled(
+    id: string,
+    enabled: boolean,
+  ): Promise<PluginView[]>;
   /** 当前生效的备忘录（按标识排序）。 */
   memos(): Promise<Memo[]>;
   /** 无法读取的备忘录文件：保留可用内容并如实报告原因。 */
@@ -130,7 +158,12 @@ export interface HostApi {
   /** 新建备忘录。未关联工作区或插件停用时 reject，原因为中文。 */
   create_memo(title: string, tags: string[], body: string): Promise<Memo>;
   /** 修改一条备忘录（标识不变）。失败时 reject，原因为中文。 */
-  update_memo(id: string, title: string, tags: string[], body: string): Promise<Memo>;
+  update_memo(
+    id: string,
+    title: string,
+    tags: string[],
+    body: string,
+  ): Promise<Memo>;
   /** 删除一条备忘录（同时删除工作区里的文件）。 */
   delete_memo(id: string): Promise<void>;
   /** 预览某条结果；未知 id 返回 null。 */
@@ -140,7 +173,10 @@ export interface HostApi {
   /** 暂停 / 恢复记录。 */
   set_clipboard_paused(paused: boolean): Promise<ClipboardStateView>;
   /** 设置保留期限（天）与容量（条目数），并立即回收超出的条目。 */
-  set_clipboard_limits(retentionDays: number, capacity: number): Promise<ClipboardStateView>;
+  set_clipboard_limits(
+    retentionDays: number,
+    capacity: number,
+  ): Promise<ClipboardStateView>;
   /** 置顶 / 取消置顶一条历史。 */
   pin_clipboard_entry(id: string, pinned: boolean): Promise<ClipboardStateView>;
   /** 删除一条历史。 */
@@ -153,7 +189,10 @@ export interface HostApi {
    * 失败时 reject，原因由宿主给出（原文件失效、访问失败、超过单份或总容量、
    * 复制中断、不支持的类型），UI 原样展示。
    */
-  save_clipboard_file_copy(id: string, attachmentId: string): Promise<ClipboardStateView>;
+  save_clipboard_file_copy(
+    id: string,
+    attachmentId: string,
+  ): Promise<ClipboardStateView>;
   /** 当前 Chrome 状态：发现结果、profile 列表、关联状态与书签索引状态。 */
   get_chrome_state(): Promise<ChromeState>;
   /** 关联一个已发现的 Chrome profile（参数是目录名）。失败时 reject，原因为中文。 */
@@ -165,7 +204,10 @@ export interface HostApi {
   readonly kind: "tauri" | "browser";
 }
 
-async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+async function tauriInvoke<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
 }
@@ -179,18 +221,30 @@ const tauriApi: HostApi = {
   back: () => tauriInvoke("back"),
   rescan: () => tauriInvoke("rescan"),
   refresh_state: () => tauriInvoke("refresh_state"),
+  get_plugin_commands: () => tauriInvoke("get_plugin_commands"),
+  set_command_shortcut: (id, shortcut) =>
+    tauriInvoke("set_command_shortcut", { id, shortcut }),
+  execute_plugin_command: (id) => tauriInvoke("execute_plugin_command", { id }),
   get_capabilities: () => tauriInvoke("get_capabilities"),
   get_settings: () => tauriInvoke("get_settings"),
   set_settings: (settings) => tauriInvoke("set_settings", { settings }),
   get_status: () => tauriInvoke("get_status"),
   get_hotkey_conflict: () => tauriInvoke("get_hotkey_conflict"),
-  resolve_hotkey_conflict: (undo) => tauriInvoke("resolve_hotkey_conflict", { undo }),
+  resolve_hotkey_conflict: (undo) =>
+    tauriInvoke("resolve_hotkey_conflict", { undo }),
   get_theme: () => tauriInvoke("get_theme"),
   select_theme: (id) => tauriInvoke("select_theme", { id }),
-  set_appearance_preferences: (appearance, style, reduceTransparency) => tauriInvoke("set_appearance_preferences", { appearance, style, reduceTransparency }),
+  set_appearance_preferences: (appearance, style, reduceTransparency) =>
+    tauriInvoke("set_appearance_preferences", {
+      appearance,
+      style,
+      reduceTransparency,
+    }),
   sync_window_material: () => tauriInvoke("sync_window_material"),
   set_plugin_enabled: (id, enabled) =>
-    tauriInvoke("set_plugin_enabled", { id, enabled }).then(() => tauriInvoke("get_theme")),
+    tauriInvoke("set_plugin_enabled", { id, enabled }).then(() =>
+      tauriInvoke("get_theme"),
+    ),
   install_theme: (path) => tauriInvoke("install_theme", { path }),
   remove_theme: (id) => tauriInvoke("remove_theme", { id }),
   set_system_appearance: (appearance) =>
@@ -203,7 +257,8 @@ const tauriApi: HostApi = {
   clone_progress: () => tauriInvoke("clone_progress"),
   cancel_clone: () => tauriInvoke("cancel_clone"),
   get_git_changes: () => tauriInvoke("get_git_changes"),
-  commit_changes: (message, paths) => tauriInvoke("commit_changes", { message, paths }),
+  commit_changes: (message, paths) =>
+    tauriInvoke("commit_changes", { message, paths }),
   get_sync_status: () => tauriInvoke("get_sync_status"),
   redetect_sync_state: () => tauriInvoke("redetect_sync_state"),
   pull_workspace: () => tauriInvoke("pull_workspace"),
@@ -216,16 +271,19 @@ const tauriApi: HostApi = {
       .then((status) => status.plugins),
   memos: () => tauriInvoke("memos"),
   memo_problems: () => tauriInvoke("memo_problems"),
-  create_memo: (title, tags, body) => tauriInvoke("create_memo", { title, tags, body }),
+  create_memo: (title, tags, body) =>
+    tauriInvoke("create_memo", { title, tags, body }),
   update_memo: (id, title, tags, body) =>
     tauriInvoke("update_memo", { id, title, tags, body }),
   delete_memo: (id) => tauriInvoke("delete_memo", { id }),
   preview: (itemId) => tauriInvoke("preview", { itemId }),
   get_clipboard_state: () => tauriInvoke("get_clipboard_state"),
-  set_clipboard_paused: (paused) => tauriInvoke("set_clipboard_paused", { paused }),
+  set_clipboard_paused: (paused) =>
+    tauriInvoke("set_clipboard_paused", { paused }),
   set_clipboard_limits: (retentionDays, capacity) =>
     tauriInvoke("set_clipboard_limits", { retentionDays, capacity }),
-  pin_clipboard_entry: (id, pinned) => tauriInvoke("pin_clipboard_entry", { id, pinned }),
+  pin_clipboard_entry: (id, pinned) =>
+    tauriInvoke("pin_clipboard_entry", { id, pinned }),
   delete_clipboard_entry: (id) => tauriInvoke("delete_clipboard_entry", { id }),
   clear_clipboard_history: () => tauriInvoke("clear_clipboard_history"),
   save_clipboard_file_copy: (id, attachmentId) =>
@@ -256,14 +314,55 @@ interface MockApp {
 }
 
 const MOCK_APPS: MockApp[] = [
-  { id: "firefox", title: "Firefox 浏览器", subtitle: "浏览网页", keywords: ["browser", "web"] },
-  { id: "files", title: "文件", subtitle: "浏览本地文件", keywords: ["files", "nautilus"] },
-  { id: "terminal", title: "终端", subtitle: "命令行", keywords: ["terminal", "shell"] },
-  { id: "code", title: "Visual Studio Code", subtitle: "代码编辑器", keywords: ["editor", "code"] },
-  { id: "gimp", title: "GIMP 图像编辑器", subtitle: "位图编辑", keywords: ["image"] },
-  { id: "calc", title: "计算器", subtitle: "基础计算", keywords: ["calculator"] },
-  { id: "music", title: "音乐播放器", subtitle: "播放本地音乐", keywords: ["music", "audio"] },
-  { id: "broken", title: "损坏的示例软件", subtitle: "用于验证启动失败反馈", keywords: ["broken"], failsToLaunch: true },
+  {
+    id: "firefox",
+    title: "Firefox 浏览器",
+    subtitle: "浏览网页",
+    keywords: ["browser", "web"],
+  },
+  {
+    id: "files",
+    title: "文件",
+    subtitle: "浏览本地文件",
+    keywords: ["files", "nautilus"],
+  },
+  {
+    id: "terminal",
+    title: "终端",
+    subtitle: "命令行",
+    keywords: ["terminal", "shell"],
+  },
+  {
+    id: "code",
+    title: "Visual Studio Code",
+    subtitle: "代码编辑器",
+    keywords: ["editor", "code"],
+  },
+  {
+    id: "gimp",
+    title: "GIMP 图像编辑器",
+    subtitle: "位图编辑",
+    keywords: ["image"],
+  },
+  {
+    id: "calc",
+    title: "计算器",
+    subtitle: "基础计算",
+    keywords: ["calculator"],
+  },
+  {
+    id: "music",
+    title: "音乐播放器",
+    subtitle: "播放本地音乐",
+    keywords: ["music", "audio"],
+  },
+  {
+    id: "broken",
+    title: "损坏的示例软件",
+    subtitle: "用于验证启动失败反馈",
+    keywords: ["broken"],
+    failsToLaunch: true,
+  },
 ];
 
 const MOCK_CAPABILITIES: Capabilities = {
@@ -561,7 +660,8 @@ const MOCK_NON_EMPTY_DIR = "/home/user/Documents";
 export const MOCK_CLONE_TARGET = "/home/user/flashcast-clone";
 export const MOCK_CLONE_URL = "https://github.com/me/flashcast-config.git";
 export const MOCK_CLONE_BAD_URL = "https://github.com/me/not-found-config.git";
-export const MOCK_CLONE_SECRET_URL = "https://alice:sekret@github.com/me/flashcast-config.git";
+export const MOCK_CLONE_SECRET_URL =
+  "https://alice:sekret@github.com/me/flashcast-config.git";
 
 /**
  * 模拟工作区的远端关系：已克隆的工作区才有远端记录，这里用它让同步区段
@@ -620,7 +720,10 @@ type MockSyncScenario =
   | "offline";
 
 /** 与宿主一致的中文指引（节选），用于浏览器检查断言「给出了可操作的下一步」。 */
-const MOCK_SYNC_BLOCKS: Record<Exclude<MockSyncScenario, "ready" | "auth" | "offline">, SyncBlock> = {
+const MOCK_SYNC_BLOCKS: Record<
+  Exclude<MockSyncScenario, "ready" | "auth" | "offline">,
+  SyncBlock
+> = {
   dirty: {
     code: "dirtyWorktree",
     label: "有未提交修改",
@@ -730,7 +833,8 @@ class MockHost implements HostApi {
   private input = "";
   private selection = 0;
   private items: QueryView["items"] = [];
-  private history: { input: string; selection: number; scope: QueryScope }[] = [];
+  private history: { input: string; selection: number; scope: QueryScope }[] =
+    [];
   /** 当前查询范围：首屏或某个功能插件的范围。 */
   private scope: QueryScope = { kind: "home" };
   private handlers = new Map<string, Set<Handler>>();
@@ -765,9 +869,13 @@ class MockHost implements HostApi {
    * （`src-tauri/src/commands.rs::execute`）的顺序记录下来，交互检查据此断言顺序与内容，
    * 而**不是**断言「命令已发送」。真实桌面上的粘贴需要检查目标应用的内容，这里做不到。
    */
-  lastPaste: { content: string; target: string; sequence: string[] } | null = null;
+  lastPaste: { content: string; target: string; sequence: string[] } | null =
+    null;
   /** 唤起前的前台应用（真实外壳在唤起时捕获；浏览器里是固定样例）。 */
-  previousApp: { id: string; name: string } | null = { id: "code", name: "Visual Studio Code" };
+  previousApp: { id: string; name: string } | null = {
+    id: "code",
+    name: "Visual Studio Code",
+  };
   /** 本会话能否自动粘贴。浏览器默认**不能**（没有可注入按键的桌面会话）。 */
   private autoPasteSupported = false;
   hidden = false;
@@ -794,7 +902,9 @@ class MockHost implements HostApi {
       selected: this.selectedTheme,
       system: this.systemAppearance,
       error: this.themeError,
-      preference: this.appearancePreference, styles: this.themeStyles, reduce: this.reduceTransparency,
+      preference: this.appearancePreference,
+      styles: this.themeStyles,
+      reduce: this.reduceTransparency,
     });
   }
   // ---- Git 变更与提交（浏览器模拟） ----
@@ -824,17 +934,23 @@ class MockHost implements HostApi {
   /** 最近一次生成的模拟备忘录标识。 */
   private memoCounter = MOCK_MEMOS.length;
   /** 远端待拉取的内容（设置快捷键、主题 id、新增备忘录）。 */
-  private incoming: { hotkey: string; theme: string; memo: string } | null = null;
+  private incoming: { hotkey: string; theme: string; memo: string } | null =
+    null;
 
   // ---- Chrome 书签（浏览器模拟） ----
   /** Chrome 书签插件的启用状态。 */
   private chromePluginEnabled = true;
   /** 模拟的 profile 列表（关联状态是设备本地数据）。 */
-  private chromeProfiles: ChromeProfileView[] = MOCK_CHROME_PROFILES.map((profile) => ({
-    ...profile,
-  }));
+  private chromeProfiles: ChromeProfileView[] = MOCK_CHROME_PROFILES.map(
+    (profile) => ({
+      ...profile,
+    }),
+  );
   /** 模拟的书签索引状态：正常、缺失、损坏三种，覆盖 UI 需要区分的分支。 */
-  private chromeStatus: BookmarksStatus = { kind: "ok", count: MOCK_BOOKMARKS.length };
+  private chromeStatus: BookmarksStatus = {
+    kind: "ok",
+    count: MOCK_BOOKMARKS.length,
+  };
   /** 最近一次交给「Chrome」的启动请求（浏览器交互检查据此断言参数向量）。 */
   lastChromeLaunch: { program: string; args: string[] } | null = null;
   /** 模拟 Chrome 是否可用，以及发现 / 关联的问题说明。 */
@@ -850,14 +966,16 @@ class MockHost implements HostApi {
    * 后台捕获用户复制的内容是隐私敏感行为，必须由用户显式启用。
    */
   private clipboardPluginEnabled = false;
-  private clipboardEntries: MockClipboardEntry[] = MOCK_CLIPBOARD_ENTRIES.map((entry) => ({
-    ...entry,
-    formats: [...entry.formats],
-    // 文件条目要深拷贝：保存副本会就地改写它，不能污染模块级样例。
-    files: entry.files.map(
-      (file): ClipboardFileView => ({ ...file, kind: { ...file.kind } }),
-    ),
-  }));
+  private clipboardEntries: MockClipboardEntry[] = MOCK_CLIPBOARD_ENTRIES.map(
+    (entry) => ({
+      ...entry,
+      formats: [...entry.formats],
+      // 文件条目要深拷贝：保存副本会就地改写它，不能污染模块级样例。
+      files: entry.files.map(
+        (file): ClipboardFileView => ({ ...file, kind: { ...file.kind } }),
+      ),
+    }),
+  );
   /** 模拟的存储失败原因；非空时如实展示，而不是假装历史为空。 */
   private clipboardStorageError: string | null = null;
   /** 模拟的最近一次捕获失败原因。 */
@@ -888,13 +1006,7 @@ class MockHost implements HostApi {
     // 插件范围：关键词完整匹配后进入。范围内的查询先剥掉关键词前缀，
     // 之后标题、标签与正文都可检索（与真实宿主一致）。
     if (this.scope.kind === "plugin") {
-      const keyword = this.scope.keyword;
-      const rest =
-        query === keyword
-          ? ""
-          : query.startsWith(keyword)
-            ? query.slice(keyword.length).trim()
-            : query;
+      const rest = query;
       if (this.scope.id === MOCK_CHROME_PLUGIN_ID) {
         return this.chromeItems(rest);
       }
@@ -910,7 +1022,7 @@ class MockHost implements HostApi {
         title: "重新扫描软件",
         subtitle: "刷新已安装软件列表",
         iconDataUrl: null,
-      thumbnailDataUrl: null,
+        thumbnailDataUrl: null,
         source: "flashcast",
         kind: "command",
         defaultAction: "open",
@@ -922,7 +1034,7 @@ class MockHost implements HostApi {
         title: "查看平台能力",
         subtitle: "显示会话类型与各能力的真实支持状态",
         iconDataUrl: null,
-      thumbnailDataUrl: null,
+        thumbnailDataUrl: null,
         source: "flashcast",
         kind: "command",
         defaultAction: "open",
@@ -931,16 +1043,19 @@ class MockHost implements HostApi {
       },
     ];
     if (query.length === 0) {
-      const quick = MOCK_APPS.slice(0, this.settings.quickAccessLimit).map((app) =>
-        this.toItem(app, { tier: "titlePrefix", relevance: 0 }),
+      const quick = MOCK_APPS.slice(0, this.settings.quickAccessLimit).map(
+        (app) => this.toItem(app, { tier: "titlePrefix", relevance: 0 }),
       );
-      return [...quick, ...commandItems];
+      return [...quick, ...this.pluginEntries(query), ...commandItems];
     }
     const scored = MOCK_APPS.map((app) => {
       const title = app.title.toLowerCase();
-      if (title === query) return { app, tier: "titlePrefix" as const, relevance: 100 };
-      if (title.startsWith(query)) return { app, tier: "titlePrefix" as const, relevance: 80 };
-      if (title.includes(query)) return { app, tier: "titleSubstring" as const, relevance: 55 };
+      if (title === query)
+        return { app, tier: "titlePrefix" as const, relevance: 100 };
+      if (title.startsWith(query))
+        return { app, tier: "titlePrefix" as const, relevance: 80 };
+      if (title.includes(query))
+        return { app, tier: "titleSubstring" as const, relevance: 55 };
       if (app.keywords.some((keyword) => keyword.includes(query))) {
         return { app, tier: "metadataSubstring" as const, relevance: 30 };
       }
@@ -949,34 +1064,28 @@ class MockHost implements HostApi {
       }
       return null;
     }).filter((value): value is NonNullable<typeof value> => value !== null);
-    const tierOrder = { titlePrefix: 0, titleSubstring: 1, metadataSubstring: 2, keywordOrTagExact: 0 };
+    const tierOrder = {
+      titlePrefix: 0,
+      titleSubstring: 1,
+      metadataSubstring: 2,
+      keywordOrTagExact: 0,
+    };
     // 备忘录在首屏按**完整标签**命中（与宿主一致：标签精确匹配优先于较弱的匹配）。
     const memoScored = this.memoPluginEnabled
       ? this.memoEntries
-          .filter((memo) => memo.tags.some((tag) => tag.toLowerCase() === query))
+          .filter((memo) =>
+            memo.tags.some((tag) => tag.toLowerCase() === query),
+          )
           .map((memo) => ({
             title: memo.title,
             tier: "keywordOrTagExact" as const,
             relevance: 90,
-            item: this.memoItem(memo, { tier: "keywordOrTagExact" as const, relevance: 90 }),
+            item: this.memoItem(memo, {
+              tier: "keywordOrTagExact" as const,
+              relevance: 90,
+            }),
           }))
       : [];
-    // 标签正文优先，插件入口仍可显式选择。
-    const collisionEntry =
-      this.memoPluginEnabled && MOCK_MEMO_KEYWORDS.includes(query) && memoScored.length > 0
-        ? {
-            id: `flashcast.plugin.${MOCK_MEMO_PLUGIN_ID}`,
-            title: "备忘录",
-            subtitle: `插件 · 回车进入「${query}」范围`,
-            iconDataUrl: null,
-      thumbnailDataUrl: null,
-            source: "flashcast",
-            kind: "command" as const,
-            defaultAction: "open" as const,
-            defaultActionLabel: "打开",
-            score: { tier: "keywordOrTagExact" as const, relevance: 0 },
-          }
-        : null;
     const ranked = [
       ...memoScored,
       ...scored.map(({ app, tier, relevance }) => ({
@@ -993,7 +1102,12 @@ class MockHost implements HostApi {
         a.title.localeCompare(b.title),
     );
     const items = ranked.map((entry) => entry.item);
-    return collisionEntry ? [...items, collisionEntry] : items;
+    return [
+      ...items.map((item) =>
+        item.kind === "memo" ? { ...item, defaultActionLabel: "进入" } : item,
+      ),
+      ...this.pluginEntries(query),
+    ];
   }
 
   /** 剪贴板历史范围内的一条结果：默认操作是粘贴（复用备忘录的粘贴路径）。 */
@@ -1061,9 +1175,12 @@ class MockHost implements HostApi {
       .map((entry) => {
         const title = entry.summary.toLowerCase();
         const text = (entry.text ?? "").toLowerCase();
-        if (title === query) return { entry, tier: "titlePrefix" as const, relevance: 100 };
-        if (title.startsWith(query)) return { entry, tier: "titlePrefix" as const, relevance: 80 };
-        if (title.includes(query)) return { entry, tier: "titleSubstring" as const, relevance: 55 };
+        if (title === query)
+          return { entry, tier: "titlePrefix" as const, relevance: 100 };
+        if (title.startsWith(query))
+          return { entry, tier: "titlePrefix" as const, relevance: 80 };
+        if (title.includes(query))
+          return { entry, tier: "titleSubstring" as const, relevance: 55 };
         if (text.includes(query)) {
           return { entry, tier: "metadataSubstring" as const, relevance: 40 };
         }
@@ -1089,7 +1206,9 @@ class MockHost implements HostApi {
           b.relevance - a.relevance ||
           b.entry.capturedAtMs - a.entry.capturedAtMs,
       )
-      .map(({ entry, tier, relevance }) => this.clipboardItem(entry, { tier, relevance }));
+      .map(({ entry, tier, relevance }) =>
+        this.clipboardItem(entry, { tier, relevance }),
+      );
   }
 
   /** 当前剪贴板历史状态（含条目列表），与真实宿主的字段一一对应。 */
@@ -1101,10 +1220,14 @@ class MockHost implements HostApi {
       captureActive: this.clipboardPluginEnabled && !paused,
       storageOk: this.clipboardStorageError === null,
       storageError: this.clipboardStorageError,
-      storagePath: "/home/user/.local/share/flashcast/clipboard/history.sqlite3",
+      storagePath:
+        "/home/user/.local/share/flashcast/clipboard/history.sqlite3",
       entries: this.clipboardEntries.length,
       pinned: this.clipboardEntries.filter((entry) => entry.pinned).length,
-      attachments: this.clipboardEntries.reduce((sum, entry) => sum + entry.attachments, 0),
+      attachments: this.clipboardEntries.reduce(
+        (sum, entry) => sum + entry.attachments,
+        0,
+      ),
       capacity: this.settings.clipboard?.capacity ?? 500,
       retentionDays: this.settings.clipboard?.retentionDays ?? 30,
       capacityReached: null,
@@ -1112,9 +1235,16 @@ class MockHost implements HostApi {
       lastCaptureMs: this.clipboardEntries.length > 0 ? Date.now() : null,
       suppressed: this.clipboardSuppressed,
       items: [...this.clipboardEntries]
-        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.capturedAtMs - a.capturedAtMs)
+        .sort(
+          (a, b) =>
+            Number(b.pinned) - Number(a.pinned) ||
+            b.capturedAtMs - a.capturedAtMs,
+        )
         // 与本机真实宿主一致：**不**把 HTML/RTF 载荷下发给界面，只给可索引纯文本与格式名。
-        .map(({ html: _payload, ...entry }) => ({ ...entry, formats: [...entry.formats] })),
+        .map(({ html: _payload, ...entry }) => ({
+          ...entry,
+          formats: [...entry.formats],
+        })),
     };
   }
 
@@ -1168,9 +1298,12 @@ class MockHost implements HostApi {
     }
     return MOCK_BOOKMARKS.map((entry) => {
       const title = entry.title.toLowerCase();
-      if (title === query) return { entry, tier: "titlePrefix" as const, relevance: 100 };
-      if (title.startsWith(query)) return { entry, tier: "titlePrefix" as const, relevance: 80 };
-      if (title.includes(query)) return { entry, tier: "titleSubstring" as const, relevance: 55 };
+      if (title === query)
+        return { entry, tier: "titlePrefix" as const, relevance: 100 };
+      if (title.startsWith(query))
+        return { entry, tier: "titlePrefix" as const, relevance: 80 };
+      if (title.includes(query))
+        return { entry, tier: "titleSubstring" as const, relevance: 55 };
       if (entry.url.toLowerCase().includes(query)) {
         return { entry, tier: "metadataSubstring" as const, relevance: 35 };
       }
@@ -1186,7 +1319,9 @@ class MockHost implements HostApi {
           b.relevance - a.relevance ||
           a.entry.id.localeCompare(b.entry.id),
       )
-      .map(({ entry, tier, relevance }) => this.chromeItem(entry, { tier, relevance }));
+      .map(({ entry, tier, relevance }) =>
+        this.chromeItem(entry, { tier, relevance }),
+      );
   }
 
   /** 当前关联的 profile 目录名。 */
@@ -1206,8 +1341,9 @@ class MockHost implements HostApi {
       })),
       associated: this.associatedChromeDir,
       associatedName:
-        this.chromeProfiles.find((profile) => profile.dir === this.associatedChromeDir)?.name ??
-        null,
+        this.chromeProfiles.find(
+          (profile) => profile.dir === this.associatedChromeDir,
+        )?.name ?? null,
       error: this.chromeError,
       warnings: this.chromeWarnings,
       bookmarks: {
@@ -1216,14 +1352,19 @@ class MockHost implements HostApi {
             ? null
             : `/home/user/.config/google-chrome/${this.associatedChromeDir}/Bookmarks`,
         status: this.chromeStatus,
-        entries: this.chromeStatus.kind === "ok" ? MOCK_BOOKMARKS.map((e) => ({ ...e })) : [],
+        entries:
+          this.chromeStatus.kind === "ok"
+            ? MOCK_BOOKMARKS.map((e) => ({ ...e }))
+            : [],
       },
       bookmarksLabel: describeBookmarksStatus(this.chromeStatus),
     };
   }
 
   /** 浏览器交互检查用的钩子：模拟书签文件缺失 / 损坏 / Chrome 未安装。 */
-  simulateChromeStatus(kind: "ok" | "missing" | "corrupt" | "unavailable"): void {
+  simulateChromeStatus(
+    kind: "ok" | "missing" | "corrupt" | "unavailable",
+  ): void {
     if (kind === "ok") {
       this.chromeStatus = { kind: "ok", count: MOCK_BOOKMARKS.length };
       this.chromeError = null;
@@ -1243,7 +1384,8 @@ class MockHost implements HostApi {
       return;
     }
     this.chromeAvailable = false;
-    this.chromeError = "没有找到 Chrome 可执行文件；已尝试：/usr/bin/google-chrome";
+    this.chromeError =
+      "没有找到 Chrome 可执行文件；已尝试：/usr/bin/google-chrome";
   }
 
   /** 浏览器交互检查用的钩子：模拟书签文件被外部追加了一条书签。 */
@@ -1265,7 +1407,8 @@ class MockHost implements HostApi {
     return {
       id: `memo:${memo.id}`,
       title: memo.title,
-      subtitle: memo.tags.length > 0 ? `标签：${memo.tags.join("、")}` : "无标签",
+      subtitle:
+        memo.tags.length > 0 ? `标签：${memo.tags.join("、")}` : "无标签",
       iconDataUrl: null,
       thumbnailDataUrl: null,
       source: MOCK_MEMO_PLUGIN_ID,
@@ -1290,9 +1433,12 @@ class MockHost implements HostApi {
     return this.memoEntries
       .map((memo) => {
         const title = memo.title.toLowerCase();
-        if (title === query) return { memo, tier: "titlePrefix" as const, relevance: 100 };
-        if (title.startsWith(query)) return { memo, tier: "titlePrefix" as const, relevance: 80 };
-        if (title.includes(query)) return { memo, tier: "titleSubstring" as const, relevance: 55 };
+        if (title === query)
+          return { memo, tier: "titlePrefix" as const, relevance: 100 };
+        if (title.startsWith(query))
+          return { memo, tier: "titlePrefix" as const, relevance: 80 };
+        if (title.includes(query))
+          return { memo, tier: "titleSubstring" as const, relevance: 55 };
         if (memo.tags.some((tag) => tag.toLowerCase().includes(query))) {
           return { memo, tier: "metadataSubstring" as const, relevance: 32 };
         }
@@ -1308,10 +1454,15 @@ class MockHost implements HostApi {
           b.relevance - a.relevance ||
           a.memo.title.localeCompare(b.memo.title),
       )
-      .map(({ memo, tier, relevance }) => this.memoItem(memo, { tier, relevance }));
+      .map(({ memo, tier, relevance }) =>
+        this.memoItem(memo, { tier, relevance }),
+      );
   }
 
-  private toItem(app: MockApp, score: QueryView["items"][number]["score"]): QueryView["items"][number] {
+  private toItem(
+    app: MockApp,
+    score: QueryView["items"][number]["score"],
+  ): QueryView["items"][number] {
     return {
       id: `app:${app.id}`,
       title: app.title,
@@ -1331,7 +1482,8 @@ class MockHost implements HostApi {
     return {
       seq: this.seq,
       scope: this.scope,
-      scopeLabel: this.scope.kind === "plugin" ? `${this.scope.keyword} 范围` : "首屏",
+      scopeLabel:
+        this.scope.kind === "plugin" ? `${this.scope.keyword} 范围` : "首屏",
       input: this.input,
       items: this.items,
       selection: this.selection,
@@ -1340,46 +1492,148 @@ class MockHost implements HostApi {
     };
   }
 
+  private pluginEntries(query: string): QueryView["items"] {
+    const definitions = [
+      {
+        id: MOCK_MEMO_PLUGIN_ID,
+        title: "备忘录",
+        enabled: this.memoPluginEnabled,
+        aliases: MOCK_MEMO_KEYWORDS,
+      },
+      {
+        id: MOCK_CHROME_PLUGIN_ID,
+        title: "Chrome 书签",
+        enabled: this.chromePluginEnabled,
+        aliases: [...MOCK_CHROME_KEYWORDS, "bookmark", "bookmarks", "书签"],
+      },
+      {
+        id: MOCK_CLIPBOARD_PLUGIN_ID,
+        title: "剪切板",
+        enabled: this.clipboardPluginEnabled,
+        aliases: [...MOCK_CLIPBOARD_KEYWORDS, "剪切板"],
+      },
+    ];
+    return definitions
+      .filter(
+        (p) =>
+          p.enabled &&
+          (!query ||
+            p.title.toLowerCase().includes(query) ||
+            p.aliases.some((alias) => alias.includes(query))),
+      )
+      .map((p) => ({
+        id: `flashcast.plugin.${p.id}`,
+        title: p.title,
+        subtitle: "插件 · 回车进入",
+        iconDataUrl: null,
+        thumbnailDataUrl: null,
+        source: "flashcast",
+        kind: "command",
+        defaultAction: "open",
+        defaultActionLabel: "进入",
+        score: { tier: "keywordOrTagExact", relevance: 0 },
+      }));
+  }
+
+  async get_plugin_commands(): Promise<PluginCommandView[]> {
+    const platform = (await this.get_capabilities()).os;
+    return [
+      [MOCK_MEMO_PLUGIN_ID, "备忘录", this.memoPluginEnabled],
+      [MOCK_CHROME_PLUGIN_ID, "Chrome 书签", this.chromePluginEnabled],
+      [MOCK_CLIPBOARD_PLUGIN_ID, "剪切板", this.clipboardPluginEnabled],
+    ].map(([pluginId, title, enabled]) => {
+      const id = `flashcast.plugin.${pluginId}`;
+      const defaultShortcut =
+        pluginId === MOCK_CLIPBOARD_PLUGIN_ID
+          ? platform === "macos"
+            ? "Control+Command+C"
+            : "Ctrl+Alt+C"
+          : "";
+      const shortcut =
+        this.settings.commandShortcuts?.[id]?.[platform as "linux"] ??
+        defaultShortcut;
+      return {
+        id,
+        title: `打开${title}`,
+        pluginId: String(pluginId),
+        platform,
+        defaultShortcut,
+        shortcut,
+        enabled: Boolean(enabled),
+        registered: Boolean(enabled) && !!shortcut,
+        pending: false,
+        effectiveShortcut: enabled && shortcut ? shortcut : null,
+        error: null,
+      };
+    });
+  }
+  async set_command_shortcut(
+    id: string,
+    shortcut: string | null,
+  ): Promise<PluginCommandView[]> {
+    const commands = await this.get_plugin_commands();
+    const command = commands.find((c) => c.id === id);
+    if (!command) throw new Error("插件命令不存在");
+    if (
+      shortcut &&
+      !/^(?:(?:Ctrl|Control|Alt|Shift|Super|Command)\+)+(?:[a-zA-Z0-9]|Space|Enter|Tab|Escape|F[1-9][0-2]?)$/.test(
+        shortcut,
+      )
+    )
+      throw new Error("快捷键格式无效");
+    if (
+      shortcut &&
+      (shortcut.toLowerCase() === this.settings.hotkey.toLowerCase() ||
+        commands.some(
+          (c) =>
+            c.id !== id &&
+            c.enabled &&
+            c.shortcut.toLowerCase() === shortcut.toLowerCase(),
+        ))
+    )
+      throw new Error("快捷键与其他命令冲突");
+    this.settings.commandShortcuts ??= {};
+    this.settings.commandShortcuts[id] = {
+      ...this.settings.commandShortcuts[id],
+      [command.platform]: shortcut,
+    };
+    const next = await this.get_plugin_commands();
+    this.emit("flashcast://plugin-commands", next);
+    return next;
+  }
+  async execute_plugin_command(id: string): Promise<QueryView> {
+    const command = (await this.get_plugin_commands()).find(
+      (c) => c.id === id && c.enabled,
+    );
+    if (!command) throw new Error("插件已停用或命令不存在");
+    if (this.scope.kind === "home")
+      this.history.push({
+        input: this.input,
+        selection: this.selection,
+        scope: this.scope,
+      });
+    this.scope = {
+      kind: "plugin",
+      id: command.pluginId,
+      keyword: command.pluginId,
+    };
+    this.input = "";
+    this.selection = 0;
+    this.items = this.buildItems();
+    return this.response();
+  }
+
   async query(input: string): Promise<QueryView> {
     const sameInput = this.input === input;
-    const normalized = input.trim().toLowerCase();
-    const isMemoKeyword =
-      this.memoPluginEnabled && MOCK_MEMO_KEYWORDS.includes(normalized);
-    const isChromeKeyword =
-      this.chromePluginEnabled && MOCK_CHROME_KEYWORDS.includes(normalized);
-    // 「剪贴板」与「剪切板」都进入同一个插件：两个别名共用一份历史。
-    const isClipboardKeyword =
-      this.clipboardPluginEnabled && MOCK_CLIPBOARD_KEYWORDS.includes(normalized);
-    // 关键词与标签冲突（ADR §4）：输入正好是插件关键词、同时又有备忘录带这个标签时，
-    // 留在首屏并同时给出「插件入口 + 标签命中」；已经在范围内则不算冲突。
-    const collides =
-      isMemoKeyword &&
-      this.scope.kind === "home" &&
-      this.memoEntries.some((memo) => memo.tags.some((tag) => tag.toLowerCase() === normalized));
-    // 关键词完整匹配即进入插件范围；已在范围内改用另一个别名时更新记下的关键词。
-    if (isClipboardKeyword || isChromeKeyword || (isMemoKeyword && !collides)) {
-      if (this.scope.kind === "home") {
-        this.history.push({
-          input: this.input,
-          selection: this.selection,
-          scope: this.scope,
-        });
-      }
-      this.scope = isClipboardKeyword
-        ? { kind: "plugin", id: MOCK_CLIPBOARD_PLUGIN_ID, keyword: normalized }
-        : isChromeKeyword
-          ? { kind: "plugin", id: MOCK_CHROME_PLUGIN_ID, keyword: normalized }
-          : { kind: "plugin", id: MOCK_MEMO_PLUGIN_ID, keyword: normalized };
-    } else if (this.scope.kind === "plugin" && normalized.length === 0) {
-      // 清空输入即离开插件范围。
-      this.scope = { kind: "home" };
-    }
     this.input = input;
     this.items = this.buildItems();
     if (!sameInput) {
       this.selection = 0;
     }
-    this.selection = Math.min(this.selection, Math.max(0, this.items.length - 1));
+    this.selection = Math.min(
+      this.selection,
+      Math.max(0, this.items.length - 1),
+    );
     return this.response();
   }
 
@@ -1389,23 +1643,36 @@ class MockHost implements HostApi {
     // 书签的默认操作是在 Chrome 打开。
     if (itemId.startsWith("chrome-bookmark:")) {
       if (!this.chromePluginEnabled) {
-        return { status: "failed", message: "插件「Chrome 书签」已停用，已拒绝执行" };
+        return {
+          status: "failed",
+          message: "插件「Chrome 书签」已停用，已拒绝执行",
+        };
       }
       const entry = MOCK_BOOKMARKS.find(
         (candidate) => itemId === `chrome-bookmark:${candidate.id}`,
       );
       if (!entry) {
-        return { status: "failed", message: `找不到这条书签：${itemId}，请重新查询` };
+        return {
+          status: "failed",
+          message: `找不到这条书签：${itemId}，请重新查询`,
+        };
       }
       if (!/^https?:\/\//i.test(entry.url)) {
-        return { status: "failed", message: "链接不受支持：只支持 http / https 链接" };
+        return {
+          status: "failed",
+          message: "链接不受支持：只支持 http / https 链接",
+        };
       }
       if (this.associatedChromeDir === null) {
-        return { status: "failed", message: "尚未关联 Chrome profile：请在设置里选择一个 profile" };
+        return {
+          status: "failed",
+          message: "尚未关联 Chrome profile：请在设置里选择一个 profile",
+        };
       }
       const profile =
-        this.chromeProfiles.find((candidate) => candidate.dir === this.associatedChromeDir) ??
-        null;
+        this.chromeProfiles.find(
+          (candidate) => candidate.dir === this.associatedChromeDir,
+        ) ?? null;
       const args = [
         `--profile-directory=${this.associatedChromeDir}`,
         "--no-first-run",
@@ -1421,28 +1688,37 @@ class MockHost implements HostApi {
         message: `已请求 Chrome 用 profile「${profile?.name ?? this.associatedChromeDir}」打开：${entry.url}；Chrome 已运行时由现有进程接管，Flashcast 不等待进程退出，也无法据此确认页面是否已加载`,
       };
     }
-    // 首屏插件入口：等价于用户直接输入该插件的关键词（与宿主一致）。
-    if (itemId === `flashcast.plugin.${MOCK_MEMO_PLUGIN_ID}`) {
-      if (!this.memoPluginEnabled) {
-        return { status: "failed", message: "插件「备忘录」已停用，无法进入" };
+    if (itemId.startsWith("flashcast.plugin.")) {
+      try {
+        await this.execute_plugin_command(itemId);
+        return { status: "done", message: "已进入插件页面" };
+      } catch (error) {
+        return { status: "failed", message: String(error) };
       }
-      this.history.push({
-        input: this.input,
-        selection: this.selection,
-        scope: this.scope,
-      });
-      const keyword = this.input.trim().toLowerCase();
-      this.scope = { kind: "plugin", id: MOCK_MEMO_PLUGIN_ID, keyword };
-      this.items = this.buildItems();
-      return { status: "done", message: `已进入「备忘录」范围（关键词 ${keyword}）` };
+    }
+    if (this.scope.kind === "home" && itemId.startsWith("memo:")) {
+      const query = this.input;
+      await this.execute_plugin_command(
+        `flashcast.plugin.${MOCK_MEMO_PLUGIN_ID}`,
+      );
+      await this.query(query);
+      this.selection = Math.max(
+        0,
+        this.items.findIndex((item) => item.id === itemId),
+      );
+      return { status: "done", message: "已进入插件页面" };
     }
     // 剪贴板历史的默认操作同样是粘贴：复用与备忘录完全相同的路径。
     if (itemId.startsWith("clipboard:")) {
       if (!this.clipboardPluginEnabled) {
-        return { status: "failed", message: "插件「剪贴板历史」已停用，已拒绝执行" };
+        return {
+          status: "failed",
+          message: "插件「剪切板」已停用，已拒绝执行",
+        };
       }
       const id = itemId.slice("clipboard:".length);
-      const entry = this.clipboardEntries.find((candidate) => candidate.id === id) ?? null;
+      const entry =
+        this.clipboardEntries.find((candidate) => candidate.id === id) ?? null;
       if (!entry) {
         return {
           status: "failed",
@@ -1468,7 +1744,8 @@ class MockHost implements HostApi {
       } else {
         // 图片条目没有可索引的文字，但仍然是可恢复的内容：真实宿主读本机附件后把图片
         // 写回剪贴板。附件读不出来（data URL 为空）时如实失败，不假装粘贴成功。
-        const payload = entry.text ?? (entry.imageDataUrl ? entry.summary : null);
+        const payload =
+          entry.text ?? (entry.imageDataUrl ? entry.summary : null);
         if (payload === null) {
           return {
             status: "failed",
@@ -1496,13 +1773,19 @@ class MockHost implements HostApi {
         sequence: ["copied", "windowHidden", "restored", "pasted"],
       };
       this.hidden = true;
-      return { status: "done", message: `已粘贴「${entry.summary}」到「${target.name}」` };
+      return {
+        status: "done",
+        message: `已粘贴「${entry.summary}」到「${target.name}」`,
+      };
     }
     // 备忘录的默认操作是粘贴：先准备剪贴板，再按能力决定能否自动粘贴。
     const memo = this.memoFromItemId(itemId);
     if (memo) {
       if (!this.memoPluginEnabled) {
-        return { status: "failed", message: "插件「备忘录」已停用，已拒绝执行" };
+        return {
+          status: "failed",
+          message: "插件「备忘录」已停用，已拒绝执行",
+        };
       }
       this.lastCopied = memo.body;
       const target = this.previousApp;
@@ -1522,7 +1805,10 @@ class MockHost implements HostApi {
         sequence: ["copied", "windowHidden", "restored", "pasted"],
       };
       this.hidden = true;
-      return { status: "done", message: `已粘贴「${memo.title}」到「${target.name}」` };
+      return {
+        status: "done",
+        message: `已粘贴「${memo.title}」到「${target.name}」`,
+      };
     }
     // 宿主对这两条命令都有实现，而且都返回**带反馈的** done（见
     // `crates/flashcast-core/src/host.rs` 的 `COMMAND_RESCAN` / `COMMAND_CAPABILITIES`）。
@@ -1577,7 +1863,11 @@ class MockHost implements HostApi {
         (candidate) => itemId === `chrome-bookmark:${candidate.id}`,
       );
       return entry
-        ? { kind: "text", title: entry.title, body: `${entry.url}\n目录：${entry.folder}` }
+        ? {
+            kind: "text",
+            title: entry.title,
+            body: `${entry.url}\n目录：${entry.folder}`,
+          }
         : null;
     }
     const memo = this.memoFromItemId(itemId);
@@ -1586,7 +1876,9 @@ class MockHost implements HostApi {
     }
     if (itemId.startsWith("clipboard:")) {
       const id = itemId.slice("clipboard:".length);
-      const entry = this.clipboardEntries.find((candidate) => candidate.id === id);
+      const entry = this.clipboardEntries.find(
+        (candidate) => candidate.id === id,
+      );
       if (!entry) {
         return null;
       }
@@ -1609,7 +1901,10 @@ class MockHost implements HostApi {
   }
 
   async set_clipboard_paused(paused: boolean): Promise<ClipboardStateView> {
-    this.settings = { ...this.settings, clipboard: { ...this.settings.clipboard, paused } };
+    this.settings = {
+      ...this.settings,
+      clipboard: { ...this.settings.clipboard, paused },
+    };
     return this.clipboardStateView();
   }
 
@@ -1639,12 +1934,19 @@ class MockHost implements HostApi {
         used += 1;
       }
     }
-    this.clipboardEntries = this.clipboardEntries.filter((entry) => keep.has(entry.id));
+    this.clipboardEntries = this.clipboardEntries.filter((entry) =>
+      keep.has(entry.id),
+    );
     return this.clipboardStateView();
   }
 
-  async pin_clipboard_entry(id: string, pinned: boolean): Promise<ClipboardStateView> {
-    const entry = this.clipboardEntries.find((candidate) => candidate.id === id);
+  async pin_clipboard_entry(
+    id: string,
+    pinned: boolean,
+  ): Promise<ClipboardStateView> {
+    const entry = this.clipboardEntries.find(
+      (candidate) => candidate.id === id,
+    );
     if (!entry) {
       throw `找不到这条剪贴板历史：${id}`;
     }
@@ -1654,7 +1956,9 @@ class MockHost implements HostApi {
 
   async delete_clipboard_entry(id: string): Promise<ClipboardStateView> {
     const before = this.clipboardEntries.length;
-    this.clipboardEntries = this.clipboardEntries.filter((entry) => entry.id !== id);
+    this.clipboardEntries = this.clipboardEntries.filter(
+      (entry) => entry.id !== id,
+    );
     if (this.clipboardEntries.length === before) {
       throw `找不到这条剪贴板历史：${id}`;
     }
@@ -1677,11 +1981,15 @@ class MockHost implements HostApi {
     id: string,
     attachmentId: string,
   ): Promise<ClipboardStateView> {
-    const entry = this.clipboardEntries.find((candidate) => candidate.id === id);
+    const entry = this.clipboardEntries.find(
+      (candidate) => candidate.id === id,
+    );
     if (!entry) {
       throw `找不到这条剪贴板历史或它的文件条目：${id}`;
     }
-    const file = entry.files.find((candidate) => candidate.attachmentId === attachmentId);
+    const file = entry.files.find(
+      (candidate) => candidate.attachmentId === attachmentId,
+    );
     if (!file) {
       throw `找不到这条剪贴板历史或它的文件条目：${attachmentId}`;
     }
@@ -1731,7 +2039,9 @@ class MockHost implements HostApi {
   }
 
   async associate_chrome_profile(profileDir: string): Promise<ChromeState> {
-    const profile = this.chromeProfiles.find((candidate) => candidate.dir === profileDir);
+    const profile = this.chromeProfiles.find(
+      (candidate) => candidate.dir === profileDir,
+    );
     if (!profile) {
       throw `profile 目录不存在：${profileDir}（已发现的 profile：${this.chromeProfiles
         .map((candidate) => candidate.dir)
@@ -1766,8 +2076,18 @@ class MockHost implements HostApi {
     return [];
   }
 
-  async create_memo(title: string, tags: string[], body: string): Promise<Memo> {
+  private memoSaveError: string | null = null;
+  simulateMemoSaveError(reason: string | null): void {
+    this.memoSaveError = reason;
+  }
+
+  async create_memo(
+    title: string,
+    tags: string[],
+    body: string,
+  ): Promise<Memo> {
     this.requireMemoWritable();
+    if (this.memoSaveError) throw new Error(this.memoSaveError);
     if (!title.trim()) throw "备忘录标题不能为空";
     if (!body.trim()) throw "备忘录正文不能为空";
     this.memoCounter += 1;
@@ -1777,12 +2097,20 @@ class MockHost implements HostApi {
       tags: tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0),
       body,
     };
-    this.memoEntries = [...this.memoEntries, memo].sort((a, b) => a.id.localeCompare(b.id));
+    this.memoEntries = [...this.memoEntries, memo].sort((a, b) =>
+      a.id.localeCompare(b.id),
+    );
     return { ...memo, tags: [...memo.tags] };
   }
 
-  async update_memo(id: string, title: string, tags: string[], body: string): Promise<Memo> {
+  async update_memo(
+    id: string,
+    title: string,
+    tags: string[],
+    body: string,
+  ): Promise<Memo> {
     this.requireMemoWritable();
+    if (this.memoSaveError) throw new Error(this.memoSaveError);
     if (!title.trim()) throw "备忘录标题不能为空";
     if (!body.trim()) throw "备忘录正文不能为空";
     const existing = this.memoEntries.find((memo) => memo.id === id);
@@ -1795,12 +2123,15 @@ class MockHost implements HostApi {
       tags: tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0),
       body,
     };
-    this.memoEntries = this.memoEntries.map((candidate) => (candidate.id === id ? memo : candidate));
+    this.memoEntries = this.memoEntries.map((candidate) =>
+      candidate.id === id ? memo : candidate,
+    );
     return { ...memo, tags: [...memo.tags] };
   }
 
   async delete_memo(id: string): Promise<void> {
     this.requireMemoWritable();
+    if (this.memoSaveError) throw new Error(this.memoSaveError);
     if (!this.memoEntries.some((memo) => memo.id === id)) {
       throw `找不到这条备忘录：${id}`;
     }
@@ -1817,7 +2148,10 @@ class MockHost implements HostApi {
     }
   }
 
-  async set_feature_plugin_enabled(id: string, enabled: boolean): Promise<PluginView[]> {
+  async set_feature_plugin_enabled(
+    id: string,
+    enabled: boolean,
+  ): Promise<PluginView[]> {
     if (
       id !== MOCK_MEMO_PLUGIN_ID &&
       id !== MOCK_CHROME_PLUGIN_ID &&
@@ -1855,7 +2189,10 @@ class MockHost implements HostApi {
   }
 
   async move_selection(delta: number): Promise<QueryView> {
-    this.selection = Math.max(0, Math.min(this.items.length - 1, this.selection + delta));
+    this.selection = Math.max(
+      0,
+      Math.min(this.items.length - 1, this.selection + delta),
+    );
     return this.response();
   }
 
@@ -1872,13 +2209,19 @@ class MockHost implements HostApi {
     this.input = entry.input;
     this.scope = entry.scope;
     this.items = this.buildItems();
-    this.selection = Math.min(entry.selection, Math.max(0, this.items.length - 1));
+    this.selection = Math.min(
+      entry.selection,
+      Math.max(0, this.items.length - 1),
+    );
     return { restored: true, response: this.response() };
   }
 
   async rescan(): Promise<QueryView> {
     this.items = this.buildItems();
-    return this.response({ level: "info", message: "已重新扫描软件列表（浏览器模拟）" });
+    return this.response({
+      level: "info",
+      message: "已重新扫描软件列表（浏览器模拟）",
+    });
   }
 
   async refresh_state(): Promise<QueryView> {
@@ -1914,19 +2257,63 @@ class MockHost implements HostApi {
   }
 
   // 仅用于浏览器交互检查；真实应用始终调用原生平台适配层。
-  hotkeyConflictScenario: "none" | "conflict" | "failure" | "unknown" | "readonly" | "mismatch" | "bound-alt" | "partial-failure" = "none";
+  hotkeyConflictScenario:
+    | "none"
+    | "conflict"
+    | "failure"
+    | "unknown"
+    | "readonly"
+    | "mismatch"
+    | "bound-alt"
+    | "partial-failure" = "none";
   private hotkeyConflictFixed = false;
   async get_hotkey_conflict(): Promise<import("./types").HotkeyConflictReport> {
     const scenario = this.hotkeyConflictScenario;
-    if (scenario === "none" || this.settings.hotkey !== "Alt+Space") return { status: "not-applicable", canResolve: false, canUndo: false, effective: null, message: null };
-    return { status: this.hotkeyConflictFixed ? "clear" : scenario === "unknown" ? "unknown" : scenario === "mismatch" ? "mismatch" : "conflict", canResolve: !["unknown", "readonly"].includes(scenario), canUndo: this.hotkeyConflictFixed, effective: this.hotkeyConflictFixed || scenario === "bound-alt" ? "Alt+Space" : "Ctrl+Alt+Space", message: ["unknown", "readonly"].includes(scenario) ? "当前系统无法自动修改，请手动处理。" : null };
+    if (scenario === "none" || this.settings.hotkey !== "Alt+Space")
+      return {
+        status: "not-applicable",
+        canResolve: false,
+        canUndo: false,
+        effective: null,
+        message: null,
+      };
+    return {
+      status: this.hotkeyConflictFixed
+        ? "clear"
+        : scenario === "unknown"
+          ? "unknown"
+          : scenario === "mismatch"
+            ? "mismatch"
+            : "conflict",
+      canResolve: !["unknown", "readonly"].includes(scenario),
+      canUndo: this.hotkeyConflictFixed,
+      effective:
+        this.hotkeyConflictFixed || scenario === "bound-alt"
+          ? "Alt+Space"
+          : "Ctrl+Alt+Space",
+      message: ["unknown", "readonly"].includes(scenario)
+        ? "当前系统无法自动修改，请手动处理。"
+        : null,
+    };
   }
-  async resolve_hotkey_conflict(undo: boolean): Promise<import("./types").HotkeyConflictReport> {
-    if (this.hotkeyConflictScenario === "partial-failure") { this.hotkeyConflictFixed = true; throw "自动处理失败，恢复未完成，请检查系统设置。"; }
-    if (this.hotkeyConflictScenario === "failure") throw "系统未接受新的绑定，已恢复原来的系统设置。";
-    if (["unknown", "readonly", "none"].includes(this.hotkeyConflictScenario)) throw "当前系统不支持自动修改。";
+  async resolve_hotkey_conflict(
+    undo: boolean,
+  ): Promise<import("./types").HotkeyConflictReport> {
+    if (this.hotkeyConflictScenario === "partial-failure") {
+      this.hotkeyConflictFixed = true;
+      throw "自动处理失败，恢复未完成，请检查系统设置。";
+    }
+    if (this.hotkeyConflictScenario === "failure")
+      throw "系统未接受新的绑定，已恢复原来的系统设置。";
+    if (["unknown", "readonly", "none"].includes(this.hotkeyConflictScenario))
+      throw "当前系统不支持自动修改。";
     this.hotkeyConflictFixed = !undo;
-    this.emit("flashcast://hotkey-status", { label: undo ? "Ctrl+Alt+Space" : "Alt+Space", registered: true, pending: false, error: null });
+    this.emit("flashcast://hotkey-status", {
+      label: undo ? "Ctrl+Alt+Space" : "Alt+Space",
+      registered: true,
+      pending: false,
+      error: null,
+    });
     return this.get_hotkey_conflict();
   }
 
@@ -1962,7 +2349,7 @@ class MockHost implements HostApi {
         },
         {
           id: MOCK_CLIPBOARD_PLUGIN_ID,
-          name: "剪贴板历史",
+          name: "剪切板",
           version: "0.1.0",
           keywords: [...MOCK_CLIPBOARD_KEYWORDS],
           enabled: this.clipboardPluginEnabled,
@@ -1993,7 +2380,8 @@ class MockHost implements HostApi {
   }
 
   async set_plugin_enabled(id: string, enabled: boolean): Promise<ThemeState> {
-    if (id === "flashcast.theme.arc" && !enabled) throw new Error("内置电弧是恢复基线，不能停用");
+    if (id === "flashcast.theme.arc" && !enabled)
+      throw new Error("内置电弧是恢复基线，不能停用");
     const theme = this.mockThemes.find((candidate) => candidate.id === id);
     if (!theme) {
       // 功能插件（备忘录 / Chrome 书签）：走与真实宿主相同的入口，外观保持不变。
@@ -2043,7 +2431,9 @@ class MockHost implements HostApi {
     if (theme.builtin) {
       throw `内置主题不能移除：${theme.name}`;
     }
-    this.mockThemes = this.mockThemes.filter((candidate) => candidate.id !== id);
+    this.mockThemes = this.mockThemes.filter(
+      (candidate) => candidate.id !== id,
+    );
     if (this.selectedTheme === id) {
       this.selectedTheme = "flashcast.theme.arc";
       this.themeError = `主题「${theme.name}」已移除，已切换回「电弧」`;
@@ -2051,15 +2441,22 @@ class MockHost implements HostApi {
     return this.themeState();
   }
 
-  async set_appearance_preferences(appearance: import("./types").ThemeAppearance, style: string, reduceTransparency: boolean): Promise<ThemeState> {
+  async set_appearance_preferences(
+    appearance: import("./types").ThemeAppearance,
+    style: string,
+    reduceTransparency: boolean,
+  ): Promise<ThemeState> {
     const state = this.themeState();
-    if (!state.styles.some(s => s.id === style)) throw new Error("主题没有提供该表面风格");
+    if (!state.styles.some((s) => s.id === style))
+      throw new Error("主题没有提供该表面风格");
     this.appearancePreference = appearance;
     this.themeStyles[this.selectedTheme] = style;
     this.reduceTransparency = reduceTransparency;
     return this.themeState();
   }
-  async sync_window_material() { return { supported: true, reason: null }; }
+  async sync_window_material() {
+    return { supported: true, reason: null };
+  }
 
   async set_system_appearance(appearance: Appearance): Promise<ThemeState> {
     this.systemAppearance = appearance;
@@ -2119,21 +2516,60 @@ class MockHost implements HostApi {
     this.cloneCancelled = false;
     const stages: CloneProgress[] = [
       { ...IDLE_CLONE_PROGRESS, phase: "connecting", updates: 1 },
-      { ...IDLE_CLONE_PROGRESS, phase: "receiving", receivedObjects: 42, totalObjects: 100, indexedObjects: 30, receivedBytes: 65536, updates: 8 },
-      { ...IDLE_CLONE_PROGRESS, phase: "resolving", receivedObjects: 100, totalObjects: 100, indexedObjects: 100, receivedBytes: 131072, updates: 12 },
-      { ...IDLE_CLONE_PROGRESS, phase: "checkingOut", receivedObjects: 100, totalObjects: 100, indexedObjects: 100, receivedBytes: 131072, checkoutTotal: 4, checkoutCompleted: 2, checkoutNotified: 3, checkoutPath: "settings.toml", updates: 14 },
+      {
+        ...IDLE_CLONE_PROGRESS,
+        phase: "receiving",
+        receivedObjects: 42,
+        totalObjects: 100,
+        indexedObjects: 30,
+        receivedBytes: 65536,
+        updates: 8,
+      },
+      {
+        ...IDLE_CLONE_PROGRESS,
+        phase: "resolving",
+        receivedObjects: 100,
+        totalObjects: 100,
+        indexedObjects: 100,
+        receivedBytes: 131072,
+        updates: 12,
+      },
+      {
+        ...IDLE_CLONE_PROGRESS,
+        phase: "checkingOut",
+        receivedObjects: 100,
+        totalObjects: 100,
+        indexedObjects: 100,
+        receivedBytes: 131072,
+        checkoutTotal: 4,
+        checkoutCompleted: 2,
+        checkoutNotified: 3,
+        checkoutPath: "settings.toml",
+        updates: 14,
+      },
     ];
     for (const stage of stages) {
       if (this.cloneCancelled) {
-        this.cloneState = { ...IDLE_CLONE_PROGRESS, phase: "cancelled", updates: stage.updates, message: "克隆已取消，未留下任何目录" };
+        this.cloneState = {
+          ...IDLE_CLONE_PROGRESS,
+          phase: "cancelled",
+          updates: stage.updates,
+          message: "克隆已取消，未留下任何目录",
+        };
         throw "克隆已取消，未留下任何目录";
       }
       this.cloneState = stage;
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
     if (address === MOCK_CLONE_BAD_URL) {
-      const message = "克隆失败：Could not resolve host: github.com（请检查网络、代理与远端地址是否正确）";
-      this.cloneState = { ...IDLE_CLONE_PROGRESS, phase: "failed", updates: 15, message };
+      const message =
+        "克隆失败：Could not resolve host: github.com（请检查网络、代理与远端地址是否正确）";
+      this.cloneState = {
+        ...IDLE_CLONE_PROGRESS,
+        phase: "failed",
+        updates: 15,
+        message,
+      };
       throw message;
     }
     const remote = {
@@ -2172,7 +2608,10 @@ class MockHost implements HostApi {
     this.cloneCancelled = true;
   }
 
-  private link(path: string, remote: WorkspaceStatus["remote"] = null): WorkspaceStatus {
+  private link(
+    path: string,
+    remote: WorkspaceStatus["remote"] = null,
+  ): WorkspaceStatus {
     // 切换工作区后同步状态重新建立（真实宿主也会按新仓库重新探测）。
     this.syncScenario = "ready";
     this.syncAhead = 0;
@@ -2237,7 +2676,9 @@ class MockHost implements HostApi {
    * 并给出原因。与 `Host::apply_workspace_config` 的语义一致。
    */
   simulateExternalThemeEdit(selected: string): void {
-    const theme = this.mockThemes.find((candidate) => candidate.id === selected);
+    const theme = this.mockThemes.find(
+      (candidate) => candidate.id === selected,
+    );
     let error: string | null = null;
     if (!theme || !theme.enabled) {
       error = `主题「${selected}」不可用（不存在、已停用或无法解析），继续使用上一次可用外观`;
@@ -2279,7 +2720,10 @@ class MockHost implements HostApi {
     return this.changes();
   }
 
-  async commit_changes(message: string, paths: string[]): Promise<CommitOutcome> {
+  async commit_changes(
+    message: string,
+    paths: string[],
+  ): Promise<CommitOutcome> {
     if (this.workspace.path === null) {
       throw "尚未关联配置工作区，无法执行 Git 操作";
     }
@@ -2304,7 +2748,9 @@ class MockHost implements HostApi {
     this.commitCount += 1;
     const short = ["3f9c1a2", "8b2d4e1", "c4a70f9"][(this.commitCount - 1) % 3];
     // 与宿主一致：提交后这些路径从变更列表消失（未勾选的改动仍然保留）。
-    this.gitChanges = this.gitChanges.filter((file) => !paths.includes(file.path));
+    this.gitChanges = this.gitChanges.filter(
+      (file) => !paths.includes(file.path),
+    );
     return {
       oid: `${short}${"0".repeat(33)}`,
       short,
@@ -2330,11 +2776,14 @@ class MockHost implements HostApi {
   }
 
   /** 让随后的提交以给定的中文原因失败，用于检查错误反馈（一次设定，显式清除）。 */
-  simulateCommitError(kind: "identity" | "locked" | "abnormal" | "detached" | "nothing"): void {
+  simulateCommitError(
+    kind: "identity" | "locked" | "abnormal" | "detached" | "nothing",
+  ): void {
     this.commitError = {
       identity: "Git 用户身份未配置，请先设置 user.name 与 user.email",
       locked: `Git 索引被占用（${MOCK_REPO}/.git/index.lock），可能有其它 Git 操作正在进行，请稍后重试`,
-      abnormal: "工作区正在进行合并（merge），请先在外部完成或中止它，再创建提交",
+      abnormal:
+        "工作区正在进行合并（merge），请先在外部完成或中止它，再创建提交",
       detached:
         "工作区处于分离 HEAD 状态（HEAD 未指向任何分支），无法在分支上创建提交；请先在外部切换回分支",
       nothing: "没有可提交的变更",
@@ -2386,7 +2835,9 @@ class MockHost implements HostApi {
       };
     }
     if (this.syncScenario in MOCK_SYNC_BLOCKS) {
-      return MOCK_SYNC_BLOCKS[this.syncScenario as keyof typeof MOCK_SYNC_BLOCKS];
+      return MOCK_SYNC_BLOCKS[
+        this.syncScenario as keyof typeof MOCK_SYNC_BLOCKS
+      ];
     }
     return null;
   }
@@ -2418,7 +2869,9 @@ class MockHost implements HostApi {
       untracked: this.syncScenario === "dirty",
       conflicted: this.syncScenario === "conflicts",
       state:
-        this.syncScenario === "inProgress" ? MOCK_SYNC_BLOCKS.inProgress.detail : null,
+        this.syncScenario === "inProgress"
+          ? MOCK_SYNC_BLOCKS.inProgress.detail
+          : null,
       canPull: blocking === null,
       canPush: pushBlocking === null,
       nothingToPush: pushBlocking === null && ahead === 0,
@@ -2446,19 +2899,37 @@ class MockHost implements HostApi {
       throw `${blocking.label}：${blocking.detail}。${blocking.hint}`;
     }
     if (this.syncScenario === "auth") {
-      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "failed", message: MOCK_AUTH_ERROR };
+      this.syncProgress = {
+        ...IDLE_SYNC_PROGRESS,
+        phase: "failed",
+        message: MOCK_AUTH_ERROR,
+      };
       throw MOCK_AUTH_ERROR;
     }
     if (this.syncScenario === "offline") {
-      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "failed", message: MOCK_OFFLINE_ERROR };
+      this.syncProgress = {
+        ...IDLE_SYNC_PROGRESS,
+        phase: "failed",
+        message: MOCK_OFFLINE_ERROR,
+      };
       throw MOCK_OFFLINE_ERROR;
     }
 
     this.syncBusy = true;
     try {
       for (const stage of [
-        { phase: "fetching" as const, updates: 3, receivedObjects: 12, totalObjects: 40 },
-        { phase: "fetching" as const, updates: 7, receivedObjects: 40, totalObjects: 40 },
+        {
+          phase: "fetching" as const,
+          updates: 3,
+          receivedObjects: 12,
+          totalObjects: 40,
+        },
+        {
+          phase: "fetching" as const,
+          updates: 7,
+          receivedObjects: 40,
+          totalObjects: 40,
+        },
       ]) {
         this.syncProgress = {
           ...IDLE_SYNC_PROGRESS,
@@ -2482,7 +2953,12 @@ class MockHost implements HostApi {
           // 主题变化要像宿主一样推送给 UI（`flashcast://theme`）。
           this.emit("flashcast://theme", this.themeState());
         }
-        this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "done", updates: 8, message: "拉取完成" };
+        this.syncProgress = {
+          ...IDLE_SYNC_PROGRESS,
+          phase: "done",
+          updates: 8,
+          message: "拉取完成",
+        };
         return {
           result: {
             kind: "fastForwarded",
@@ -2504,7 +2980,12 @@ class MockHost implements HostApi {
           message: "已快进拉取到 8b2d4e1，共 1 个提交",
         };
       }
-      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "done", updates: 8, message: "已是最新" };
+      this.syncProgress = {
+        ...IDLE_SYNC_PROGRESS,
+        phase: "done",
+        updates: 8,
+        message: "已是最新",
+      };
       return {
         result: { kind: "upToDate" },
         status: this.syncStatusSnapshot(),
@@ -2545,10 +3026,19 @@ class MockHost implements HostApi {
 
     this.syncBusy = true;
     try {
-      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "pushing", updates: 2 };
+      this.syncProgress = {
+        ...IDLE_SYNC_PROGRESS,
+        phase: "pushing",
+        updates: 2,
+      };
       await new Promise((resolve) => setTimeout(resolve, 240));
       this.syncAhead = 0;
-      this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "done", updates: 4, message: "推送完成" };
+      this.syncProgress = {
+        ...IDLE_SYNC_PROGRESS,
+        phase: "done",
+        updates: 4,
+        message: "推送完成",
+      };
       return {
         branch: "main",
         remote: "origin",
@@ -2573,7 +3063,11 @@ class MockHost implements HostApi {
   }
 
   async cancel_sync(): Promise<void> {
-    this.syncProgress = { ...IDLE_SYNC_PROGRESS, phase: "cancelled", message: "同步已取消，未改动任何内容" };
+    this.syncProgress = {
+      ...IDLE_SYNC_PROGRESS,
+      phase: "cancelled",
+      message: "同步已取消，未改动任何内容",
+    };
   }
 
   async hide_window(): Promise<void> {
@@ -2584,7 +3078,15 @@ class MockHost implements HostApi {
   /** 模拟用户按下全局快捷键唤起窗口。 */
   summon(): void {
     this.hidden = false;
-    this.emit("flashcast://summoned", { previousApp: null });
+    this.scope = { kind: "home" };
+    this.input = "";
+    this.selection = 0;
+    this.history = [];
+    this.items = this.buildItems();
+    this.emit("flashcast://summoned", {
+      previousApp: null,
+      response: this.response(),
+    });
   }
 }
 

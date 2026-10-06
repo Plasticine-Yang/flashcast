@@ -46,6 +46,9 @@ pub fn run() {
             commands::set_appearance_preferences,
             commands::sync_window_material,
             commands::set_plugin_enabled,
+            commands::get_plugin_commands,
+            commands::set_command_shortcut,
+            commands::execute_plugin_command,
             commands::set_system_appearance,
             commands::install_theme,
             commands::remove_theme,
@@ -124,6 +127,7 @@ pub fn run() {
             tray::create(&handle)?;
             // 注册全局快捷键；失败只会产生可展示的错误，不影响托盘入口。
             hotkey::apply_from_settings(&handle);
+            hotkey::sync_commands(&handle);
             // 工作区外部修改 → 重载配置 → 推送给 UI。
             watch::spawn(&handle);
             Ok(())

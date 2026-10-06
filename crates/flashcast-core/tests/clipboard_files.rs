@@ -437,7 +437,7 @@ fn search_finds_a_file_by_name_even_when_the_summary_is_truncated() {
 
     // 经插件范围按名称检索。先输入关键词进入剪贴板范围，再输入名称——这正是用户
     // 的实际操作（spec「输入剪贴板或剪切板搜索历史」）。
-    let listed = harness.host.query("剪贴板");
+    let listed = support::plugin_query(&harness.host, "剪贴板");
     assert_eq!(listed.items.len(), 1, "进入范围后应看到这条历史");
     let response = harness.host.query("独一无二的尾巴-麒麟");
     assert_eq!(
@@ -759,9 +759,7 @@ fn deleting_one_entry_keeps_a_shared_attachment_for_the_other() {
     assert!(view[0].recoverable, "B 的共享文件必须仍可恢复：{view:?}");
     assert_eq!(view[0].path, copy_b.path, "恢复用的是共享副本路径");
 
-    let item = harness
-        .host
-        .query("剪贴板")
+    let item = support::plugin_query(&harness.host, "剪贴板")
         .items
         .into_iter()
         .find(|item| item.id.ends_with(&event_b.id))

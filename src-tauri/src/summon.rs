@@ -27,13 +27,38 @@ pub fn summon<R: Runtime>(app: &AppHandle<R>) {
 
 /// 门户签发的激活令牌随这次按键传入，不写环境变量或持久化。
 pub fn summon_with_activation<R: Runtime>(app: &AppHandle<R>, token: Option<&str>) {
+    summon_target(app, token, None);
+}
+
+pub fn summon_command<R: Runtime>(app: &AppHandle<R>, token: Option<&str>, id: &str) {
+    summon_target(app, token, Some(id));
+}
+
+fn summon_target<R: Runtime>(app: &AppHandle<R>, token: Option<&str>, command: Option<&str>) {
     let state = app.state::<AppState>();
-    let previous = match state.capture_previous_app() {
-        Ok(previous) => Some(previous),
-        Err(reason) => {
-            // Wayland 等会话下拿不到焦点窗口：如实推送给 UI，不伪造身份。
-            let _ = app.emit("flashcast://focus-unavailable", reason);
-            None
+    let response = if let Some(id) = command {
+        let outcome = state.host.execute_plugin_command(id);
+        if outcome.status == flashcast_core::ActionStatus::Failed {
+            return;
+        }
+        state.host.snapshot()
+    } else {
+        state.host.reset_home()
+    };
+    let visible = app
+        .get_webview_window(SEARCH_WINDOW)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    let previous = if visible {
+        state.host.paste_target()
+    } else {
+        match state.capture_previous_app() {
+            Ok(previous) => Some(previous),
+            Err(reason) => {
+                // Wayland 等会话下拿不到焦点窗口：如实推送给 UI，不伪造身份。
+                let _ = app.emit("flashcast://focus-unavailable", reason);
+                None
+            }
         }
     };
     // 把唤起前的应用交给宿主作为**本次**粘贴目标：每次都覆盖，并作废上一次未完成的
@@ -57,6 +82,7 @@ pub fn summon_with_activation<R: Runtime>(app: &AppHandle<R>, token: Option<&str
         "flashcast://summoned",
         SummonedPayload {
             previous_app: previous,
+            response: crate::commands::query_view(&state, &response),
         },
     );
 }
@@ -65,6 +91,7 @@ pub fn summon_with_activation<R: Runtime>(app: &AppHandle<R>, token: Option<&str
 #[serde(rename_all = "camelCase")]
 pub struct SummonedPayload {
     pub previous_app: Option<flashcast_platform::FocusedApp>,
+    pub response: crate::commands::QueryView,
 }
 
 /// 隐藏搜索窗口。

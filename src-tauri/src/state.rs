@@ -30,6 +30,7 @@ pub struct AppState {
     pub previous_app: Mutex<Option<FocusedApp>>,
     pub hotkey: Mutex<HotkeyState>,
     pub hotkey_registration: Mutex<()>,
+    pub command_hotkeys: Mutex<HashMap<String, CommandHotkeyState>>,
     /// 图标 data URL 缓存，按文件路径索引。
     pub icons: Mutex<HashMap<PathBuf, Option<String>>>,
     /// 剪贴板图片缩略图 data URL 缓存，按附件路径索引（ticket 10）。
@@ -49,6 +50,7 @@ impl AppState {
             previous_app: Mutex::new(None),
             hotkey: Mutex::new(HotkeyState::default()),
             hotkey_registration: Mutex::new(()),
+            command_hotkeys: Mutex::new(HashMap::new()),
             icons: Mutex::new(HashMap::new()),
             thumbnails: Mutex::new(HashMap::new()),
             last_summon: Mutex::new(None),
@@ -88,4 +90,11 @@ pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[derive(Default)]
+pub struct CommandHotkeyState {
+    pub hotkey: HotkeyState,
+    pub requested: String,
+    pub enabled: bool,
 }

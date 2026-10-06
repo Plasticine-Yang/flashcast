@@ -108,7 +108,18 @@ impl PasteHost {
     /// 首屏按标签命中后取回条目（模拟 UI 从列表里拿到的那一项）。
     fn home_item(&self, tag: &str, memo_id: &str) -> SearchItem {
         let response = self.host.query(tag);
-        response
+        let item = response
+            .items
+            .iter()
+            .find(|item| item.id == memo_item_id(memo_id))
+            .expect("标签命中");
+        if response.scope.is_home() {
+            let first = self.host.execute(item);
+            assert_eq!(first.status, ActionStatus::Done);
+            assert_eq!(self.clipboard.write_count(), 0, "第一次回车只进入页面");
+        }
+        self.host
+            .snapshot()
             .items
             .into_iter()
             .find(|item| item.id == memo_item_id(memo_id))
@@ -662,7 +673,7 @@ fn keyword_and_tag_collision_keeps_both_sides() {
         scope.scope,
         QueryScope::Plugin {
             id: flashcast_core::MEMO_PLUGIN_ID.to_string(),
-            keyword: "memo".to_string(),
+            keyword: "备忘录".to_string(),
         },
         "执行入口必须真的进入范围"
     );
@@ -682,7 +693,7 @@ fn keyword_and_tag_collision_keeps_both_sides() {
         again.scope,
         QueryScope::Plugin {
             id: flashcast_core::MEMO_PLUGIN_ID.to_string(),
-            keyword: "memo".to_string(),
+            keyword: "备忘录".to_string(),
         },
         "已经在范围内时，同样的输入必须留在范围内"
     );
@@ -695,30 +706,23 @@ fn keyword_and_tag_collision_keeps_both_sides() {
 
 /// 没有冲突时，输入完整关键词仍然**直接**进入插件范围（ticket 07 的行为不能被改坏）。
 #[test]
-fn exact_keyword_without_collision_still_enters_the_scope() {
+fn exact_keyword_without_collision_requires_an_explicit_command() {
     let ph = PasteHost::new(Arc::new(FakeCapabilityProbe::linux_x11()));
     ph.create_memo("无关", &["工作"], "正文");
-
     let response = ph.host.query("memo");
-
-    assert_eq!(
-        response.scope,
-        QueryScope::Plugin {
-            id: flashcast_core::MEMO_PLUGIN_ID.to_string(),
-            keyword: "memo".to_string(),
-        }
-    );
-    assert!(
-        response
-            .items
-            .iter()
-            .all(|item| item.kind == ItemKind::Memo),
-        "范围内只应有备忘录：{:?}",
-        response.items
-    );
+    assert!(response.scope.is_home());
+    let entry = response
+        .items
+        .iter()
+        .find(|i| i.id == "flashcast.plugin.memo")
+        .unwrap();
+    assert_eq!(ph.host.execute(entry).status, ActionStatus::Done);
+    let page = ph.host.snapshot();
+    assert!(!page.scope.is_home());
+    assert_eq!(page.input, "");
+    assert!(page.items.iter().all(|i| i.kind == ItemKind::Memo));
 }
 
-/// 冲突时标签命中的备忘录照样可以执行：内容进剪贴板，粘贴计划的目标是唤起前的应用。
 #[test]
 fn colliding_tag_hit_can_still_be_pasted() {
     let ph = PasteHost::observing(Arc::new(FakeCapabilityProbe::linux_x11()));
@@ -733,6 +737,8 @@ fn colliding_tag_hit_can_still_be_pasted() {
         .expect("标签命中必须可选")
         .clone();
 
+    assert_eq!(ph.host.execute(&item).status, ActionStatus::Done);
+    assert_eq!(ph.clipboard.write_count(), 0);
     let outcome = ph.host.execute(&item);
 
     assert_eq!(outcome.status, ActionStatus::PastePending);

@@ -14,6 +14,7 @@ use crate::plugin::{
 struct RegisteredPlugin {
     plugin: Arc<dyn FeaturePlugin>,
     manifest: PluginManifest,
+    commands: Vec<crate::PluginCommand>,
     enabled: bool,
 }
 
@@ -64,10 +65,44 @@ impl PluginRegistry {
         }
         semver::Version::parse(&manifest.version)
             .map_err(|_| "插件包版本必须符合 SemVer".to_string())?;
+        let commands = plugin.commands();
+        let prefix = format!("{}{}", crate::PLUGIN_ENTRY_PREFIX, manifest.id);
+        let mut ids = std::collections::HashSet::new();
+        for command in &commands {
+            if command.plugin_id != manifest.id
+                || !(command.id == prefix || command.id.starts_with(&format!("{prefix}.")))
+                || command.title.trim().is_empty()
+                || !ids.insert(command.id.clone())
+            {
+                return Err("插件命令必须具有唯一标识并指向声明它的插件".into());
+            }
+            for value in [
+                &command.defaults.linux,
+                &command.defaults.windows,
+                &command.defaults.macos,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !value.is_empty() {
+                    flashcast_platform::HotkeySpec::parse(value).map_err(|e| e.to_string())?;
+                }
+            }
+        }
         let default_enabled = plugin.default_enabled();
         let mut plugins = lock(&self.plugins);
         if plugins.iter().any(|p| p.manifest.id == manifest.id) {
             return Ok(());
+        }
+        if commands.iter().any(|command| {
+            plugins.iter().any(|plugin| {
+                plugin
+                    .commands
+                    .iter()
+                    .any(|registered| registered.id == command.id)
+            })
+        }) {
+            return Err("插件命令标识已被其他插件注册".into());
         }
         let mut order = lock(&self.order);
         let next = order.len() as u32;
@@ -75,6 +110,7 @@ impl PluginRegistry {
         plugins.push(RegisteredPlugin {
             plugin,
             manifest,
+            commands,
             enabled: default_enabled,
         });
         Ok(())
@@ -90,6 +126,21 @@ impl PluginRegistry {
             }
             None => false,
         }
+    }
+
+    pub fn commands(&self) -> Vec<(crate::PluginCommand, bool)> {
+        lock(&self.plugins)
+            .iter()
+            .flat_map(|p| p.commands.iter().cloned().map(|c| (c, p.enabled)))
+            .collect()
+    }
+
+    pub fn scope_for(&self, plugin_id: &str) -> Option<Box<dyn PluginScope>> {
+        let plugin = lock(&self.plugins)
+            .iter()
+            .find(|p| p.manifest.id == plugin_id && p.enabled)
+            .map(|p| (Arc::clone(&p.plugin), p.manifest.keywords.first().cloned()))?;
+        plugin.0.take_scope(&Keyword::new(plugin.1?))
     }
 
     pub fn is_enabled(&self, plugin_id: &str) -> bool {

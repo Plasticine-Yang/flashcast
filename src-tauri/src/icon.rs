@@ -53,7 +53,8 @@ pub fn thumbnail_data_url(path: &Path) -> Option<String> {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
-    let thumbnail = flashcast_platform::clipboard::png_thumbnail(&bytes, THUMBNAIL_MAX_EDGE).ok()?;
+    let thumbnail =
+        flashcast_platform::clipboard::png_thumbnail(&bytes, THUMBNAIL_MAX_EDGE).ok()?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(thumbnail);
     Some(format!("data:image/png;base64,{encoded}"))
 }

@@ -113,6 +113,17 @@ pub trait HotkeyManager: Send + Sync {
         on_press: PressCallback,
     ) -> Result<HotkeyHandle, HotkeyError>;
 
+    /// 命令身份用于系统门户区分多个插件入口。
+    fn register_command(
+        &self,
+        spec: &HotkeySpec,
+        _id: &str,
+        _title: &str,
+        on_press: PressCallback,
+    ) -> Result<HotkeyHandle, HotkeyError> {
+        self.register(spec, on_press)
+    }
+
     /// 用新规格替换已注册的快捷键，返回新的句柄。
     fn update(&self, handle: &HotkeyHandle, spec: &HotkeySpec)
         -> Result<HotkeyHandle, HotkeyError>;

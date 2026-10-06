@@ -9,6 +9,7 @@
 pub mod chrome;
 pub mod clipboard;
 pub mod clone;
+pub mod command;
 pub mod device;
 pub mod git;
 pub mod host;
@@ -47,6 +48,7 @@ pub use clone::{
     redact, strip_userinfo, CloneControl, CloneOutcome, ClonePhase, CloneProgress,
     CredentialProvider,
 };
+pub use command::{CommandShortcuts, PluginCommand, PluginCommandView};
 pub use device::{
     CredentialStore, DeviceError, DeviceStore, StoredToken, DEVICE_STATE_FILE,
     GIT_CREDENTIALS_FILE, KEY_WORKSPACE_PATH,
@@ -69,8 +71,9 @@ pub use model::{
     SearchItem, SourceId, COMMAND_CAPABILITIES, COMMAND_PREFIX, COMMAND_RESCAN, HOST_SOURCE,
 };
 pub use plugin::{
-    is_valid_plugin_id, strip_keyword, FeaturePlugin, Keyword, PluginError, PluginKind,
-    PluginContract, PluginManifest, PluginScope, SearchContext, CAP_CLIPBOARD_READ, CAP_CLIPBOARD_WRITE,
+    is_valid_plugin_id, strip_keyword, FeaturePlugin, Keyword, PluginContract, PluginError,
+    PluginKind, PluginManifest, PluginScope, SearchContext, CAP_CLIPBOARD_READ,
+    CAP_CLIPBOARD_WRITE,
 };
 pub use plugins::{
     ClipboardPlugin, MemoPlugin, CLIPBOARD_KEYWORD_ALT_ZH, CLIPBOARD_KEYWORD_EN,

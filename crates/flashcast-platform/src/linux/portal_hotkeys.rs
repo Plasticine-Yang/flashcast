@@ -22,6 +22,8 @@ struct Registration {
     session: Session<GlobalShortcuts>,
     listener: JoinHandle<()>,
     active: Arc<AtomicBool>,
+    command_id: String,
+    title: String,
 }
 
 fn runtime() -> Result<&'static Runtime, HotkeyError> {
@@ -165,6 +167,15 @@ fn ensure_desktop_entry() -> Result<(), HotkeyError> {
 }
 
 pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHandle, HotkeyError> {
+    register_command(spec, SUMMON, "打开 Flashcast", on_press)
+}
+
+pub fn register_command(
+    spec: &HotkeySpec,
+    command_id: &str,
+    title: &str,
+    on_press: PressCallback,
+) -> Result<HotkeyHandle, HotkeyError> {
     let rt = runtime()?;
     let (session, mut activated, description) = rt.block_on(async {
         let portal = tokio::time::timeout(BUS_TIMEOUT, connect())
@@ -179,7 +190,7 @@ pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHand
             let activated = portal.receive_activated().await.map_err(unavailable)?;
             let preferred = trigger(spec);
             let shortcut =
-                NewShortcut::new(SUMMON, "打开 Flashcast").preferred_trigger(preferred.as_str());
+                NewShortcut::new(command_id, title).preferred_trigger(preferred.as_str());
             let response = portal
                 .bind_shortcuts(&session, &[shortcut], None, Default::default())
                 .await
@@ -189,7 +200,7 @@ pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHand
             let bound = response
                 .shortcuts()
                 .iter()
-                .find(|s| s.id() == SUMMON)
+                .find(|s| s.id() == command_id)
                 .ok_or_else(|| unavailable("系统未绑定打开 Flashcast 的快捷键"))?;
             if bound.trigger_description().is_empty() {
                 return Err(unavailable(
@@ -213,12 +224,13 @@ pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHand
     let active = Arc::new(AtomicBool::new(true));
     let active_listener = active.clone();
     let callback = on_press.clone();
+    let listener_id = command_id.to_string();
     let listener = rt.spawn(async move {
         while let Some(event) = activated.next().await {
             if !active_listener.load(Ordering::Acquire) {
                 break;
             }
-            if event.shortcut_id() == SUMMON
+            if event.shortcut_id() == listener_id
                 && Some(event.session_handle().as_str()) == session_path.as_str()
             {
                 let token = event
@@ -241,6 +253,8 @@ pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHand
                 session,
                 listener,
                 active,
+                command_id: command_id.to_string(),
+                title: title.to_string(),
             },
         );
     let mut handle = HotkeyHandle::new(id, spec.clone(), on_press);
@@ -250,7 +264,13 @@ pub fn register(spec: &HotkeySpec, on_press: PressCallback) -> Result<HotkeyHand
 
 /// 先获取新授权，失败保留原入口；成功后再关闭旧会话。
 pub fn update(handle: &HotkeyHandle, spec: &HotkeySpec) -> Result<HotkeyHandle, HotkeyError> {
-    let new = register(spec, handle.callback.clone())?;
+    let (id, title) = registrations()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&handle.id)
+        .map(|r| (r.command_id.clone(), r.title.clone()))
+        .unwrap_or((SUMMON.into(), "打开 Flashcast".into()));
+    let new = register_command(spec, &id, &title, handle.callback.clone())?;
     if let Err(error) = unregister(handle) {
         let _ = unregister(&new);
         return Err(error);

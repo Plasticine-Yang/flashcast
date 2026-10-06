@@ -271,10 +271,6 @@ enum SearchMode {
     ///
     /// 关键词与标签冲突时保留双方：首屏同时给出插件入口与标签命中的备忘录（ADR §4）。
     UserInput,
-    /// 用户明确选择了首屏的「插件入口」条目。
-    ///
-    /// 此时必须真的进入该插件范围，跳过冲突保留，否则入口会变成点不动的死路。
-    ExplicitPluginEntry,
 }
 
 impl Host {
@@ -405,6 +401,7 @@ impl Host {
     /// 写入失败时保留上一次可用状态并返回中文原因。
     pub fn update_settings(&self, settings: Settings) -> Result<Settings, SettingsError> {
         settings.validate()?;
+        self.validate_command_shortcuts(&settings, None)?;
         let applied_hash = self.persist_settings(&settings)?;
         {
             let mut inner = lock(&self.inner);
@@ -1474,7 +1471,13 @@ impl Host {
                 entry
             })
             .collect();
-        let (merged, _) = inner.manifest.merged_with(extras);
+        let (mut merged, _) = inner.manifest.merged_with(extras.clone());
+        // 运行时贡献结构来自已编译插件；工作区只决定启停，不冻结旧版本的名称和别名。
+        for entry in extras {
+            if let Some(current) = merged.get_mut(&entry.id) {
+                *current = entry;
+            }
+        }
         inner.manifest = merged;
         inner
             .manifest
@@ -2389,6 +2392,40 @@ impl Host {
         if id == THEME_ARC && !enabled {
             return Err(ManifestError::invalid("内置电弧是恢复基线，不能停用"));
         }
+        let entry = lock(&self.inner)
+            .manifest
+            .get(id)
+            .cloned()
+            .ok_or_else(|| ManifestError::invalid("插件不存在"))?;
+        if entry.kind == PluginKind::Feature {
+            self.validate_command_shortcuts(&self.settings(), Some((id, enabled)))
+                .map_err(|e| ManifestError::invalid(e.to_string()))?;
+            let mut manifest = lock(&self.inner).manifest.clone();
+            manifest.set_enabled(id, enabled);
+            self.persist_manifest(&manifest)?;
+            {
+                let mut inner = lock(&self.inner);
+                inner.manifest = manifest;
+                self.deps.plugins.set_enabled(id, enabled);
+                inner.plugin_scopes.remove(id);
+                if !enabled
+                    && matches!(&inner.scope, QueryScope::Plugin {id: current,..} if current == id)
+                {
+                    inner.scope = QueryScope::Home;
+                    inner.history.clear();
+                }
+                let input = inner.input.clone();
+                self.search(
+                    &mut inner,
+                    &input,
+                    SearchMode::UserInput,
+                    None,
+                    self.next_seq(),
+                );
+            }
+            self.sync_clipboard_runtime();
+            return Ok(());
+        }
         let (manifest, selection, notice, feature_changed) = {
             let mut inner = lock(&self.inner);
             let entry =
@@ -2740,6 +2777,13 @@ impl Host {
 
     /// 命令入口。
     pub fn execute(&self, item: &SearchItem) -> ActionOutcome {
+        if item.kind == ItemKind::Memo
+            && lock(&self.inner).scope.is_home()
+            && self.deps.plugins.scope_for(&item.source).is_some()
+        {
+            let query = lock(&self.inner).input.clone();
+            return self.enter_plugin_page(&item.source, &query, Some(&item.id));
+        }
         match item.kind {
             ItemKind::Application => self.execute_application(item),
             ItemKind::Command => self.execute_command(item),
@@ -3193,41 +3237,157 @@ impl Host {
             COMMAND_CAPABILITIES => ActionOutcome::done(Some(self.capabilities_summary())),
             other => match other.strip_prefix(PLUGIN_ENTRY_PREFIX) {
                 // 首屏的插件入口条目：等价于用户直接输入该插件的关键词。
-                Some(plugin_id) => self.enter_plugin_scope(plugin_id),
+                Some(_) => self.execute_plugin_command(other),
                 None => ActionOutcome::failed(format!("未知命令：{other}")),
             },
         }
     }
 
-    /// 进入插件范围（首屏插件入口条目的执行路径）。
-    ///
-    /// 与「用户直接把关键词打全」走同一段逻辑，唯一区别是跳过关键词与标签的冲突保留：
-    /// 用户已经明确选择了插件入口，此时必须真的进入范围，而不是又留在首屏。
-    fn enter_plugin_scope(&self, plugin_id: &str) -> ActionOutcome {
-        let entry = lock(&self.inner).manifest.get(plugin_id).cloned();
-        let Some(entry) = entry.filter(|entry| entry.kind == PluginKind::Feature) else {
-            return ActionOutcome::failed(format!("插件「{plugin_id}」不在清单里，无法进入"));
+    /// 显式命令进入页面；输入关键词本身只参与首屏搜索。
+    pub fn execute_plugin_command(&self, command_id: &str) -> ActionOutcome {
+        let Some((command, enabled)) = self
+            .deps
+            .plugins
+            .commands()
+            .into_iter()
+            .find(|(command, _)| command.id == command_id)
+        else {
+            return ActionOutcome::failed("插件命令不存在");
         };
-        if !entry.enabled || !self.deps.plugins.is_enabled(plugin_id) {
-            return ActionOutcome::failed(format!("插件「{}」已停用，无法进入", entry.name));
+        if !enabled {
+            return ActionOutcome::failed("插件已停用");
         }
-        let Some(keyword) = entry.keywords.first().cloned() else {
-            return ActionOutcome::failed(format!("插件「{}」没有可用的关键词", entry.name));
-        };
+        self.enter_plugin_page(&command.plugin_id, "", None)
+    }
+
+    pub fn reset_home(&self) -> QueryResponse {
         let seq = self.next_seq();
         let mut inner = lock(&self.inner);
-        let input = inner.input.clone();
-        self.search(
-            &mut inner,
-            &input,
-            SearchMode::ExplicitPluginEntry,
-            None,
-            seq,
+        inner.scope = QueryScope::Home;
+        inner.history.clear();
+        inner.plugin_scopes.clear();
+        inner.selection = 0;
+        self.search(&mut inner, "", SearchMode::UserInput, None, seq)
+    }
+
+    fn enter_plugin_page(
+        &self,
+        plugin_id: &str,
+        query: &str,
+        selected: Option<&str>,
+    ) -> ActionOutcome {
+        let Some(scope) = self.deps.plugins.scope_for(plugin_id) else {
+            return ActionOutcome::failed("插件已停用或没有页面");
+        };
+        let keyword = scope.keyword().to_string();
+        let seq = self.next_seq();
+        let mut inner = lock(&self.inner);
+        if inner.scope.is_home() {
+            let entry = HistoryEntry {
+                input: inner.input.clone(),
+                scope: inner.scope.clone(),
+                selection: inner.selection,
+            };
+            inner.history.push(entry);
+        }
+        inner.scope = QueryScope::Plugin {
+            id: plugin_id.to_string(),
+            keyword,
+        };
+        inner.plugin_scopes.clear();
+        inner
+            .plugin_scopes
+            .insert(plugin_id.to_string(), Arc::from(scope));
+        inner.selection = 0;
+        self.search(&mut inner, query, SearchMode::UserInput, None, seq);
+        if let Some(id) = selected {
+            inner.selection = inner
+                .items
+                .iter()
+                .position(|item| item.id == id)
+                .unwrap_or(0);
+        }
+        ActionOutcome::done(Some("已进入插件页面".to_string()))
+    }
+
+    pub fn plugin_commands(&self) -> Vec<crate::PluginCommandView> {
+        let settings = self.settings();
+        let platform = self.capabilities().os.as_str().to_string();
+        self.deps
+            .plugins
+            .commands()
+            .into_iter()
+            .map(|(command, enabled)| crate::PluginCommandView {
+                shortcut: command.shortcut(&settings.command_shortcuts, &platform),
+                default_shortcut: command
+                    .defaults
+                    .for_platform(&platform)
+                    .unwrap_or("")
+                    .to_string(),
+                platform: platform.clone(),
+                id: command.id,
+                title: command.title,
+                plugin_id: command.plugin_id,
+                enabled,
+            })
+            .collect()
+    }
+
+    pub fn set_command_shortcut(
+        &self,
+        id: &str,
+        shortcut: Option<String>,
+    ) -> Result<(), SettingsError> {
+        if !self
+            .deps
+            .plugins
+            .commands()
+            .iter()
+            .any(|(command, _)| command.id == id)
+        {
+            return Err(SettingsError::CommandShortcut("插件命令不存在".into()));
+        }
+        let mut settings = self.settings();
+        settings
+            .command_shortcuts
+            .entry(id.to_string())
+            .or_default()
+            .set(self.capabilities().os.as_str(), shortcut);
+        self.update_settings(settings)?;
+        Ok(())
+    }
+
+    fn validate_command_shortcuts(
+        &self,
+        settings: &Settings,
+        enabled_override: Option<(&str, bool)>,
+    ) -> Result<(), SettingsError> {
+        let platform = self.capabilities().os.as_str().to_string();
+        let mut used = std::collections::HashSet::new();
+        used.insert(
+            flashcast_platform::HotkeySpec::parse(&settings.hotkey)
+                .map_err(|e| SettingsError::CommandShortcut(e.to_string()))?
+                .canonical(),
         );
-        ActionOutcome::done(Some(format!(
-            "已进入「{}」范围（关键词 {keyword}）",
-            entry.name
-        )))
+        for (command, enabled) in self.deps.plugins.commands() {
+            let enabled = enabled_override
+                .filter(|(id, _)| *id == command.plugin_id)
+                .map(|(_, enabled)| enabled)
+                .unwrap_or(enabled);
+            let raw = command.shortcut(&settings.command_shortcuts, &platform);
+            if enabled && !raw.is_empty() {
+                let key = flashcast_platform::HotkeySpec::parse(&raw)
+                    .map_err(|e| SettingsError::CommandShortcut(e.to_string()))?
+                    .canonical();
+                if !used.insert(key) {
+                    return Err(SettingsError::CommandShortcut(format!(
+                        "{} 与其他命令的快捷键冲突",
+                        command.title
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// 能力摘要，用于「查看平台能力」快速访问项的中文反馈。
@@ -3277,93 +3437,28 @@ impl Host {
         explicit_notice: Option<Notice>,
         seq: u64,
     ) -> QueryResponse {
-        let previous_input = inner.input.clone();
-        let same_input = previous_input == input;
-        let normalized = input.trim().to_lowercase();
-
-        // 查询范围切换：输入完整匹配插件关键词时进入该插件范围。
-        //
-        // 例外是**关键词与标签冲突**（ADR §4）：如果首屏还有「标签精确匹配」的备忘录候选，
-        // 就留在首屏，同时给出明确的插件入口条目。任何一方都不静默消失。
-        let keyword_scope = self.deps.plugins.take_scope(input);
-        // 冲突判定用的关键词：插件清单里记录的那个别名，与用户输入等价。
-        let collision_keyword = keyword_scope.as_ref().and_then(|(manifest, _)| {
-            manifest
-                .matches_keyword(&normalized)
-                .or_else(|| Some(normalized.clone()))
-        });
-        // 已经在同一个插件的范围里时不算冲突：那是用户在范围里继续输入（关键词本身就
-        // 是范围的入口），此时必须留在范围内，否则「执行入口进入范围」会被下一次查询弹回首屏。
-        let keyword_plugin = keyword_scope
-            .as_ref()
-            .map(|(manifest, _)| manifest.id.clone());
-        let already_in_keyword_scope = match (&inner.scope, &keyword_plugin) {
-            (QueryScope::Plugin { id, .. }, Some(keyword_id)) => id == keyword_id,
-            _ => false,
-        };
-        let collision = match (&collision_keyword, mode) {
-            (Some(keyword), SearchMode::UserInput) if !already_in_keyword_scope => {
-                self.home_tag_hits(inner, keyword)
-            }
-            _ => Vec::new(),
-        };
-        // 入口条目用的清单信息：必须在移动 `scope` 之前克隆出来。
-        let keyword_entry = keyword_scope
-            .as_ref()
-            .filter(|_| !collision.is_empty())
-            .map(|(manifest, _)| manifest.clone());
-        match keyword_scope {
-            // 有冲突：留在首屏（可能是从插件范围退回来的，因此显式置回首屏）。
-            Some(_) if !collision.is_empty() => {
-                inner.scope = QueryScope::Home;
-                inner.plugin_scopes.clear();
-            }
-            Some((manifest, scope)) => {
-                let already_in_scope = matches!(
-                    &inner.scope,
-                    QueryScope::Plugin { id, .. } if id == &manifest.id
-                );
-                if !already_in_scope {
-                    inner.history.push(HistoryEntry {
-                        input: previous_input,
-                        scope: inner.scope.clone(),
-                        selection: inner.selection,
-                    });
+        let _ = mode;
+        let same_input = inner.input == input;
+        if let QueryScope::Plugin { id, .. } = &inner.scope {
+            if !inner.plugin_scopes.contains_key(id) {
+                if let Some(scope) = self.deps.plugins.scope_for(id) {
+                    inner.plugin_scopes.insert(id.clone(), Arc::from(scope));
+                } else {
+                    inner.scope = QueryScope::Home;
                 }
-                // 同一插件用**另一个别名**再次进入（例如把输入从「备忘录」改成「memo」）时
-                // 不记录新的历史，但必须更新记下的关键词并换上新的范围对象——范围标签与
-                // 「剥掉关键词前缀」都以它对依据，否则会显示旧别名、也搜不到东西。
-                inner
-                    .plugin_scopes
-                    .insert(manifest.id.clone(), Arc::from(scope));
-                inner.scope = QueryScope::Plugin {
-                    id: manifest.id.clone(),
-                    keyword: normalized.clone(),
-                };
             }
-            None if !inner.scope.is_home() && normalized.is_empty() => {
-                // 清空输入即离开插件范围，回到首屏。
-                inner.scope = QueryScope::Home;
-                inner.plugin_scopes.clear();
-            }
-            None => {}
         }
-
         inner.input = input.to_string();
-        let ctx = SearchContext::new(input, inner.scope.clone(), 50);
-
+        let limit = if inner.scope.is_home() {
+            50
+        } else {
+            usize::MAX
+        };
+        let ctx = SearchContext::new(input, inner.scope.clone(), limit);
         let (mut ranked, failures) = match inner.scope.clone() {
             QueryScope::Home => self.search_home(inner, &ctx),
             QueryScope::Plugin { id, .. } => self.search_plugin_scope(inner, &ctx, &id),
         };
-        if let (Some(manifest), Some(keyword)) = (keyword_entry, collision_keyword.as_ref()) {
-            // 标签命中的正文优先，直接回车粘贴；仍保留插件入口供显式进入范围。
-            ranked.push(RankedItem {
-                item: plugin_entry_item(&manifest, keyword),
-                source_order: 0,
-                source_priority: 0,
-            });
-        }
         sort_ranked(&mut ranked);
         inner.items = ranked.into_iter().map(|ranked| ranked.item).collect();
         inner.plugin_failures = failures;
@@ -3384,25 +3479,6 @@ impl Host {
         self.response(inner, seq, notice)
     }
 
-    /// 首屏上与 `keyword` **标签精确相等**的候选（用于关键词/标签冲突判定）。
-    ///
-    /// 判定依据是宿主定义的结果模型，而不是插件的内部实现：任何参与首屏搜索的插件
-    /// 贡献出的 `Memo` 条目，只要匹配层级是「关键词或标签精确」，就算一次标签命中。
-    /// 插件搜索仍然走「独立线程 + 超时 + panic 隔离」，冲突判定不会把宿主拖住。
-    fn home_tag_hits(&self, inner: &HostInner, keyword: &str) -> Vec<SearchItem> {
-        let ctx = SearchContext::new(keyword, QueryScope::Home, 50);
-        self.deps
-            .plugins
-            .search_home(&ctx, inner.settings.plugin_timeout())
-            .results
-            .into_iter()
-            .flat_map(|(_source, items)| items)
-            .filter(|item| {
-                item.kind == ItemKind::Memo && item.score.tier == MatchTier::KeywordOrTagExact
-            })
-            .collect()
-    }
-
     fn search_home(
         &self,
         inner: &HostInner,
@@ -3412,6 +3488,36 @@ impl Host {
         let query = ctx.query.as_str();
         let limit = inner.settings.quick_access_limit;
         let mut source_order = 0usize;
+
+        for (manifest, enabled) in self.deps.plugins.manifests() {
+            if !enabled {
+                continue;
+            }
+            let aliases: Vec<&str> = manifest.keywords.iter().map(String::as_str).collect();
+            let score = if query.is_empty() {
+                Some(Score::unordered())
+            } else if aliases
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(query.trim()))
+            {
+                Some(Score::new(MatchTier::KeywordOrTagExact, 0))
+            } else {
+                score_match(query, &manifest.name, &aliases)
+            };
+            if let Some(score) = score {
+                let mut item = plugin_entry_item(
+                    &manifest,
+                    manifest.keywords.first().map(String::as_str).unwrap_or(""),
+                );
+                item.score = score;
+                ranked.push(RankedItem {
+                    item,
+                    source_order,
+                    source_priority: 0,
+                });
+                source_order += 1;
+            }
+        }
 
         if query.is_empty() {
             // 空查询：软件优先，维护命令仍可在列表末尾访问。
@@ -3575,7 +3681,7 @@ pub fn plugin_entry_item(manifest: &crate::plugin::PluginManifest, keyword: &str
     SearchItem {
         id: format!("{PLUGIN_ENTRY_PREFIX}{}", manifest.id),
         title: manifest.name.clone(),
-        subtitle: Some(format!("插件 · 回车进入「{keyword}」范围")),
+        subtitle: Some(format!("插件 · {keyword}")),
         icon: None,
         source: HOST_SOURCE.to_string(),
         kind: ItemKind::Command,

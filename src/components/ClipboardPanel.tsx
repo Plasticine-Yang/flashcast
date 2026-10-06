@@ -1,302 +1,104 @@
 import { useEffect, useState } from "react";
-import type { ClipboardEntryView, ClipboardStateView } from "../types";
-
+import type { ClipboardStateView } from "../types";
 interface Props {
-  /** 剪贴板历史状态；尚未加载时为 null。 */
   clipboard: ClipboardStateView | null;
   busy: boolean;
   onTogglePaused: (paused: boolean) => void;
   onEnable: () => void;
-  onSaveLimits: (retentionDays: number, capacity: number) => void;
-  onPin: (id: string, pinned: boolean) => void;
-  onDelete: (id: string) => void;
-  onClear: () => void;
-  /** 显式为某个原文件保存本机副本（ticket 12）。 */
-  onSaveCopy: (id: string, attachmentId: string) => void;
+  onSaveLimits: (days: number, capacity: number) => void;
 }
-
-/** 相对时间：与宿主副标题的粒度一致（刚刚 / 分钟 / 小时 / 天）。 */
-function describeAge(capturedAtMs: number): string {
-  const delta = Date.now() - capturedAtMs;
-  if (delta < 60_000) return "刚刚";
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前`;
-  return `${Math.floor(delta / 86_400_000)} 天前`;
-}
-
-/**
- * 人类可读的字节数。与宿主 `flashcast_core::plugins::clipboard::describe_bytes` 同口径：
- * 界面与预览不能对同一个文件给出不同的数字。
- */
-function describeBytes(bytes: number): string {
-  const KB = 1024;
-  const MB = 1024 * KB;
-  const GB = 1024 * MB;
-  if (bytes >= GB) return `${(bytes / GB).toFixed(1)} GB`;
-  if (bytes >= MB) return `${(bytes / MB).toFixed(1)} MB`;
-  if (bytes >= KB) return `${(bytes / KB).toFixed(1)} KB`;
-  return `${bytes} B`;
-}
-
-/** 结果副标题里的文件计数，与宿主 `clipboard_subtitle` 口径一致。 */
-function fileCountLabel(entry: ClipboardEntryView): string {
-  const parts = [`${entry.references} 个引用`];
-  if (entry.fileCopies > 0) {
-    parts.push(`${entry.fileCopies} 个已保存副本`);
-  }
-  return parts.join(" · ");
-}
-
-/**
- * 设置页里的剪贴板历史管理：保留范围、暂停开关与条目列表。
- *
- * 状态显示刻意分成几件事分别说明，而不是一句「正常」：存储是否可用、容量是否触顶、
- * 最近一次捕获是否失败、后台是否正在捕获。任何一种失败都必须看得见。
- *
- * 文件条目（ticket 12）在紧凑列表里额外给出名称、类型、引用/副本标记与当前是否可恢复；
- * 只有引用才有「保存本机副本」，且它必须由用户显式点击。
- */
 export function ClipboardPanel({
-  clipboard,
+  clipboard: c,
   busy,
   onTogglePaused,
   onEnable,
   onSaveLimits,
-  onPin,
-  onDelete,
-  onClear,
-  onSaveCopy,
 }: Props) {
-  const [retentionDraft, setRetentionDraft] = useState("30");
-  const [capacityDraft, setCapacityDraft] = useState("500");
-  const [confirmingClear, setConfirmingClear] = useState(false);
-
-  // 宿主状态变化（切换工作区、外部重载）时同步草稿，但不覆盖用户正在输入的值：
-  // 只有与当前值不同的情况下才重排。
+  const [days, setDays] = useState("30"),
+    [capacity, setCapacity] = useState("500");
   useEffect(() => {
-    if (!clipboard) return;
-    setRetentionDraft((current) =>
-      current === "" || Number(current) === clipboard.retentionDays ? current : String(clipboard.retentionDays),
-    );
-    setCapacityDraft((current) =>
-      current === "" || Number(current) === clipboard.capacity ? current : String(clipboard.capacity),
-    );
-  }, [clipboard?.retentionDays, clipboard?.capacity]);
-
-  if (!clipboard) {
-    return (
-      <section className="settings-section" data-testid="clipboard-section">
-        <h2 className="settings-section-title">剪切板</h2>
-        <p className="settings-hint" data-testid="clipboard-loading">
-          正在读取剪贴板历史状态…
-        </p>
-      </section>
-    );
-  }
-
+    if (c) {
+      setDays(String(c.retentionDays));
+      setCapacity(String(c.capacity));
+    }
+  }, [c?.retentionDays, c?.capacity]);
   return (
     <section className="settings-section" data-testid="clipboard-section">
-      <header className="panel-heading"><h2 className="settings-section-title">剪切板</h2><span>{clipboard.entries} 条记录</span></header>
-
-      <div className="capture-status" data-testid="clipboard-state-summary" data-active={clipboard.enabled && !clipboard.paused && clipboard.captureActive}>
-        <span className="status-dot" />
-        <div><strong>{!clipboard.enabled ? "记录未启用" : clipboard.paused ? "记录已暂停" : clipboard.captureActive ? "正在记录" : clipboard.lastError ? "后台记录不可用" : "等待后台捕获"}</strong>
-        <p>{!clipboard.enabled ? "启用剪贴板插件后，开始保存复制内容。" : clipboard.paused ? "已有历史仍可搜索和粘贴。" : clipboard.captureActive ? "复制的文字、图片和文件会出现在历史中。" : "已有历史仍可搜索和粘贴。"}</p></div>
-        <span className="capture-count">{clipboard.entries}<small> / {clipboard.capacity}</small></span>
-      </div>
-
-      {/* 存储失败、容量触顶与最近一次捕获失败各有独立提示，绝不静默成功。 */}
-      {!clipboard.storageOk && clipboard.storageError ? (
-        <p className="settings-hint" data-testid="clipboard-storage-error" role="alert">
-          存储不可用：{clipboard.storageError}
-        </p>
-      ) : null}
-      {clipboard.capacityReached ? (
-        <p className="settings-hint" data-testid="clipboard-capacity-reached" role="status">
-          {clipboard.capacityReached}
-        </p>
-      ) : null}
-      {clipboard.lastError && clipboard.storageOk ? (
-        <p className="settings-hint" data-testid="clipboard-last-error" role="alert">
-          最近一次捕获失败：{clipboard.lastError}
-        </p>
-      ) : null}
-
-      <div className="settings-row">
-        {!clipboard.enabled ? <button className="primary-button" type="button" data-testid="clipboard-enable" disabled={busy} onClick={onEnable}>启用记录</button> : (
-        <button
-          type="button"
-          className="secondary-button"
-          data-testid="clipboard-pause"
-          disabled={busy || !clipboard.enabled}
-          onClick={() => onTogglePaused(!clipboard.paused)}
-        >
-          {clipboard.paused ? "恢复记录" : "暂停记录"}
-        </button>
-        )}
-        <button
-          type="button"
-          className="secondary-button"
-          data-testid="clipboard-clear"
-          disabled={busy || clipboard.entries === 0}
-          onClick={() => {
-            if (!confirmingClear) {
-              setConfirmingClear(true);
-              return;
-            }
-            setConfirmingClear(false);
-            onClear();
-          }}
-        >
-          {confirmingClear ? "确认清空？" : "清空历史"}
-        </button>
-      </div>
-
-      <details className="storage-details"><summary>保留与容量 <span>{clipboard.retentionDays} 天 · {clipboard.capacity} 条</span></summary>
-      <div className="retention-fields">
-        <label className="settings-label" htmlFor="clipboard-retention">
-          保留期限（天）
-        </label>
-        <input
-          id="clipboard-retention"
-          className="path-input"
-          data-testid="clipboard-retention"
-          type="number"
-          min={1}
-          max={3650}
-          value={retentionDraft}
-          onChange={(event) => setRetentionDraft(event.target.value)}
-        />
-        <label className="settings-label" htmlFor="clipboard-capacity">
-          容量（条）
-        </label>
-        <input
-          id="clipboard-capacity"
-          className="path-input"
-          data-testid="clipboard-capacity"
-          type="number"
-          min={1}
-          max={100000}
-          value={capacityDraft}
-          onChange={(event) => setCapacityDraft(event.target.value)}
-        />
-        <button
-          type="button"
-          className="primary-button"
-          data-testid="clipboard-save-limits"
-          disabled={busy}
-          onClick={() => onSaveLimits(Number(retentionDraft), Number(capacityDraft))}
-        >
-          保存设置
-        </button>
-      </div>
-      </details>
-
-      {clipboard.items.length === 0 ? (
-        <div className="content-empty" data-testid="clipboard-empty"><strong>复制过的内容，在这里找回</strong><p>{clipboard.enabled ? "复制一段文字后，返回查看历史。" : "在功能插件中启用剪切板，开始记录。"}</p></div>
-      ) : (
-        <ul className="theme-list clipboard-history-list" data-testid="clipboard-list">
-          {clipboard.items.map((entry) => (
-            <li
-              className={`theme-item${entry.files.length > 0 ? " clipboard-item-files" : ""}`}
-              data-testid="clipboard-item"
-              data-entry-id={entry.id}
-              data-pinned={entry.pinned ? "true" : "false"}
-              data-files={entry.files.length}
-              key={entry.id}
+      <h2 className="settings-section-title">剪切板</h2>
+      <p className="settings-hint">记录复制过的内容，随时搜索和粘贴。</p>
+      {c ? (
+        <>
+          <div className="config-status-row">
+            <div>
+              <strong>
+                {!c.enabled ? "未启用" : c.paused ? "已暂停" : "正在记录"}
+              </strong>
+              <p className="settings-hint">
+                {c.entries} 条内容 · 容量 {c.capacity} 条
+              </p>
+            </div>
+            <button
+              className="secondary-button"
+              disabled={busy}
+              data-testid="clipboard-pause"
+              onClick={() =>
+                c.enabled ? onTogglePaused(!c.paused) : onEnable()
+              }
             >
-              {entry.imageDataUrl ? (
-                /* 图片条目在管理列表里也要能看到缩略图与类型尺寸（ticket 10）。 */
-                <img
-                  className="icon thumbnail"
-                  data-testid="clipboard-thumbnail"
-                  src={entry.imageDataUrl}
-                  alt=""
-                  aria-hidden="true"
-                />
-              ) : null}
-              <span className="theme-name">
-                {entry.summary}
-                <span className="theme-meta">
-                  {entry.formats.join("/")}
-                    {entry.imageSize ? ` · ${entry.imageSize}` : ""}
-                    {entry.files.length > 0 ? ` · ${fileCountLabel(entry)}` : ""}
-                  {entry.source ? ` · 来自 ${entry.source}` : ""} · {describeAge(entry.capturedAtMs)}
-                  {entry.copies > 1 ? ` · 复制过 ${entry.copies} 次` : ""}
-                </span>
-              </span>
-              {entry.pinned ? <span className="theme-badge">已置顶</span> : null}
-              <button
-                type="button"
-                className="secondary-button"
-                data-testid="clipboard-pin"
-                disabled={busy}
-                onClick={() => onPin(entry.id, !entry.pinned)}
-              >
-                {entry.pinned ? "取消置顶" : "置顶"}
-              </button>
-              <button
-                type="button"
-                className="secondary-button"
-                data-testid="clipboard-delete"
-                disabled={busy}
-                onClick={() => onDelete(entry.id)}
-              >
-                删除
-              </button>
-
-              {entry.files.length > 0 ? (
-                <ul className="clipboard-files" data-testid="clipboard-file-list">
-                  {entry.files.map((file) => (
-                    <li
-                      className="clipboard-file"
-                      data-testid="clipboard-file"
-                      data-attachment-id={file.attachmentId}
-                      data-kind={file.kind.kind}
-                      data-recoverable={file.recoverable ? "true" : "false"}
-                      key={file.attachmentId}
-                    >
-                      <span className="theme-name">
-                        {file.name}
-                        <span className="theme-meta">
-                          {file.mime ?? "未知类型"} · {describeBytes(file.bytes)}
-                          {file.recoverable
-                            ? ""
-                            : ` · 不可恢复：${file.problem ?? "原因未知"}`}
-                        </span>
-                      </span>
-                      <span className="theme-badge" data-testid="clipboard-file-kind">
-                        {file.kindLabel}
-                      </span>
-                      {!file.recoverable ? (
-                        <span
-                          className="theme-badge theme-badge-error"
-                          data-testid="clipboard-file-unrecoverable"
-                        >
-                          不可恢复
-                        </span>
-                      ) : null}
-                      {file.kind.kind === "fileReference" && file.recoverable ? (
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          data-testid="clipboard-save-copy"
-                          disabled={busy}
-                          onClick={() => onSaveCopy(entry.id, file.attachmentId)}
-                        >
-                          保存本机副本
-                        </button>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </li>
-          ))}
-        </ul>
+              {!c.enabled ? "启用" : c.paused ? "继续记录" : "暂停记录"}
+            </button>
+          </div>
+          {(c.storageError ?? c.lastError ?? c.capacityReached) ? (
+            <p role="alert">
+              {c.storageError ?? c.lastError ?? c.capacityReached}
+            </p>
+          ) : null}
+          <form
+            className="clipboard-limits"
+            onSubmit={(e) => {
+              e.preventDefault();
+              onSaveLimits(Number(days), Number(capacity));
+            }}
+          >
+            <label>
+              保留期限（天）
+              <input
+                type="number"
+                min="1"
+                max="3650"
+                required
+                data-testid="clipboard-retention"
+                value={days}
+                onChange={(e) => setDays(e.target.value)}
+              />
+            </label>
+            <label>
+              容量（条）
+              <input
+                type="number"
+                min="1"
+                max="100000"
+                required
+                data-testid="clipboard-capacity"
+                value={capacity}
+                onChange={(e) => setCapacity(e.target.value)}
+              />
+            </label>
+            <button
+              className="primary-button"
+              data-testid="clipboard-save-limits"
+              disabled={busy}
+            >
+              保存范围
+            </button>
+          </form>
+          <p className="settings-hint">
+            历史内容在剪切板插件页面查看，不参与配置同步。
+          </p>
+        </>
+      ) : (
+        <p>正在读取…</p>
       )}
-
-      <details className="storage-details"><summary>存储与文件说明</summary><p className="settings-hint">历史只保存在本机，不随配置同步。重复内容会去重，Flashcast 的粘贴不会再次记录。</p><code className="storage-path">{clipboard.storagePath}</code><p className="settings-hint">文件默认保存引用；移动或删除原文件后无法恢复。需要时可保存本机副本。</p></details>
     </section>
   );
 }

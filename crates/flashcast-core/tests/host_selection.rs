@@ -25,18 +25,18 @@ fn arrow_keys_move_selection_and_clamp_at_edges() {
     );
     assert_eq!(host.move_selection(-1).selection, 1);
     assert_eq!(host.move_selection(-1).selection, 0);
-    assert_eq!(
-        host.move_selection(-1).selection,
-        0,
-        "第一项继续上移应停住"
-    );
+    assert_eq!(host.move_selection(-1).selection, 0, "第一项继续上移应停住");
 }
 
 /// 新输入重置键盘选择；同一输入的重复渲染保留选择。
 #[test]
 fn new_input_resets_selection_but_rerender_keeps_it() {
     let (host, _launcher) = host_with(
-        vec![app("a", "Alpha"), app("b", "Alpha 二"), app("c", "Alpha 三")],
+        vec![
+            app("a", "Alpha"),
+            app("b", "Alpha 二"),
+            app("c", "Alpha 三"),
+        ],
         fast_settings(),
     );
     host.query("alpha");
@@ -85,14 +85,8 @@ fn stale_query_responses_are_identified_by_seq() {
     let second = host.query("al");
 
     assert!(second.seq > first.seq, "seq 必须单调递增");
-    assert!(
-        first.is_stale(second.seq),
-        "旧响应必须能被识别为过期并丢弃"
-    );
-    assert!(
-        !second.is_stale(first.seq),
-        "新响应不应被判定为过期"
-    );
+    assert!(first.is_stale(second.seq), "旧响应必须能被识别为过期并丢弃");
+    assert!(!second.is_stale(first.seq), "新响应不应被判定为过期");
 }
 
 /// 并发查询下 seq 不重复：UI 才能可靠地丢弃旧响应。
@@ -151,7 +145,7 @@ fn back_restores_previous_input_scope_and_selection() {
     assert_eq!(host.set_selection(1).selection, 1);
 
     // 输入完整匹配插件关键词 → 进入插件范围。
-    let in_scope = host.query("备忘录");
+    let in_scope = support::plugin_query(&host, "备忘录");
     assert_eq!(
         in_scope.scope,
         QueryScope::Plugin {

@@ -203,12 +203,14 @@ fn every_keyword_alias_enters_the_memo_scope() {
     expected.sort();
 
     for alias in ["备忘录", "memo", "memos", "MEMO"] {
-        let response = mh.host.query(alias);
+        let _ = mh.host.reset_home();
+        assert!(mh.host.query(alias).scope.is_home());
+        let response = support::plugin_query(&mh.host, alias);
         assert_eq!(
             response.scope,
             QueryScope::Plugin {
                 id: MEMO_PLUGIN_ID.to_string(),
-                keyword: alias.to_lowercase(),
+                keyword: "备忘录".to_string(),
             },
             "别名「{alias}」必须进入备忘录范围"
         );
@@ -299,27 +301,27 @@ fn scope_search_covers_title_tags_and_body() {
         .expect("创建备忘录");
 
     // 先按关键词进入范围；之后继续在同一个输入框里检索（含关键词前缀）。
-    let entered = mh.host.query("备忘录");
+    let entered = support::plugin_query(&mh.host, "备忘录");
     assert_eq!(entered.items.len(), 2, "刚进入范围时列出全部备忘录");
 
-    let by_title = mh.host.query("备忘录 常用");
+    let by_title = support::plugin_query(&mh.host, "备忘录 常用");
     assert_eq!(titles(&by_title), vec!["常用回复"], "标题前缀命中");
     assert_eq!(by_title.items[0].score.tier, MatchTier::TitlePrefix);
 
-    let by_tag = mh.host.query("备忘录 工作");
+    let by_tag = support::plugin_query(&mh.host, "备忘录 工作");
     assert_eq!(titles(&by_tag), vec!["常用回复"], "标签命中");
     assert_eq!(by_tag.items[0].score.tier, MatchTier::MetadataSubstring);
 
-    let by_body = mh.host.query("备忘录 三楼");
+    let by_body = support::plugin_query(&mh.host, "备忘录 三楼");
     assert_eq!(titles(&by_body), vec!["会议邀请"], "正文命中");
     assert_eq!(by_body.items[0].score.tier, MatchTier::MetadataSubstring);
 
     // 英文别名进入的范围，同样可以继续检索。
     assert_eq!(
-        titles(&mh.host.query("memos")),
+        titles(&support::plugin_query(&mh.host, "memos")),
         vec!["常用回复", "会议邀请"]
     );
-    let by_alias = mh.host.query("memos 常用");
+    let by_alias = support::plugin_query(&mh.host, "memos 常用");
     assert_eq!(titles(&by_alias), vec!["常用回复"]);
 
     // 完整正文预览：粘贴前要能确认结果。
@@ -400,8 +402,11 @@ fn create_edit_delete_persist_as_readable_markdown() {
     assert_eq!(after_edit.query("客服").items.len(), 1);
     assert_eq!(after_edit.query("客").items.len(), 0);
     // 进入范围后可以按标签/标题/正文检索（同一个输入框继续输入）。
-    assert_eq!(after_edit.query("memo").items.len(), 1);
-    assert_eq!(after_edit.query("memo 客服").items.len(), 1);
+    assert_eq!(support::plugin_query(&after_edit, "memo").items.len(), 1);
+    assert_eq!(
+        support::plugin_query(&after_edit, "memo 客服").items.len(),
+        1
+    );
 
     // 删除：文件消失、结果消失，重启后也不会复活。
     after_edit.delete_memo(&memo.id).expect("删除备忘录");
@@ -410,7 +415,7 @@ fn create_edit_delete_persist_as_readable_markdown() {
         "删除必须同时删掉工作区里的文件"
     );
     assert!(after_edit.memos().is_empty());
-    assert!(after_edit.query("memo").items.is_empty());
+    assert!(support::plugin_query(&after_edit, "memo").items.is_empty());
     assert!(matches!(
         after_edit.delete_memo(&memo.id),
         Err(MemoError::NotFound(_))
@@ -526,7 +531,7 @@ fn disabling_the_plugin_removes_results_and_refuses_writes() {
         !mh.host.query("工作").items.is_empty(),
         "启用时首屏应命中标签"
     );
-    assert_eq!(mh.host.query("备忘录").items.len(), 1);
+    assert_eq!(support::plugin_query(&mh.host, "备忘录").items.len(), 1);
 
     mh.host
         .set_plugin_enabled(MEMO_PLUGIN_ID, false)
@@ -542,7 +547,7 @@ fn disabling_the_plugin_removes_results_and_refuses_writes() {
             .any(|item| item.source == MEMO_PLUGIN_ID),
         "停用后不得再贡献首屏结果"
     );
-    let in_scope = mh.host.query("备忘录");
+    let in_scope = support::plugin_query(&mh.host, "备忘录");
     assert_eq!(in_scope.scope, QueryScope::Home, "停用后关键词不再进入范围");
     assert!(in_scope
         .items
@@ -622,7 +627,7 @@ fn a_hanging_memo_scope_is_timed_out_without_blocking_search() {
     );
 
     let started = Instant::now();
-    let response = mh.host.query("备忘录");
+    let response = support::plugin_query(&mh.host, "备忘录");
     let elapsed = started.elapsed();
 
     assert!(
@@ -639,7 +644,7 @@ fn a_hanging_memo_scope_is_timed_out_without_blocking_search() {
     assert!(response.items.is_empty());
 
     // 清空输入回到首屏后，宿主与软件搜索都照常可用。
-    assert_eq!(mh.host.query("").scope, QueryScope::Home);
+    assert_eq!(mh.host.reset_home().scope, QueryScope::Home);
     assert_eq!(titles(&mh.host.query("fire")), vec!["Firefox"]);
 }
 
@@ -662,7 +667,7 @@ fn a_panicking_scope_is_isolated_from_the_memo_plugin() {
         .create_memo("常用回复", &tags(&["工作"]), "收到。")
         .expect("创建备忘录");
 
-    let panicked = mh.host.query("混乱");
+    let panicked = support::plugin_query(&mh.host, "混乱");
     let failure = panicked
         .plugin_failures
         .iter()
@@ -672,9 +677,9 @@ fn a_panicking_scope_is_isolated_from_the_memo_plugin() {
     assert!(failure.reason.contains("panic"));
 
     // 备忘录插件不受影响：范围照常进入，结果照常返回。
-    assert_eq!(mh.host.query("备忘录").items.len(), 1);
+    assert_eq!(support::plugin_query(&mh.host, "备忘录").items.len(), 1);
     // 清空输入回到首屏后，宿主与软件搜索照常。
-    assert_eq!(mh.host.query("").scope, QueryScope::Home);
+    assert_eq!(mh.host.reset_home().scope, QueryScope::Home);
     assert_eq!(titles(&mh.host.query("fire")), vec!["Firefox"]);
 }
 
@@ -690,11 +695,11 @@ fn back_restores_query_selection_and_scope() {
         .create_memo("常用回复", &tags(&["工作"]), "收到。")
         .expect("创建备忘录");
 
-    mh.host.query("");
+    mh.host.reset_home();
     assert_eq!(mh.host.set_selection(2).selection, 2);
     let previous = mh.host.snapshot();
 
-    let in_scope = mh.host.query("备忘录");
+    let in_scope = support::plugin_query(&mh.host, "备忘录");
     assert!(matches!(in_scope.scope, QueryScope::Plugin { .. }));
     assert_eq!(in_scope.selection, 0, "进入范围后选择归零");
 
@@ -726,9 +731,7 @@ fn executing_a_memo_copies_its_body_and_asks_for_a_manual_paste() {
         .host
         .create_memo("常用回复", &tags(&["工作"]), "收到，我看一下再回复你。")
         .expect("创建备忘录");
-    let item = mh
-        .host
-        .query("备忘录")
+    let item = support::plugin_query(&mh.host, "备忘录")
         .items
         .into_iter()
         .find(|item| item.id == mh.item_id(&memo.id))
@@ -769,7 +772,7 @@ fn a_clipboard_failure_is_reported_accurately() {
         .host
         .create_memo("常用回复", &tags(&["工作"]), "收到。")
         .expect("创建备忘录");
-    let item = mh.host.query("备忘录").items[0].clone();
+    let item = support::plugin_query(&mh.host, "备忘录").items[0].clone();
 
     let outcome = mh.host.execute(&item);
 
@@ -809,7 +812,7 @@ fn an_unsupported_clipboard_refuses_the_copy() {
     mh.host
         .create_memo("常用回复", &tags(&["工作"]), "收到。")
         .expect("创建备忘录");
-    let item = mh.host.query("备忘录").items[0].clone();
+    let item = support::plugin_query(&mh.host, "备忘录").items[0].clone();
 
     let outcome = mh.host.execute(&item);
 

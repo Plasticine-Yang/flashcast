@@ -1,6 +1,6 @@
 # Flashcast 插件规范 v1 / 主题文档 v2
 
-本规范适用于新插件。共同契约、功能贡献和主题贡献各有版本，插件包版本遵循 SemVer；包版本不能代替 API 兼容声明。宿主当前为 0.3.0。
+本规范适用于新插件。共同契约、功能贡献和主题贡献各有版本，插件包版本遵循 SemVer；包版本不能代替 API 兼容声明。宿主当前为 0.3.4。
 
 ## 共同契约
 
@@ -78,3 +78,23 @@ cargo run -p flashcast-core --example theme-template -- check theme.json
 ```
 
 验证浅色／深色／跟随系统、所有声明风格、减少透明度、系统不支持效果、选中／焦点／错误／禁用、中文长文本和 480 宽窗口。主题与配置逻辑通过宿主入口集成测试；UI 用浏览器或真实桌面检查，不添加 UI 单元测试。玻璃在 Windows/macOS 使用系统模糊加宿主外观；Linux 使用实底回退。液态效果不是 Apple 原生 Liquid Glass，不包含真实几何折射。
+
+## 插件页面、命令与快捷键
+
+详见 [ADR 0003](../adr/0003-plugin-pages-and-commands.md)。关键词只匹配首屏的插件入口，不自动改变页面。`FeaturePlugin::commands()` 默认返回 `PluginCommand::open_page(&manifest)`；需要额外入口时覆盖此方法，命令 ID 必须属于 `flashcast.plugin.<自己的 id>` 或其点分子命名空间。宿主按命令目标调用 `take_scope`，插件内 `SearchContext.query` 是原始搜索词，不再剥去入口关键词。初始和清空查询必须列出全部可用内容。
+
+```rust
+fn commands(&self) -> Vec<flashcast_core::PluginCommand> {
+    let mut command = flashcast_core::PluginCommand::open_page(&self.manifest);
+    command.defaults.linux = Some("Ctrl+Alt+C".into());
+    command.defaults.windows = Some("Ctrl+Alt+C".into());
+    command.defaults.macos = Some("Control+Command+C".into());
+    vec![command]
+}
+```
+
+按键只通过贡献声明，不直接注册系统监听。用户覆盖保存在 `settings.toml` 的 `commandShortcuts`：每个命令可分别设置 linux、windows、macos；缺失值恢复默认，空字符串关闭该平台绑定。配置页展示实际注册状态，系统拒绝和配置写入失败都必须可见。
+
+在当前仓库增加内置插件：新增 `crates/flashcast-core/src/plugins/<name>.rs`，实现 `FeaturePlugin` 和 `PluginScope`，在 `plugins::register_official` 注册；业务数据和能力执行经宿主边界，界面接入统一插件页面与动作托盘。使用宿主入口测试能力、搜索和失败路径，UI 经浏览器连续操作验收。
+
+在独立仓库写插件：建立受信任的 Rust crate，引入兼容的 core 契约，在 Flashcast workspace 添加依赖和注册调用，再随宿主构建发布。当前没有将任意外部仓库下载安装到运行时的 SDK；扩展独立载体前须先制定隔离和更新契约。

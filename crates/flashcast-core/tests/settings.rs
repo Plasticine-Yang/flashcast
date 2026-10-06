@@ -23,6 +23,7 @@ fn default_settings_use_alt_space() {
 #[test]
 fn settings_round_trip_json_and_toml() {
     let settings = Settings {
+        command_shortcuts: Default::default(),
         hotkey: "Ctrl+Alt+Space".to_string(),
         launch_at_startup: true,
         quick_access_limit: 8,

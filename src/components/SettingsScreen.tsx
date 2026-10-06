@@ -7,8 +7,6 @@ import type {
   ChromeState,
   ClonePhase,
   CloneProgress,
-  Memo,
-  MemoProblem,
   PluginView,
   Settings,
   HotkeyStatus,
@@ -26,7 +24,7 @@ import { ChangesPanel } from "./ChangesPanel";
 import { ChromePanel } from "./ChromePanel";
 import { ClipboardPanel } from "./ClipboardPanel";
 import { FeaturePluginsPanel } from "./FeaturePluginsPanel";
-import { MemoPanel } from "./MemoPanel";
+import { CommandShortcuts } from "./CommandShortcuts";
 
 /** 克隆阶段的中文说明。 */
 const PHASE_LABEL: Record<ClonePhase, string> = {
@@ -44,14 +42,21 @@ const PHASE_LABEL: Record<ClonePhase, string> = {
 export function describeCloneProgress(progress: CloneProgress): string {
   const parts = [PHASE_LABEL[progress.phase]];
   if (progress.phase === "checkingOut" && progress.checkoutTotal > 0) {
-    parts.push(`已检出 ${progress.checkoutCompleted}/${progress.checkoutTotal} 个文件`);
+    parts.push(
+      `已检出 ${progress.checkoutCompleted}/${progress.checkoutTotal} 个文件`,
+    );
     if (progress.checkoutPath) {
       parts.push(`当前：${progress.checkoutPath}`);
     }
   } else if (progress.totalObjects > 0) {
-    parts.push(`已接收 ${progress.indexedObjects}/${progress.totalObjects} 个对象`);
+    parts.push(
+      `已接收 ${progress.indexedObjects}/${progress.totalObjects} 个对象`,
+    );
   }
-  if (progress.message && (progress.phase === "failed" || progress.phase === "cancelled")) {
+  if (
+    progress.message &&
+    (progress.phase === "failed" || progress.phase === "cancelled")
+  ) {
     parts.push(progress.message);
   }
   return parts.join("，");
@@ -77,7 +82,9 @@ const SYNC_PHASE_LABEL: Record<SyncPhase, string> = {
 export function describeSyncProgress(progress: SyncProgress): string {
   const parts = [SYNC_PHASE_LABEL[progress.phase]];
   if (progress.totalObjects > 0) {
-    parts.push(`已接收 ${progress.receivedObjects}/${progress.totalObjects} 个对象`);
+    parts.push(
+      `已接收 ${progress.receivedObjects}/${progress.totalObjects} 个对象`,
+    );
   } else if (progress.updates > 0) {
     parts.push(`已处理 ${progress.updates} 次传输回调`);
   }
@@ -152,11 +159,18 @@ function CapabilityRow({
 }
 
 interface Props {
+  commands: import("../types").PluginCommandView[];
+  onSaveCommand: (id: string, shortcut: string | null) => void;
+  onOpenPlugin: (id: string) => void;
   workspace: WorkspaceStatus | null;
   settings: Settings | null;
   theme: ThemeState | null;
   materialNotice: string | null;
-  onAppearanceChange: (appearance: import("../types").ThemeAppearance, style: string, reduce: boolean) => void;
+  onAppearanceChange: (
+    appearance: import("../types").ThemeAppearance,
+    style: string,
+    reduce: boolean,
+  ) => void;
   hotkey: HotkeyStatus | null;
   /** 运行环境与能力状态（来自平台层的真实探测）。 */
   capabilities: Capabilities | null;
@@ -176,10 +190,6 @@ interface Props {
   diffPath: string | null;
   /** 随应用提供的功能插件（备忘录等）与启用状态。 */
   plugins: PluginView[];
-  /** 当前工作区里的备忘录。 */
-  memos: Memo[];
-  /** 无法读取的备忘录文件与中文原因。 */
-  memoProblems: MemoProblem[];
   /** 备忘录插件是否启用（决定能否创建 / 修改）。 */
   memoEnabled: boolean;
   /** 当前 Chrome 状态：发现结果、profile 关联与书签索引。 */
@@ -213,16 +223,8 @@ interface Props {
   onToggleFeaturePlugin: (id: string, enabled: boolean) => void;
   onAssociateChromeProfile: (profileDir: string) => void;
   onRefreshChromeBookmarks: () => void;
-  onCreateMemo: (title: string, tags: string[], body: string) => Promise<boolean>;
-  onUpdateMemo: (id: string, title: string, tags: string[], body: string) => Promise<boolean>;
-  onDeleteMemo: (id: string) => Promise<boolean>;
   onToggleClipboardPaused: (paused: boolean) => void;
   onSaveClipboardLimits: (retentionDays: number, capacity: number) => void;
-  onPinClipboardEntry: (id: string, pinned: boolean) => void;
-  onDeleteClipboardEntry: (id: string) => void;
-  onClearClipboardHistory: () => void;
-  /** 显式为某个文件引用保存本机副本（ticket 12）。 */
-  onSaveClipboardFileCopy: (id: string, attachmentId: string) => void;
   /** 当前显示的区块。由 App 持有，所以在会话内切走再回来会回到同一区块。 */
   current: SettingsSectionId;
   onSectionChange: (section: SettingsSectionId) => void;
@@ -314,8 +316,6 @@ export function SettingsScreen({
   selectedPaths,
   diffPath,
   plugins,
-  memos,
-  memoProblems,
   memoEnabled,
   chrome,
   clipboard,
@@ -342,20 +342,17 @@ export function SettingsScreen({
   onToggleFeaturePlugin,
   onAssociateChromeProfile,
   onRefreshChromeBookmarks,
-  onCreateMemo,
-  onUpdateMemo,
-  onDeleteMemo,
   onToggleClipboardPaused,
   onSaveClipboardLimits,
-  onPinClipboardEntry,
-  onDeleteClipboardEntry,
-  onClearClipboardHistory,
-  onSaveClipboardFileCopy,
   current,
   onSectionChange,
+  commands,
+  onSaveCommand,
+  onOpenPlugin,
 }: Props) {
   const [path, setPath] = useState(workspace?.path ?? "");
-  const [hotkeyConflict, setHotkeyConflict] = useState<HotkeyConflictReport | null>(null);
+  const [hotkeyConflict, setHotkeyConflict] =
+    useState<HotkeyConflictReport | null>(null);
   const [hotkeyBusy, setHotkeyBusy] = useState(false);
   const [hotkeyDraft, setHotkeyDraft] = useState(settings?.hotkey ?? "");
   const [remoteUrl, setRemoteUrl] = useState("");
@@ -393,7 +390,12 @@ export function SettingsScreen({
   // 输入框与多行文本自己处理方向键，所以可编辑控件上不接管（←→ 与数字键另有用途）。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey || event.ctrlKey || event.altKey || document.querySelector("dialog[open]")) {
+      if (
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        document.querySelector("dialog[open]")
+      ) {
         return;
       }
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
@@ -402,7 +404,8 @@ export function SettingsScreen({
       const target = event.target as HTMLElement | null;
       if (
         target &&
-        (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)
+        (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) ||
+          target.isContentEditable)
       ) {
         return;
       }
@@ -448,7 +451,11 @@ export function SettingsScreen({
         </div>
       ) : null}
 
-      <nav className="settings-nav" data-testid="settings-nav" aria-label="设置分组">
+      <nav
+        className="settings-nav"
+        data-testid="settings-nav"
+        aria-label="设置分组"
+      >
         {SETTINGS_GROUPS.map((group) => (
           <div className="settings-nav-group" key={group.id}>
             <div className="settings-nav-label">{group.label}</div>
@@ -462,7 +469,17 @@ export function SettingsScreen({
                 aria-current={section.id === current ? "true" : undefined}
                 onClick={() => onSectionChange(section.id)}
               >
-                <Glyph name={({memos:"memo",clipboard:"clipboardEntry",chrome:"bookmark"} as Record<string,string>)[section.id] ?? section.id} />
+                <Glyph
+                  name={
+                    (
+                      {
+                        memos: "memo",
+                        clipboard: "clipboardEntry",
+                        chrome: "bookmark",
+                      } as Record<string, string>
+                    )[section.id] ?? section.id
+                  }
+                />
                 {section.title}
               </button>
             ))}
@@ -500,7 +517,9 @@ export function SettingsScreen({
             {workspace?.settingsFile ? (
               <div className="settings-fact">
                 <dt>设置文件</dt>
-                <dd data-testid="workspace-settings-file">{workspace.settingsFile}</dd>
+                <dd data-testid="workspace-settings-file">
+                  {workspace.settingsFile}
+                </dd>
               </div>
             ) : null}
             {workspace?.remote ? (
@@ -518,7 +537,11 @@ export function SettingsScreen({
           </dl>
 
           {workspace?.error ? (
-            <div className="banner banner-error" data-testid="workspace-error" role="alert">
+            <div
+              className="banner banner-error"
+              data-testid="workspace-error"
+              role="alert"
+            >
               {workspace.error}
             </div>
           ) : null}
@@ -631,14 +654,19 @@ export function SettingsScreen({
             </button>
           </div>
           {cloneProgress ? (
-            <p className="settings-hint" data-testid="clone-progress" role="status">
+            <p
+              className="settings-hint"
+              data-testid="clone-progress"
+              role="status"
+            >
               {describeCloneProgress(cloneProgress)}
             </p>
           ) : null}
           <p className="settings-hint">
             目标目录必须是空目录：已有文件时拒绝克隆，不会覆盖。失败或取消会自动清理
-            本次创建的内容，当前工作区与设置保持不变。https 令牌只保存在本机设备目录，
-            不会写入工作区或日志；ssh 复用 ssh-agent 与 ~/.ssh 下的密钥。
+            本次创建的内容，当前工作区与设置保持不变。https
+            令牌只保存在本机设备目录， 不会写入工作区或日志；ssh 复用 ssh-agent
+            与 ~/.ssh 下的密钥。
           </p>
         </section>
 
@@ -696,14 +724,24 @@ export function SettingsScreen({
               </dl>
 
               {sync.error ? (
-                <div className="banner banner-error" data-testid="sync-error" role="alert">
+                <div
+                  className="banner banner-error"
+                  data-testid="sync-error"
+                  role="alert"
+                >
                   {sync.error}
                 </div>
               ) : null}
 
               {sync.blocking ? (
-                <div className="banner banner-warning" data-testid="sync-block" role="status">
-                  <strong data-testid="sync-block-label">{sync.blocking.label}</strong>
+                <div
+                  className="banner banner-warning"
+                  data-testid="sync-block"
+                  role="status"
+                >
+                  <strong data-testid="sync-block-label">
+                    {sync.blocking.label}
+                  </strong>
                   {sync.blocking.detail ? `：${sync.blocking.detail}` : ""}
                   <p className="settings-hint" data-testid="sync-block-hint">
                     {sync.blocking.hint}
@@ -755,14 +793,19 @@ export function SettingsScreen({
               </div>
 
               {syncProgress ? (
-                <p className="settings-hint" data-testid="sync-progress" role="status">
+                <p
+                  className="settings-hint"
+                  data-testid="sync-progress"
+                  role="status"
+                >
                   {describeSyncProgress(syncProgress)}
                 </p>
               ) : null}
 
               <p className="settings-hint">
                 同步只作用于本配置工作区：快进拉取会重新加载有效设置、主题与备忘录；
-                分叉、冲突、未提交修改与进行中的 Git 操作都会先阻塞并给出外部处理指引，
+                分叉、冲突、未提交修改与进行中的 Git
+                操作都会先阻塞并给出外部处理指引，
                 首版不提供内置三方合并编辑器，也绝不强推或自动丢弃更改。
               </p>
             </>
@@ -820,11 +863,26 @@ export function SettingsScreen({
             </button>
           </div>
           <p className="settings-hint" data-testid="hotkey-status">
-            当前绑定：{hotkey?.pending ? "等待系统授权" : hotkey?.registered ? hotkeyConflict?.effective ?? hotkey.label : "未注册"}
+            当前绑定：
+            {hotkey?.pending
+              ? "等待系统授权"
+              : hotkey?.registered
+                ? (hotkeyConflict?.effective ?? hotkey.label)
+                : "未注册"}
             {hotkey?.error ? `（${hotkey.error}）` : ""}
           </p>
-          <HotkeyConflictPanel desired={settings?.hotkey ?? ""} hotkey={hotkey} active={current === "hotkey"} busy={busy} onBusyChange={setHotkeyBusy} onReportChange={setHotkeyConflict} onSaveHotkey={onSaveHotkey}/>
-          <p className="settings-hint">系统决定最终绑定的按键。修改后请确认可以唤起 Flashcast。</p>
+          <HotkeyConflictPanel
+            desired={settings?.hotkey ?? ""}
+            hotkey={hotkey}
+            active={current === "hotkey"}
+            busy={busy}
+            onBusyChange={setHotkeyBusy}
+            onReportChange={setHotkeyConflict}
+            onSaveHotkey={onSaveHotkey}
+          />
+          <p className="settings-hint">
+            系统决定最终绑定的按键。修改后请确认可以唤起 Flashcast。
+          </p>
         </section>
 
         <section
@@ -840,20 +898,25 @@ export function SettingsScreen({
               <dd data-testid="capability-os">
                 {capabilities
                   ? `${OS_LABEL[capabilities.os] ?? capabilities.os}${
-                      capabilities.osVersion ? ` ${capabilities.osVersion}` : "（版本未知）"
+                      capabilities.osVersion
+                        ? ` ${capabilities.osVersion}`
+                        : "（版本未知）"
                     }`
                   : "尚未加载"}
               </dd>
             </div>
             <div className="settings-fact">
               <dt>架构</dt>
-              <dd data-testid="capability-arch">{capabilities?.arch ?? "尚未加载"}</dd>
+              <dd data-testid="capability-arch">
+                {capabilities?.arch ?? "尚未加载"}
+              </dd>
             </div>
             <div className="settings-fact">
               <dt>桌面会话</dt>
               <dd data-testid="capability-session">
                 {capabilities
-                  ? SESSION_LABEL[capabilities.session] ?? capabilities.session
+                  ? (SESSION_LABEL[capabilities.session] ??
+                    capabilities.session)
                   : "尚未加载"}
                 {capabilities && capabilities.session !== "not-applicable"
                   ? capabilities.desktopAvailable
@@ -864,9 +927,21 @@ export function SettingsScreen({
             </div>
             {capabilities ? (
               <>
-                <CapabilityRow id="hotkey" label="全局快捷键" support={capabilities.hotkey} />
-                <CapabilityRow id="clipboard" label="剪贴板" support={capabilities.clipboard} />
-                <CapabilityRow id="auto-paste" label="自动粘贴" support={capabilities.autoPaste} />
+                <CapabilityRow
+                  id="hotkey"
+                  label="全局快捷键"
+                  support={capabilities.hotkey}
+                />
+                <CapabilityRow
+                  id="clipboard"
+                  label="剪贴板"
+                  support={capabilities.clipboard}
+                />
+                <CapabilityRow
+                  id="auto-paste"
+                  label="自动粘贴"
+                  support={capabilities.autoPaste}
+                />
               </>
             ) : null}
           </dl>
@@ -881,7 +956,8 @@ export function SettingsScreen({
 
           <p className="settings-hint" data-testid="capability-disclaimer">
             以上是这台机器上的实际探测结果：「未覆盖」表示当前环境无法判定，不代表支持；
-            X11 下的结果不能推断 Wayland 可用。本报告只包含系统、会话与权限状态，
+            X11 下的结果不能推断 Wayland
+            可用。本报告只包含系统、会话与权限状态，
             不包含剪贴板内容、书签或凭证。
           </p>
         </section>
@@ -893,7 +969,14 @@ export function SettingsScreen({
           data-testid="theme-section"
         >
           <h2 className="settings-section-title">外观</h2>
-          {theme ? <AppearanceControls theme={theme} busy={busy} materialNotice={materialNotice} onChange={onAppearanceChange} /> : null}
+          {theme ? (
+            <AppearanceControls
+              theme={theme}
+              busy={busy}
+              materialNotice={materialNotice}
+              onChange={onAppearanceChange}
+            />
+          ) : null}
 
           <dl className="settings-facts">
             <div className="settings-fact">
@@ -915,74 +998,92 @@ export function SettingsScreen({
           </dl>
 
           {theme?.error ? (
-            <div className="banner banner-error" data-testid="theme-error" role="alert">
+            <div
+              className="banner banner-error"
+              data-testid="theme-error"
+              role="alert"
+            >
               {theme.error}
             </div>
           ) : null}
 
           <ul className="theme-list" data-testid="theme-list">
-            {(theme?.themes ?? []).filter(entry => !entry.builtin || !entry.legacy || entry.selected).map((entry) => (
-              <li
-                key={entry.id}
-                className="theme-item"
-                data-testid="theme-item"
-                data-theme-id={entry.id}
-                data-selected={entry.selected ? "true" : "false"}
-                data-enabled={entry.enabled ? "true" : "false"}
-                data-usable={entry.usable ? "true" : "false"}
-              >
-                <span className="theme-name">
-                  {entry.name}
-                  <span className="theme-meta">
-                    {entry.builtin ? "内置" : "已安装"} · v{entry.version} ·{" "}
-                    {!entry.legacy ? "深浅成对" : entry.appearance === "system"
-                      ? "跟随系统"
-                      : entry.appearance === "dark"
-                        ? "深色"
-                        : "浅色"}
-                  </span>
-                </span>
-                {entry.selected ? (
-                  <span className="theme-badge" data-testid="theme-selected-badge">
-                    已选择
-                  </span>
-                ) : null}
-                {!entry.usable ? (
-                  <span className="theme-badge theme-badge-error" data-testid="theme-unusable">
-                    不可用
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  className="primary-button"
-                  data-testid="theme-select"
-                  disabled={busy || entry.selected || !entry.enabled || !entry.usable}
-                  onClick={() => onSelectTheme(entry.id)}
+            {(theme?.themes ?? [])
+              .filter(
+                (entry) => !entry.builtin || !entry.legacy || entry.selected,
+              )
+              .map((entry) => (
+                <li
+                  key={entry.id}
+                  className="theme-item"
+                  data-testid="theme-item"
+                  data-theme-id={entry.id}
+                  data-selected={entry.selected ? "true" : "false"}
+                  data-enabled={entry.enabled ? "true" : "false"}
+                  data-usable={entry.usable ? "true" : "false"}
                 >
-                  选择
-                </button>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  data-testid="theme-toggle"
-                  disabled={busy || !entry.canDisable}
-                  onClick={() => onToggleTheme(entry.id, !entry.enabled)}
-                >
-                  {entry.enabled ? "停用" : "启用"}
-                </button>
-                {entry.builtin ? null : (
+                  <span className="theme-name">
+                    {entry.name}
+                    <span className="theme-meta">
+                      {entry.builtin ? "内置" : "已安装"} · v{entry.version} ·{" "}
+                      {!entry.legacy
+                        ? "深浅成对"
+                        : entry.appearance === "system"
+                          ? "跟随系统"
+                          : entry.appearance === "dark"
+                            ? "深色"
+                            : "浅色"}
+                    </span>
+                  </span>
+                  {entry.selected ? (
+                    <span
+                      className="theme-badge"
+                      data-testid="theme-selected-badge"
+                    >
+                      已选择
+                    </span>
+                  ) : null}
+                  {!entry.usable ? (
+                    <span
+                      className="theme-badge theme-badge-error"
+                      data-testid="theme-unusable"
+                    >
+                      不可用
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="primary-button"
+                    data-testid="theme-select"
+                    disabled={
+                      busy || entry.selected || !entry.enabled || !entry.usable
+                    }
+                    onClick={() => onSelectTheme(entry.id)}
+                  >
+                    选择
+                  </button>
                   <button
                     type="button"
                     className="secondary-button"
-                    data-testid="theme-remove"
-                    disabled={busy}
-                    onClick={() => onRemoveTheme(entry.id)}
+                    data-testid="theme-toggle"
+                    disabled={busy || !entry.canDisable}
+                    onClick={() => onToggleTheme(entry.id, !entry.enabled)}
                   >
-                    移除
+                    {entry.enabled ? "停用" : "启用"}
                   </button>
-                )}
-              </li>
-            ))}
+                  {entry.builtin ? null : (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      data-testid="theme-remove"
+                      disabled={busy}
+                      onClick={() => onRemoveTheme(entry.id)}
+                    >
+                      移除
+                    </button>
+                  )}
+                </li>
+              ))}
           </ul>
           <label className="settings-label" htmlFor="theme-package-path">
             本地主题包
@@ -1010,7 +1111,8 @@ export function SettingsScreen({
             </button>
           </div>
           <p className="settings-hint">
-            选择 theme.json 文件或所在目录。主题需同时提供浅色和深色设计；安装失败会保留当前外观。
+            选择 theme.json
+            文件或所在目录。主题需同时提供浅色和深色设计；安装失败会保留当前外观。
           </p>
         </section>
 
@@ -1029,6 +1131,11 @@ export function SettingsScreen({
             onAssociate={onAssociateChromeProfile}
             onRefresh={onRefreshChromeBookmarks}
           />
+          <CommandShortcuts
+            commands={commands.filter((c) => c.pluginId === "chrome-bookmarks")}
+            busy={busy}
+            onSave={onSaveCommand}
+          />
         </div>
 
         <div data-section="clipboard" hidden={current !== "clipboard"}>
@@ -1038,23 +1145,32 @@ export function SettingsScreen({
             onEnable={() => onToggleFeaturePlugin("clipboard", true)}
             onTogglePaused={onToggleClipboardPaused}
             onSaveLimits={onSaveClipboardLimits}
-            onPin={onPinClipboardEntry}
-            onDelete={onDeleteClipboardEntry}
-            onClear={onClearClipboardHistory}
-            onSaveCopy={onSaveClipboardFileCopy}
+          />
+          <CommandShortcuts
+            commands={commands.filter((c) => c.pluginId === "clipboard")}
+            busy={busy}
+            onSave={onSaveCommand}
           />
         </div>
 
         <div data-section="memos" hidden={current !== "memos"}>
-          <MemoPanel
-            linked={linked}
-            enabled={memoEnabled}
-            memos={memos}
-            problems={memoProblems}
+          <section className="settings-section">
+            <h2 className="settings-section-title">备忘录</h2>
+            <p className="settings-hint">
+              内容保存在配置工作区，可随工作区同步。
+            </p>
+            <button
+              className="primary-button"
+              disabled={!memoEnabled || busy}
+              onClick={() => onOpenPlugin("memo")}
+            >
+              打开备忘录
+            </button>
+          </section>
+          <CommandShortcuts
+            commands={commands.filter((c) => c.pluginId === "memo")}
             busy={busy}
-            onCreate={onCreateMemo}
-            onUpdate={onUpdateMemo}
-            onDelete={onDeleteMemo}
+            onSave={onSaveCommand}
           />
         </div>
       </div>

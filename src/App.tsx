@@ -10,6 +10,7 @@ import type {
   Memo,
   MemoProblem,
   PluginView,
+  PluginCommandView,
   Preview,
   QueryView,
   Settings,
@@ -23,8 +24,7 @@ import type {
   ClipboardStateView,
 } from "./types";
 import { ActionBar } from "./components/ActionBar";
-import { MemoWorkbench } from "./components/MemoWorkbench";
-import { MemoPreview } from "./components/MemoPreview";
+import { PluginPage } from "./components/PluginPage";
 import { ResultList } from "./components/ResultList";
 import {
   SettingsScreen,
@@ -32,7 +32,6 @@ import {
   type SettingsSectionId,
 } from "./components/SettingsScreen";
 import { StatusBanner } from "./components/StatusBanner";
-
 
 /** 把宿主下发的语义 token 写成根元素上的 CSS 自定义属性。
  *
@@ -47,7 +46,10 @@ export function applyThemeVars(theme: ThemeState) {
   root.dataset.themeAppearance = theme.appearance;
   root.dataset.themeSelected = theme.selected;
   root.dataset.surfaceRenderer = theme.renderer;
-  root.style.setProperty("--fc-fill-opacity", String(theme.surface.fillOpacity));
+  root.style.setProperty(
+    "--fc-fill-opacity",
+    String(theme.surface.fillOpacity),
+  );
   root.style.setProperty("--fc-blur", `${theme.surface.blur}px`);
   root.style.setProperty("--fc-saturation", String(theme.surface.saturation));
   root.style.setProperty("--fc-rim", `${theme.surface.rim}px`);
@@ -58,7 +60,9 @@ export function systemAppearance(): Appearance {
   if (typeof window === "undefined" || !window.matchMedia) {
     return "light";
   }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
 }
 
 /** 最近一次已应用的响应序号。seq 更小的响应必须被丢弃（ADR §3）。 */
@@ -77,7 +81,9 @@ const EMPTY_RESPONSE: QueryView = {
 type Screen = "search" | "settings";
 
 export default function App() {
-  const [input, setInput] = useState(browserPreview === "memos" ? "备忘录" : "");
+  const [input, setInput] = useState(
+    browserPreview === "memos" ? "备忘录" : "",
+  );
   const [response, setResponse] = useState<QueryView>(EMPTY_RESPONSE);
   const [feedback, setFeedback] = useState<ActionOutcome | null>(null);
   const [status, setStatus] = useState<StatusView | null>(null);
@@ -87,21 +93,29 @@ export default function App() {
   const [visible, setVisible] = useState(true);
   const [composing, setComposing] = useState(false);
   // 「菜单」状态：ticket 01 没有菜单，Escape 的优先级顺序在这里已经预留。
-  const [menuOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [commands, setCommands] = useState<PluginCommandView[]>([]);
 
   // 设置页状态。
-  const [screen, setScreen] = useState<Screen>(browserPreview && browserPreview !== "memos" ? "settings" : "search");
+  const [screen, setScreen] = useState<Screen>(
+    browserPreview && browserPreview !== "memos" ? "settings" : "search",
+  );
   const [workspace, setWorkspace] = useState<WorkspaceStatus | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [theme, setTheme] = useState<ThemeState | null>(null);
   const [materialNotice, setMaterialNotice] = useState<string | null>(null);
-  const [settingsMessage, setSettingsMessage] = useState<SettingsMessage | null>(null);
+  const [settingsMessage, setSettingsMessage] =
+    useState<SettingsMessage | null>(null);
   /** 当前显示的设置区块。放在 App 里，所以在会话内切走再回来会回到同一区块
    * （SettingsScreen 每次进设置页都会重新挂载，放它内部就记不住）。 */
-  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>(browserPreview && browserPreview !== "memos" ? browserPreview : "hotkey");
+  const [settingsSection, setSettingsSection] = useState<SettingsSectionId>(
+    browserPreview && browserPreview !== "memos" ? browserPreview : "hotkey",
+  );
   const [workspaceAlert, setWorkspaceAlert] = useState<string | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
-  const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
+  const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(
+    null,
+  );
   // 变更与提交状态。提交范围完全由用户勾选的路径决定。
   const [changes, setChanges] = useState<WorkspaceChanges | null>(null);
   const [commitMessage, setCommitMessage] = useState("");
@@ -118,7 +132,6 @@ export default function App() {
   /** 剪贴板历史状态与管理列表（ticket 09）。 */
   const [clipboard, setClipboard] = useState<ClipboardStateView | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(true);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const appliedSeq = useRef(0);
@@ -131,18 +144,27 @@ export default function App() {
     }
     appliedSeq.current = next.seq;
     setResponse(next);
+    setInput(next.input);
   };
 
   useEffect(() => {
     // 首屏必须是一次空查询：宿主的 snapshot() 只回放当前状态，在还没有查询过时
     // 它是空的，只有 query("") 才会给出快速访问项。
-    void api.query(browserPreview === "memos" ? "备忘录" : "").then(apply);
+    void (
+      browserPreview === "memos"
+        ? api.execute_plugin_command("flashcast.plugin.memo")
+        : api.query("")
+    ).then(apply);
+    void api.get_plugin_commands().then(setCommands);
     if (browserPreview) {
       void loadMemos();
       void loadClipboard();
       void loadChrome();
     }
-    void api.get_status().then(next => { setStatus(next); setPlugins(next.plugins); });
+    void api.get_status().then((next) => {
+      setStatus(next);
+      setPlugins(next.plugins);
+    });
     // 设置页的运行环境与能力报告直接来自平台层的 CapabilityProbe（`get_capabilities`）。
     void api.get_capabilities().then(setCapabilities);
     void api.get_workspace().then((next) => {
@@ -158,13 +180,15 @@ export default function App() {
     const unlisteners: (() => void)[] = [];
     const register = async () => {
       unlisteners.push(
-        await api.on("flashcast://summoned", () => {
+        await api.on("flashcast://summoned", (payload) => {
           setVisible(true);
           setFeedback(null);
-          setInput("");
+          setMenuOpen(false);
           setScreen("search");
           // 重新唤起同样回到空查询的首屏，否则会出现「输入框为空但列表还是上次过滤结果」。
-          void api.query("").then(apply);
+          const next = (payload as { response?: QueryView })?.response;
+          if (next) apply(next);
+          else void api.query("").then(apply);
           focusInput();
         }),
       );
@@ -177,6 +201,11 @@ export default function App() {
         await api.on("flashcast://state", (payload) => {
           apply(payload as QueryView);
         }),
+      );
+      unlisteners.push(
+        await api.on("flashcast://plugin-commands", (payload) =>
+          setCommands(payload as PluginCommandView[]),
+        ),
       );
       unlisteners.push(
         await api.on("flashcast://hotkey-status", (payload) => {
@@ -242,14 +271,21 @@ export default function App() {
     applyThemeVars(theme);
     let cancelled = false;
     document.documentElement.dataset.surfaceEffective = "solid";
-    void api.sync_window_material().then(result => {
-      if (cancelled) return;
-      document.documentElement.dataset.surfaceEffective = result.supported ? theme.renderer : "solid";
-      setMaterialNotice(result.reason);
-    }).catch(() => {
-      if (!cancelled) setMaterialNotice("透明材质暂不可用，已使用实底");
-    });
-    return () => { cancelled = true; };
+    void api
+      .sync_window_material()
+      .then((result) => {
+        if (cancelled) return;
+        document.documentElement.dataset.surfaceEffective = result.supported
+          ? theme.renderer
+          : "solid";
+        setMaterialNotice(result.reason);
+      })
+      .catch(() => {
+        if (!cancelled) setMaterialNotice("透明材质暂不可用，已使用实底");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [theme]);
 
   function focusInput() {
@@ -281,6 +317,7 @@ export default function App() {
     try {
       const status = await api.get_status();
       setPlugins(status.plugins);
+      setCommands(await api.get_plugin_commands());
     } catch (error) {
       setSettingsMessage({ level: "error", text: String(error) });
     }
@@ -289,7 +326,10 @@ export default function App() {
   /** 读取工作区里的备忘录与无法读取的文件（保留可用内容并如实报告）。 */
   const loadMemos = async () => {
     try {
-      const [next, problems] = await Promise.all([api.memos(), api.memo_problems()]);
+      const [next, problems] = await Promise.all([
+        api.memos(),
+        api.memo_problems(),
+      ]);
       setMemos(next);
       setMemoProblems(problems);
     } catch (error) {
@@ -381,7 +421,10 @@ export default function App() {
   };
 
   /** 保存保留期限与容量；改小容量会立刻回收超出的条目。 */
-  const handleSaveClipboardLimits = (retentionDays: number, capacity: number) => {
+  const handleSaveClipboardLimits = (
+    retentionDays: number,
+    capacity: number,
+  ) => {
     void runSettingsAction(
       () => api.set_clipboard_limits(retentionDays, capacity),
       (next) => {
@@ -398,10 +441,18 @@ export default function App() {
   const handlePinClipboardEntry = (id: string, pinned: boolean) => {
     void runSettingsAction(
       () => api.pin_clipboard_entry(id, pinned),
-      (next) => {
+      async (next) => {
         setClipboard(next);
         // 置顶会影响搜索结果的排序，当前查询要重算。
-        void api.query(input).then(apply);
+        const query = await api.query(input);
+        apply(
+          await api.set_selection(
+            Math.max(
+              0,
+              query.items.findIndex((item) => item.id === `clipboard:${id}`),
+            ),
+          ),
+        );
       },
     );
   };
@@ -428,44 +479,54 @@ export default function App() {
     );
   };
 
-  /**
-   * 显式为一个文件引用保存本机副本（ticket 12）。
-   *
-   * 只有用户点击才会复制原文件内容；失败原因（原文件失效、访问失败、超限、复制中断、
-   * 不支持的类型）由宿主给出并原样展示。原文件只被读取，不会被移动或删除。
-   */
-  const handleSaveClipboardFileCopy = (id: string, attachmentId: string) => {
-    void runSettingsAction(
-      () => api.save_clipboard_file_copy(id, attachmentId),
-      (next) => {
-        setClipboard(next);
-        setSettingsMessage({
-          level: "info",
-          text: "已保存本机副本：原文件删除后仍可恢复",
-        });
-        // 引用与副本的数量会影响副标题，当前查询要重算。
-        void api.query(input).then(apply);
-      },
-    );
-  };
-
   const handleCreateMemo = (title: string, tags: string[], body: string) =>
     runSettingsAction(
       () => api.create_memo(title, tags, body),
       async (memo) => {
         await loadMemos();
-        apply(await api.query(input));
-        setSettingsMessage({ level: "info", text: `已创建备忘录：${memo.title}` });
+        let next = await api.query(input);
+        if (!next.items.some((i) => i.id === `memo:${memo.id}`))
+          next = await api.query("");
+        apply(
+          await api.set_selection(
+            Math.max(
+              0,
+              next.items.findIndex((i) => i.id === `memo:${memo.id}`),
+            ),
+          ),
+        );
+        setSettingsMessage({
+          level: "info",
+          text: `已创建备忘录：${memo.title}`,
+        });
       },
     );
 
-  const handleUpdateMemo = (id: string, title: string, tags: string[], body: string) =>
+  const handleUpdateMemo = (
+    id: string,
+    title: string,
+    tags: string[],
+    body: string,
+  ) =>
     runSettingsAction(
       () => api.update_memo(id, title, tags, body),
       async (memo) => {
         await loadMemos();
-        apply(await api.query(input));
-        setSettingsMessage({ level: "info", text: `已保存备忘录：${memo.title}` });
+        let next = await api.query(input);
+        if (!next.items.some((i) => i.id === `memo:${memo.id}`))
+          next = await api.query("");
+        apply(
+          await api.set_selection(
+            Math.max(
+              0,
+              next.items.findIndex((i) => i.id === `memo:${memo.id}`),
+            ),
+          ),
+        );
+        setSettingsMessage({
+          level: "info",
+          text: `已保存备忘录：${memo.title}`,
+        });
       },
     );
 
@@ -506,7 +567,9 @@ export default function App() {
 
   const handleTogglePath = (path: string) => {
     setSelectedPaths((current) =>
-      current.includes(path) ? current.filter((item) => item !== path) : [...current, path],
+      current.includes(path)
+        ? current.filter((item) => item !== path)
+        : [...current, path],
     );
     setDiffPath(path);
   };
@@ -516,13 +579,18 @@ export default function App() {
       return;
     }
     setSelectedPaths((current) =>
-      current.length === changes.files.length ? [] : changes.files.map((file) => file.path),
+      current.length === changes.files.length
+        ? []
+        : changes.files.map((file) => file.path),
     );
   };
 
   const handleRefreshChanges = () => {
     void runSettingsAction(loadChanges, () => {
-      setSettingsMessage({ level: "info", text: "已按仓库当前状态重新读取变更" });
+      setSettingsMessage({
+        level: "info",
+        text: "已按仓库当前状态重新读取变更",
+      });
     });
   };
 
@@ -669,7 +737,10 @@ export default function App() {
   };
 
   /** 设置页的入口动作：进入前先建立一次基线。 */
-  const runSettingsAction = async <T,>(action: () => Promise<T>, done: (result: T) => void | Promise<void>): Promise<boolean> => {
+  const runSettingsAction = async <T,>(
+    action: () => Promise<T>,
+    done: (result: T) => void | Promise<void>,
+  ): Promise<boolean> => {
     setSettingsBusy(true);
     setSettingsMessage(null);
     setFeedback(null);
@@ -746,10 +817,14 @@ export default function App() {
         void loadSync();
         const notes: string[] = [];
         if (outcome.recordedTheme) {
-          notes.push(`工作区记录的主题：${outcome.recordedTheme}（主题支持由后续版本提供）`);
+          notes.push(
+            `工作区记录的主题：${outcome.recordedTheme}（主题支持由后续版本提供）`,
+          );
         }
         if (outcome.unavailablePlugins.length > 0) {
-          notes.push(`本机没有这些插件：${outcome.unavailablePlugins.join("、")}`);
+          notes.push(
+            `本机没有这些插件：${outcome.unavailablePlugins.join("、")}`,
+          );
         }
         setSettingsMessage({
           level: "info",
@@ -777,11 +852,18 @@ export default function App() {
     void api.cancel_clone();
   };
 
-  const handleAppearanceChange = (appearance: import("./types").ThemeAppearance, style: string, reduce: boolean) => {
-    void runSettingsAction(() => api.set_appearance_preferences(appearance, style, reduce), next => {
-      setTheme(next);
-      setSettingsMessage({ level: "info", text: "外观已保存" });
-    });
+  const handleAppearanceChange = (
+    appearance: import("./types").ThemeAppearance,
+    style: string,
+    reduce: boolean,
+  ) => {
+    void runSettingsAction(
+      () => api.set_appearance_preferences(appearance, style, reduce),
+      (next) => {
+        setTheme(next);
+        setSettingsMessage({ level: "info", text: "外观已保存" });
+      },
+    );
   };
 
   const handleSelectTheme = (id: string) => {
@@ -848,7 +930,9 @@ export default function App() {
       (hotkeyStatus) => {
         // 配置保存用户请求的组合；门户返回的 label 只用于显示实际绑定。
         setSettings({ ...settings, hotkey });
-        setStatus((current) => (current ? { ...current, hotkey: hotkeyStatus } : current));
+        setStatus((current) =>
+          current ? { ...current, hotkey: hotkeyStatus } : current,
+        );
         setSettingsMessage({
           level: "info",
           text: hotkeyStatus.pending
@@ -881,29 +965,20 @@ export default function App() {
       setVisible(false);
       return;
     }
-    if (item.kind === "command") {
+    if (
+      item.kind === "command" ||
+      (response.scope.kind === "home" && item.kind === "memo")
+    ) {
       // 命令条目会改变宿主的查询状态（重新扫描软件、进入插件范围）：
       // 必须按当前输入重新读取结果，否则列表与宿主状态不一致。
-      void api.query(input).then(apply);
+      const next = await api.refresh_state();
+      if (next.scope.kind === "plugin") setFeedback(null);
+      apply(next);
+      setMenuOpen(false);
+      focusInput();
     }
     // `pastePending`：宿主已准备好剪贴板，正在等待外壳关窗并注入粘贴。窗口由外壳关闭，
     // 这里只显示反馈、不隐藏（真实外壳在关窗后会以最终状态更新同一块反馈区）。
-  };
-
-  const switchScope = async (plugin: PluginView | null) => {
-    const keyword = plugin ? plugin.keywords[0] ?? plugin.name : "";
-    setInput(keyword);
-    focusInput();
-    const next = await api.query(keyword);
-    apply(next);
-    if (plugin && next.scope.kind === "home" && next.seq === appliedSeq.current) {
-      const entry = next.items.find(item => item.id === `flashcast.plugin.${plugin.id}`);
-      if (entry) {
-        const outcome = await api.execute(entry.id);
-        if (outcome.status === "failed") setFeedback(outcome);
-        else apply(await api.query(keyword));
-      }
-    }
   };
 
   /**
@@ -936,10 +1011,21 @@ export default function App() {
     // 除搜索框以外的可编辑控件自己处理按键（设置页的路径、正文等，搜索页目前没有）。
     const editable =
       target !== null &&
-      (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable);
+      (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) ||
+        target.isContentEditable);
     if (editable && target !== inputRef.current) {
       return;
     }
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      event.key.toLowerCase() === "k" &&
+      response.scope.kind === "plugin"
+    ) {
+      event.preventDefault();
+      setMenuOpen(!menuOpen);
+      return;
+    }
+    if (menuOpen) return;
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
@@ -1010,7 +1096,6 @@ export default function App() {
       return;
     }
     let cancelled = false;
-    setPreviewOpen(true);
     void api
       .preview(selectedId)
       .then((next) => {
@@ -1026,12 +1111,27 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedId, response.seq]);
 
-  const memoView = (response.scope.kind === "plugin" && response.scope.id === "memo") || response.items.some(item => item.kind === "memo");
+  const memoView =
+    response.scope.kind === "plugin" && response.scope.id === "memo";
   useEffect(() => {
-    if (screen === "search" && memoView) { void loadMemos(); setSettingsMessage(null); }
-  }, [screen, memoView, workspace?.path]);
+    if (
+      screen === "search" &&
+      response.scope.kind === "plugin" &&
+      response.scope.id === "clipboard"
+    )
+      void loadClipboard();
+    if (screen === "search" && memoView) {
+      void loadMemos();
+      setSettingsMessage(null);
+    }
+  }, [
+    screen,
+    memoView,
+    response.scope.kind === "plugin" ? response.scope.id : "",
+    workspace?.path,
+  ]);
 
   const scopeLabel = useMemo(() => response.scopeLabel, [response.scopeLabel]);
 
@@ -1046,7 +1146,17 @@ export default function App() {
       data-browser-preview={isBrowserMock ? "true" : "false"}
     >
       <header className="search-row">
-        <svg className="search-symbol" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+        <svg
+          className="search-symbol"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+        >
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <path d="m16 16 4.5 4.5" />
+        </svg>
         <input
           ref={inputRef}
           id="search-input"
@@ -1056,7 +1166,17 @@ export default function App() {
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          placeholder="搜索软件、备忘录、剪贴板…"
+          placeholder={
+            response.scope.kind === "plugin"
+              ? "搜索 " +
+                (plugins.find(
+                  (p) =>
+                    p.id ===
+                    (response.scope.kind === "plugin" ? response.scope.id : ""),
+                )?.name ?? "内容") +
+                "…"
+              : "搜索软件或插件…"
+          }
           value={input}
           disabled={memoEditing}
           aria-label="搜索"
@@ -1086,12 +1206,43 @@ export default function App() {
           title="设置（Ctrl+,）"
           onClick={openSettings}
         >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m9 3-1 3-3 1v4l-2 1 2 1v4l3 1 1 3h6l1-3 3-1v-4l2-1-2-1V7l-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            aria-hidden="true"
+          >
+            <path d="m9 3-1 3-3 1v4l-2 1 2 1v4l3 1 1 3h6l1-3 3-1v-4l2-1-2-1V7l-3-1-1-3Z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
         </button>
       </header>
 
       {screen === "settings" ? (
         <SettingsScreen
+          commands={commands}
+          onSaveCommand={(id, shortcut) => {
+            void runSettingsAction(
+              () => api.set_command_shortcut(id, shortcut),
+              async (next) => {
+                setCommands(next);
+                setSettings(await api.get_settings());
+              },
+            );
+          }}
+          onOpenPlugin={(id) => {
+            void api
+              .execute_plugin_command(`flashcast.plugin.${id}`)
+              .then((next) => {
+                apply(next);
+                setScreen("search");
+                setSettingsMessage(null);
+                focusInput();
+              });
+          }}
           workspace={workspace}
           settings={settings}
           theme={theme}
@@ -1110,8 +1261,6 @@ export default function App() {
           selectedPaths={selectedPaths}
           diffPath={diffPath}
           plugins={plugins}
-          memos={memos}
-          memoProblems={memoProblems}
           memoEnabled={memoPlugin?.enabled ?? false}
           chrome={chrome}
           clipboard={clipboard}
@@ -1137,15 +1286,8 @@ export default function App() {
           onToggleFeaturePlugin={handleToggleFeaturePlugin}
           onAssociateChromeProfile={handleAssociateChromeProfile}
           onRefreshChromeBookmarks={handleRefreshChromeBookmarks}
-          onCreateMemo={handleCreateMemo}
-          onUpdateMemo={handleUpdateMemo}
-          onDeleteMemo={handleDeleteMemo}
           onToggleClipboardPaused={handleToggleClipboardPaused}
           onSaveClipboardLimits={handleSaveClipboardLimits}
-          onPinClipboardEntry={handlePinClipboardEntry}
-          onDeleteClipboardEntry={handleDeleteClipboardEntry}
-          onClearClipboardHistory={handleClearClipboardHistory}
-          onSaveClipboardFileCopy={handleSaveClipboardFileCopy}
           current={settingsSection}
           onSectionChange={setSettingsSection}
         />
@@ -1158,44 +1300,74 @@ export default function App() {
             workspaceAlert={workspaceAlert}
           />
 
-          <div className="scope-strip" aria-label="查询范围">
-            <button type="button" aria-pressed={response.scope.kind === "home"} onClick={() => void switchScope(null)}>快速访问</button>
-            {plugins.filter(plugin => plugin.enabled).map(plugin => <button key={plugin.id} type="button"
-              aria-pressed={response.scope.kind === "plugin" && response.scope.id === plugin.id}
-              onClick={() => void switchScope(plugin)}>{plugin.name}</button>)}
-          </div>
-          {memoView ? <MemoWorkbench items={response.items} selection={response.selection} memos={memos} problems={memoProblems}
-            workspaceKey={workspace?.path ?? null} enabled={memoPlugin?.enabled ?? false} busy={settingsBusy} message={settingsMessage}
-            onSelect={index => { void api.set_selection(index).then(apply); }} onPaste={item => void runExecute(item)}
-            onCreate={handleCreateMemo} onUpdate={handleUpdateMemo} onDelete={handleDeleteMemo}
-            onEditingChange={setMemoEditing}
-            onOpenWorkspace={() => { setSettingsSection("workspace"); openSettings(); }} /> : (
-          <div className="search-body" data-has-preview={selected && ["memo", "bookmark", "clipboardEntry"].includes(selected.kind) ? "true" : "false"}>
-            <ResultList
+          {response.scope.kind === "plugin" ? (
+            <PluginPage
+              id={response.scope.id}
+              title={
+                plugins.find(
+                  (p) =>
+                    p.id ===
+                    (response.scope.kind === "plugin" ? response.scope.id : ""),
+                )?.name ?? response.scope.id
+              }
               items={response.items}
               selection={response.selection}
-              query={response.input}
-              onActivate={(item) => void runExecute(item)}
+              query={input}
+              preview={preview}
+              memos={memos}
+              problems={memoProblems}
+              clipboard={clipboard}
+              workspaceKey={workspace?.path ?? null}
+              busy={settingsBusy}
+              message={settingsMessage}
+              menuOpen={menuOpen}
+              onMenu={setMenuOpen}
+              onBack={() => {
+                void api.back().then((next) => {
+                  apply(next.response);
+                  setSettingsMessage(null);
+                  setMenuOpen(false);
+                  focusInput();
+                });
+              }}
+              onSelect={(index) => {
+                void api.set_selection(index).then(apply);
+              }}
+              onExecute={(item) => void runExecute(item)}
+              onEditing={setMemoEditing}
+              onCreate={handleCreateMemo}
+              onUpdate={handleUpdateMemo}
+              onDelete={handleDeleteMemo}
+              onPin={handlePinClipboardEntry}
+              onDeleteClipboard={handleDeleteClipboardEntry}
+              onClear={handleClearClipboardHistory}
+              onWorkspace={() => {
+                setSettingsSection("workspace");
+                openSettings();
+              }}
             />
-
-            <aside className="stage" data-testid="stage">
-              {selected &&
-              (selected.kind === "memo" ||
-                selected.kind === "bookmark" ||
-                selected.kind === "clipboardEntry") ? (
-                <MemoPreview
-                  item={selected}
-                  preview={preview}
-                  open={previewOpen}
-                  onToggle={() => setPreviewOpen((current) => !current)}
-                />
-              ) : null}
-            </aside>
-          </div>
-
+          ) : (
+            <div className="search-body home-results">
+              <ResultList
+                items={response.items}
+                selection={response.selection}
+                query={response.input}
+                onSelect={(index) => {
+                  void api.set_selection(index).then(apply);
+                }}
+                onActivate={(item) => void runExecute(item)}
+              />
+            </div>
           )}
 
-          <ActionBar selected={selected} count={response.items.length} editing={memoEditing} />
+          <ActionBar
+            selected={selected}
+            count={response.items.length}
+            editing={memoEditing}
+            plugin={response.scope.kind === "plugin"}
+            menuOpen={menuOpen}
+            onActions={() => setMenuOpen(!menuOpen)}
+          />
         </>
       )}
 

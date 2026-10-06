@@ -44,6 +44,7 @@ pub fn spawn<R: Runtime>(app: &AppHandle<R>) {
                 registered_hotkey = settings.hotkey.clone();
                 crate::hotkey::apply(&app, &state, &settings.hotkey);
             }
+            crate::hotkey::sync_commands(&app);
             let payload = WorkspaceEvent {
                 status: state.host.workspace_status(),
                 settings,

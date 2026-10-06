@@ -126,8 +126,9 @@ impl DeviceStore {
     ) -> Result<(), DeviceError> {
         let raw = self.get(KEY_WORKSPACE_REMOTES)?;
         let mut map: BTreeMap<String, WorkspaceRemote> = match raw {
-            Some(raw) => serde_json::from_str(&raw)
-                .map_err(|error| DeviceError::Corrupt(format!("{KEY_WORKSPACE_REMOTES}：{error}")))?,
+            Some(raw) => serde_json::from_str(&raw).map_err(|error| {
+                DeviceError::Corrupt(format!("{KEY_WORKSPACE_REMOTES}：{error}"))
+            })?,
             None => BTreeMap::new(),
         };
         let key = workspace.to_string_lossy().into_owned();
@@ -139,8 +140,8 @@ impl DeviceStore {
                 map.remove(&key);
             }
         }
-        let text = serde_json::to_string(&map)
-            .map_err(|error| DeviceError::Io(error.to_string()))?;
+        let text =
+            serde_json::to_string(&map).map_err(|error| DeviceError::Io(error.to_string()))?;
         self.put(KEY_WORKSPACE_REMOTES, &text)
     }
 
@@ -231,8 +232,7 @@ impl CredentialStore {
         let text = serde_json::to_string_pretty(state)
             .map_err(|error| DeviceError::Io(error.to_string()))?;
         let path = self.file();
-        write_atomic(&path, text.as_bytes())
-            .map_err(|error| DeviceError::Io(error.to_string()))?;
+        write_atomic(&path, text.as_bytes()).map_err(|error| DeviceError::Io(error.to_string()))?;
         // 令牌文件只给当前用户读写。Unix 之外（Windows）依赖用户目录的 ACL。
         #[cfg(unix)]
         {

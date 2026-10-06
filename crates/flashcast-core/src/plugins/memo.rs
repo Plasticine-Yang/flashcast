@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::memo::{Memo, MemoBook};
 use crate::model::{DefaultAction, ItemKind, MatchTier, Preview, Score, SearchItem};
 use crate::plugin::{
-    strip_keyword, FeaturePlugin, Keyword, PluginError, PluginManifest, PluginScope, SearchContext,
+    FeaturePlugin, Keyword, PluginError, PluginManifest, PluginScope, SearchContext,
     CAP_CLIPBOARD_WRITE,
 };
 use crate::ranking::score_match;
@@ -24,7 +24,7 @@ pub const MEMO_PLUGIN_ID: &str = "memo";
 pub const MEMO_KEYWORD_ZH: &str = "备忘录";
 
 /// 一次插件搜索最多返回多少条。宿主也会限制总数。
-const SCOPE_LIMIT: usize = 50;
+const SCOPE_LIMIT: usize = usize::MAX;
 
 /// 备忘录插件的实现。
 pub struct MemoPlugin {
@@ -115,7 +115,7 @@ impl PluginScope for MemoScope {
     }
 
     fn search(&self, ctx: &SearchContext) -> Result<Vec<SearchItem>, PluginError> {
-        let query = strip_keyword(&ctx.query, self.keyword());
+        let query = ctx.query.clone();
         let snapshot = self.book.snapshot();
         let mut items: Vec<SearchItem> = Vec::new();
         if query.is_empty() {

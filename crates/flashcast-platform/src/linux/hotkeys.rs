@@ -94,6 +94,19 @@ impl HotkeyManager for LinuxHotkeyManager {
         hotkey_backend::register(spec, on_press)
     }
 
+    fn register_command(
+        &self,
+        spec: &HotkeySpec,
+        id: &str,
+        title: &str,
+        on_press: PressCallback,
+    ) -> Result<HotkeyHandle, HotkeyError> {
+        if self.session == SessionType::Wayland && !self.force_x11 {
+            return super::portal_hotkeys::register_command(spec, id, title, on_press);
+        }
+        self.register(spec, on_press)
+    }
+
     fn update(
         &self,
         handle: &HotkeyHandle,

@@ -126,7 +126,7 @@ fn item_view(state: &AppState, item: &SearchItem) -> ItemView {
     }
 }
 
-fn query_view(state: &AppState, response: &QueryResponse) -> QueryView {
+pub(crate) fn query_view(state: &AppState, response: &QueryResponse) -> QueryView {
     QueryView {
         seq: response.seq,
         scope: response.scope.clone(),
@@ -135,7 +135,15 @@ fn query_view(state: &AppState, response: &QueryResponse) -> QueryView {
         items: response
             .items
             .iter()
-            .map(|item| item_view(state, item))
+            .map(|item| {
+                let mut view = item_view(state, item);
+                if item.id.starts_with(flashcast_core::PLUGIN_ENTRY_PREFIX)
+                    || (response.scope.is_home() && item.kind == flashcast_core::ItemKind::Memo)
+                {
+                    view.default_action_label = "进入".into();
+                }
+                view
+            })
             .collect(),
         selection: response.selection,
         notice: response.notice.clone(),
@@ -246,6 +254,7 @@ pub fn set_settings(
     if applied.hotkey != previous.hotkey {
         crate::hotkey::apply(&app, &state, &applied.hotkey);
     }
+    crate::hotkey::sync_commands(&app);
     Ok(crate::hotkey::status(&state))
 }
 
@@ -318,6 +327,7 @@ pub fn sync_window_material(
 /// 启用或停用插件（功能插件与主题插件共用同一张清单）。
 #[tauri::command]
 pub fn set_plugin_enabled(
+    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
     enabled: bool,
@@ -325,7 +335,9 @@ pub fn set_plugin_enabled(
     state
         .host
         .set_plugin_enabled(&id, enabled)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    crate::hotkey::sync_commands(&app);
+    Ok(())
 }
 
 /// 上报当前系统外观；「跟随系统」的主题据此在运行时切换。
@@ -938,4 +950,31 @@ pub fn rescan_and_push(app: &AppHandle) {
 /// 供内部复用：把 Arc<Host> 交给外壳。
 pub fn host_of(state: &AppState) -> Arc<flashcast_core::Host> {
     Arc::clone(&state.host)
+}
+
+#[tauri::command]
+pub fn get_plugin_commands(state: State<'_, AppState>) -> Vec<crate::hotkey::CommandStatusView> {
+    crate::hotkey::command_status(&state)
+}
+#[tauri::command]
+pub fn set_command_shortcut(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    shortcut: Option<String>,
+) -> Result<Vec<crate::hotkey::CommandStatusView>, String> {
+    state
+        .host
+        .set_command_shortcut(&id, shortcut)
+        .map_err(|e| e.to_string())?;
+    crate::hotkey::sync_commands(&app);
+    Ok(crate::hotkey::command_status(&state))
+}
+#[tauri::command]
+pub fn execute_plugin_command(state: State<'_, AppState>, id: String) -> Result<QueryView, String> {
+    let outcome = state.host.execute_plugin_command(&id);
+    if outcome.status == flashcast_core::ActionStatus::Failed {
+        return Err(outcome.message.unwrap_or_default());
+    }
+    Ok(query_view(&state, &state.host.snapshot()))
 }

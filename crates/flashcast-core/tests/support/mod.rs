@@ -1309,7 +1309,7 @@ impl ClipboardHarness {
 
     /// 进入剪贴板范围并取回其中的条目（经查询入口）。
     pub fn scope_items(&self, input: &str) -> Vec<SearchItem> {
-        self.host.query(input).items
+        plugin_query(&self.host, input).items
     }
 
     /// 进入范围并取回第一条剪贴板条目。
@@ -1418,4 +1418,36 @@ pub fn focused_app(id: &str) -> flashcast_platform::FocusedApp {
         pid: Some(4242),
         window: Some(11),
     }
+}
+
+/// 经明确页面命令进入，再提交插件内的查询；兼容旧 fixture 的关键词前缀写法。
+/// 此帮助函数模拟两个 UI 动作，不改变 Host::query 的显式进入契约。
+pub fn plugin_query(host: &Host, input: &str) -> flashcast_core::QueryResponse {
+    let mut matches: Vec<(String, String)> = host
+        .plugin_manifests()
+        .into_iter()
+        .filter(|(_, enabled)| *enabled)
+        .flat_map(|(m, _)| m.keywords.into_iter().map(move |k| (m.id.clone(), k)))
+        .filter(|(_, k)| {
+            input.eq_ignore_ascii_case(k)
+                || input
+                    .to_lowercase()
+                    .starts_with(&format!("{} ", k.to_lowercase()))
+        })
+        .collect();
+    matches.sort_by_key(|(_, k)| std::cmp::Reverse(k.len()));
+    if let Some((id, keyword)) = matches.first() {
+        if host.snapshot().scope.is_home() {
+            let outcome = host.execute_plugin_command(&format!("flashcast.plugin.{id}"));
+            assert_eq!(outcome.status, flashcast_core::ActionStatus::Done);
+        } else if !matches!(&host.snapshot().scope, flashcast_core::QueryScope::Plugin {id: current,..} if current == id)
+        {
+            let _ = host.execute_plugin_command(&format!("flashcast.plugin.{id}"));
+        }
+        return host.query(input.get(keyword.len()..).unwrap_or("").trim());
+    }
+    if input.is_empty() {
+        return host.reset_home();
+    }
+    host.query(input)
 }

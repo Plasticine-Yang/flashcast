@@ -222,6 +222,11 @@ pub trait PluginScope: Send + Sync {
 pub trait FeaturePlugin: Send + Sync {
     fn manifest(&self) -> PluginManifest;
 
+    /// 声明页面命令与平台默认快捷键；原生注册统一由宿主外壳完成。
+    fn commands(&self) -> Vec<crate::PluginCommand> {
+        vec![crate::PluginCommand::open_page(&self.manifest())]
+    }
+
     /// 首次写入插件清单时的默认启用状态。
     ///
     /// 默认启用。剪贴板历史把它改成 `false`：后台捕获用户复制的内容是隐私敏感行为，

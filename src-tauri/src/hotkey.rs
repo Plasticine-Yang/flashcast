@@ -148,3 +148,154 @@ pub fn apply_from_settings<R: Runtime>(app: &AppHandle<R>) {
     let settings = state.host.settings();
     apply(app, &state, &settings.hotkey);
 }
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandStatusView {
+    #[serde(flatten)]
+    pub command: flashcast_core::PluginCommandView,
+    pub registered: bool,
+    pub pending: bool,
+    pub effective_shortcut: Option<String>,
+    pub error: Option<String>,
+}
+
+pub fn command_status(state: &AppState) -> Vec<CommandStatusView> {
+    let commands = state.host.plugin_commands();
+    let registrations = lock(&state.command_hotkeys);
+    commands
+        .into_iter()
+        .map(|command| {
+            let live = registrations.get(&command.id);
+            CommandStatusView {
+                registered: live.is_some_and(|r| r.enabled && r.hotkey.handle.is_some()),
+                pending: live.is_some_and(|r| r.hotkey.pending),
+                effective_shortcut: live
+                    .filter(|r| r.hotkey.handle.is_some())
+                    .map(|r| r.hotkey.label.clone()),
+                error: live.and_then(|r| r.hotkey.error.clone()),
+                command,
+            }
+        })
+        .collect()
+}
+
+pub fn sync_commands<R: Runtime>(app: &AppHandle<R>) {
+    // Windows 的 RegisterHotKey 绑定调用线程，所有非门户注册必须回到主线程。
+    let app = app.clone();
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let state = handle.state::<AppState>();
+        for command in state.host.plugin_commands() {
+            let enabled = command.enabled && !command.shortcut.is_empty();
+            let generation = {
+                let mut all = lock(&state.command_hotkeys);
+                let entry = all.entry(command.id.clone()).or_default();
+                if entry.enabled == enabled && entry.requested == command.shortcut {
+                    continue;
+                }
+                entry.enabled = enabled;
+                entry.requested = command.shortcut.clone();
+                entry.hotkey.generation += 1;
+                entry.hotkey.pending = enabled;
+                entry.hotkey.error = None;
+                if !enabled {
+                    if let Some(old) = entry.hotkey.handle.take() {
+                        let _ = state.platform.hotkeys.unregister(&old);
+                    }
+                }
+                entry.hotkey.generation
+            };
+            if !enabled {
+                continue;
+            }
+            let app = handle.clone();
+            #[cfg(target_os = "linux")]
+            if flashcast_platform::linux::detect_session_type()
+                == flashcast_platform::SessionType::Wayland
+            {
+                std::thread::spawn(move || register_command(&app, command, generation));
+                continue;
+            }
+            register_command(&app, command, generation);
+        }
+        let _ = handle.emit("flashcast://plugin-commands", command_status(&state));
+    });
+}
+
+fn register_command<R: Runtime>(
+    app: &AppHandle<R>,
+    command: flashcast_core::PluginCommandView,
+    generation: u64,
+) {
+    let state = app.state::<AppState>();
+    let _registration = lock(&state.hotkey_registration);
+    if !lock(&state.command_hotkeys)
+        .get(&command.id)
+        .is_some_and(|r| r.enabled && r.hotkey.generation == generation)
+    {
+        return;
+    }
+    let callback_app = app.clone();
+    let id = command.id.clone();
+    let binding = command.shortcut.clone();
+    let callback: PressCallback = Arc::new(move |activation| {
+        let app = callback_app.clone();
+        let id = id.clone();
+        let binding = binding.clone();
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let state = handle.state::<AppState>();
+            if !lock(&state.command_hotkeys).get(&id).is_some_and(|r| {
+                r.enabled
+                    && r.hotkey.handle.as_ref().is_some_and(|h| {
+                        h.spec.canonical()
+                            == HotkeySpec::parse(&binding)
+                                .map(|s| s.canonical())
+                                .unwrap_or_default()
+                    })
+            }) {
+                return;
+            }
+            summon::summon_command(&handle, activation.token.as_deref(), &id);
+        });
+    });
+    let result = HotkeySpec::parse(&command.shortcut)
+        .map_err(Into::into)
+        .and_then(|spec| {
+            state
+                .platform
+                .hotkeys
+                .register_command(&spec, &command.id, &command.title, callback)
+        });
+    let mut all = lock(&state.command_hotkeys);
+    let Some(entry) = all
+        .get_mut(&command.id)
+        .filter(|r| r.enabled && r.hotkey.generation == generation)
+    else {
+        drop(all);
+        if let Ok(handle) = result {
+            let _ = state.platform.hotkeys.unregister(&handle);
+        }
+        return;
+    };
+    entry.hotkey.pending = false;
+    match result {
+        Ok(handle) => {
+            entry.hotkey.label = handle
+                .trigger_description
+                .clone()
+                .unwrap_or(command.shortcut);
+            let old = entry.hotkey.handle.replace(handle);
+            drop(all);
+            if let Some(old) = old {
+                let _ = state.platform.hotkeys.unregister(&old);
+            }
+        }
+        Err(error) => {
+            entry.hotkey.error = Some(error.to_string());
+            drop(all);
+        }
+    }
+    let _ = app.emit("flashcast://plugin-commands", command_status(&state));
+}

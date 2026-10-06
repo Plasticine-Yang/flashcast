@@ -39,7 +39,7 @@ pub const CHROME_KEYWORD_ZH: &str = "chrome 书签";
 pub const CAP_CHROME_OPEN: &str = "chrome.open";
 
 /// 一次插件搜索最多返回多少条。宿主也会限制总数。
-const SCOPE_LIMIT: usize = 50;
+const SCOPE_LIMIT: usize = usize::MAX;
 
 /// Chrome 书签插件的实现。
 pub struct ChromeBookmarksPlugin {
@@ -56,7 +56,13 @@ impl ChromeBookmarksPlugin {
                 "Chrome 书签",
                 env!("CARGO_PKG_VERSION"),
             )
-            .with_keywords([CHROME_KEYWORD_EN, CHROME_KEYWORD_ZH])
+            .with_keywords([
+                CHROME_KEYWORD_EN,
+                CHROME_KEYWORD_ZH,
+                "bookmark",
+                "bookmarks",
+                "书签",
+            ])
             .with_capabilities([CAP_CHROME_OPEN]),
         }
     }
@@ -115,26 +121,13 @@ impl PluginScope for ChromeBookmarksScope {
             other => return Err(PluginError::failed(other.label_zh())),
         }
 
-        let query = strip_keyword(&ctx.query, self.keyword());
+        let query = ctx.query.clone();
         let mut items: Vec<SearchItem> = search_bookmarks(&snapshot.entries, &query)
             .into_iter()
             .map(|(entry, score)| bookmark_item(entry, score))
             .collect();
         items.truncate(ctx.limit.min(SCOPE_LIMIT));
         Ok(items)
-    }
-}
-
-/// 去掉输入里已经用于进入范围的关键词前缀（`chrome bookmarks rust` → `rust`）。
-fn strip_keyword(query: &str, keyword: &str) -> String {
-    let query = query.trim().to_lowercase();
-    let keyword = keyword.trim().to_lowercase();
-    if query == keyword {
-        return String::new();
-    }
-    match query.strip_prefix(&keyword) {
-        Some(rest) => rest.trim().to_string(),
-        None => query,
     }
 }
 
