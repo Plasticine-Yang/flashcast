@@ -1,0 +1,14 @@
+# pnpm settings for this single-package repository.
+# Hoisted layout keeps electron-builder compatible with Electron's tooling.
+nodeLinker: hoisted
+
+# Electron 45's package has no postinstall of its own; the root postinstall
+# script downloads the runtime. electron-winstaller is only used by the unused
+# Squirrel.Windows target, so keep its install script disabled.
+allowBuilds:
+  electron-winstaller: false
+
+# Electron 45.2.1 is pinned and was still inside pnpm's 24h quarantine window
+# when this lockfile was created. Remove this entry once it is older.
+minimumReleaseAgeExclude:
+  - electron@45.2.1

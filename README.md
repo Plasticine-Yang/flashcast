@@ -49,21 +49,23 @@ UI/UX 规范要求跨平台毛玻璃、原生剪贴板与全局快捷键。Elect
 
 ## 快速开始
 
-前置：Node.js ≥ 22.12（Electron 45 要求），npm。
+前置：Node.js ≥ 22.12（Electron 45 要求），pnpm（版本由 `packageManager` 锁定为 pnpm 12；未安装时可用 `corepack enable`）。
 
 ```bash
-npm install
-npm run dev        # 开发模式（electron-vite）
-npm run build      # 构建 main / preload / renderer 到 out/
-npm start          # 预览构建产物
+pnpm install
+pnpm dev           # 开发模式（electron-vite，已带 --noSandbox）
+pnpm build         # 构建 main / preload / renderer 到 out/
+pnpm start         # 预览构建产物
 ```
 
-Linux 若开发环境未配置 Chrome sandbox（例如容器内），需要给 Electron 加 `--no-sandbox` 才能启动；**打包产物请使用系统正常的 sandbox 配置**，不要默认关闭沙箱。
+`pnpm dev` 会为 Electron 传入 `--noSandbox`，方便在未配置 Chrome SUID sandbox 的开发机（例如容器）里直接启动；**打包产物仍使用系统正常的 sandbox 配置**，不要默认关闭沙箱。`pnpm start` 预览构建产物时仍保留沙箱，若本机同样未配置 SUID sandbox，可改用 `pnpm start -- --noSandbox`。
+
+`postinstall` 会下载 Electron 运行时；如果 GitHub 下载受限，可在安装前设置镜像，例如 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ pnpm install`。
 
 仅查看 UI（无需 Electron）的可视化预览：
 
 ```bash
-npm run preview:ui
+pnpm preview:ui
 # http://localhost:5199/?window=launcher
 # http://localhost:5199/?window=launcher&preview=clipboard
 # http://localhost:5199/?window=launcher&preview=bookmarks
@@ -76,19 +78,19 @@ npm run preview:ui
 ### 测试与类型检查
 
 ```bash
-npm test
-npm run typecheck
+pnpm test
+pnpm typecheck
 ```
 
 ### 打包
 
 ```bash
-npm run dist:linux
-npm run dist:mac
-npm run dist:win
+pnpm dist:linux
+pnpm dist:mac
+pnpm dist:win
 ```
 
-`electron-builder.yml` 已配置三端目标（AppImage/deb、dmg/zip、nsis）、图标、`LSUIElement`（macOS 菜单栏应用）与 Linux 桌面项。修改 `build/*.svg` 后可运行 `npm run icons` 重新生成 PNG 图标与视频封面占位图（需要本机有 Chrome/Chromium）。
+`electron-builder.yml` 已配置三端目标（AppImage/deb、dmg/zip、nsis）、图标、`LSUIElement`（macOS 菜单栏应用）与 Linux 桌面项。修改 `build/*.svg` 后可运行 `pnpm icons` 重新生成 PNG 图标与视频封面占位图（需要本机有 Chrome/Chromium）。
 
 ## 快捷键
 
@@ -224,7 +226,7 @@ module.exports = {
 - **应用发现**：Linux 读取 `.desktop`；macOS 扫描 `/Applications` 等；Windows 扫描开始菜单快捷方式。部分 UWP/特殊打包应用可能不出现。
 - **更新检查**：当前版本未配置发布源，“检查更新”会明确提示开发构建/未配置更新源。
 - **结果分组**：所有分组结果均可滚动访问，不做隐藏式分页，以保证键盘可达性。
-- **开发预览**：`npm run preview:ui` 使用 mock bridge；它不会访问真实剪贴板/Chrome/Git。
+- **开发预览**：`pnpm preview:ui` 使用 mock bridge；它不会访问真实剪贴板/Chrome/Git。
 
 ## 目录
 

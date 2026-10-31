@@ -135,8 +135,8 @@ src/shared/
 
 ## 6. 已验证范围
 
-- `npm run typecheck` 通过；`npm test` 20 个用例通过（模糊匹配、快捷键、Chrome 书签扁平化、`.desktop`/Exec 解析）。
-- `npm run build` 通过；`electron-builder --dir --linux` 生成可运行的 unpacked 应用，asar 与 `resources/build` 图标/封面资源路径验证通过。
+- `pnpm typecheck` 通过；`pnpm test` 20 个用例通过（模糊匹配、快捷键、Chrome 书签扁平化、`.desktop`/Exec 解析）。
+- `pnpm build` 通过；`electron-builder --dir --linux` 生成可运行的 unpacked 应用，asar 与 `resources/build` 图标/封面资源路径验证通过。
 - 在 Ubuntu GNOME/Wayland 的 XWayland 环境启动真实 Electron 应用：全局快捷键注册成功、无渲染错误。
 - 通过 Chrome DevTools Protocol 驱动真实应用：
   - `ArrowDown` / `Ctrl+J` 改变选中项；
@@ -144,7 +144,7 @@ src/shared/
   - `Ctrl+Backspace` 删除选中项；`Super+Alt+Backspace` 两次触发清空确认与清空；
   - 打开外部插件、外部插件设置、安装本地插件、主题切换、快捷键更新与恢复默认均成功。
 - 真实 Electron 截图验证深色/浅色主题、剪切板四类内容与 1.5s 预览、书签 favicon/文件夹 chip、设置窗口。
-- `npm run preview:ui` 支持在无 Electron 环境下检查启动器、各插件页、设置页和模态框。
+- `pnpm preview:ui` 支持在无 Electron 环境下检查启动器、各插件页、设置页和模态框。
 
 ## 7. 需求覆盖对照
 
