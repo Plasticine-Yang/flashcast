@@ -1,0 +1,45 @@
+appId: com.flashcast.app
+productName: Flashcast
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: build
+    to: build
+    filter:
+      - icon.png
+      - icon.svg
+      - tray.png
+      - trayTemplate.png
+      - trayTemplate@2x.png
+      - video-cover.png
+asarUnpack:
+  - resources/**
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.png
+  target:
+    - dmg
+    - zip
+  extendInfo:
+    LSUIElement: true
+    NSAppleEventsUsageDescription: Flashcast uses AppleScript to paste on your behalf.
+win:
+  icon: build/icon.png
+  target:
+    - nsis
+linux:
+  icon: build/icon.png
+  category: Utility
+  target:
+    - AppImage
+    - deb
+  desktop:
+    entry:
+      Name: Flashcast
+      Comment: Fast, keyboard-first launcher
+      Keywords: launcher;search;clipboard;
+      StartupNotify: 'false'

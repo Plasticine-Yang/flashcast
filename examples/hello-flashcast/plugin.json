@@ -1,0 +1,35 @@
+{
+  "id": "hello-flashcast",
+  "name": "Hello Flashcast",
+  "version": "1.0.0",
+  "description": "示例外部插件：展示可搜索列表、设置项与插件动作。",
+  "keywords": ["hello", "示例", "demo", "greeting"],
+  "entry": "index.js",
+  "icon": "icon.svg",
+  "searchable": true,
+  "primaryAction": "复制问候",
+  "permissions": [],
+  "configDefaults": {
+    "greeting": "你好，Flashcast",
+    "count": 5
+  },
+  "settings": [
+    {
+      "key": "greeting",
+      "label": "问候语",
+      "type": "text",
+      "description": "作为列表标题展示，修改后立即保存。",
+      "placeholder": "输入一句问候"
+    },
+    {
+      "key": "count",
+      "label": "条目数量",
+      "type": "number",
+      "min": 1,
+      "max": 10,
+      "step": 1,
+      "description": "生成 1–10 条示例结果。",
+      "unit": "条"
+    }
+  ]
+}

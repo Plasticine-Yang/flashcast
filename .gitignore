@@ -1,0 +1,10 @@
+node_modules/
+out/
+dist/
+.cache/
+.dev-data/
+.tmp/
+.DS_Store
+*.log
+coverage/
+extensions/
