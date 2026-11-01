@@ -441,10 +441,19 @@ export const mockChromeSettings: PluginSettingsPage = {
       key: 'profilePath',
       type: 'text',
       label: 'Profile 路径',
-      value: '/home/you/.config/google-chrome/Default/Bookmarks',
+      value: '/home/you/.config/google-chrome/Default',
       mono: true,
       readonly: true,
-      description: '书签数据来自该 Chrome 配置文件'
+      description: '该 Profile 的本地数据目录'
+    },
+    {
+      key: 'bookmarkFile',
+      type: 'text',
+      label: '书签文件',
+      value: '/home/you/.config/google-chrome/Default/AccountBookmarks',
+      mono: true,
+      readonly: true,
+      description: 'Chrome 把书签保存在登录的 Google 账户里（AccountBookmarks）'
     }
   ],
   error: null,

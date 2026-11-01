@@ -141,6 +141,13 @@ export interface ChromeBookmark {
   domain: string
 }
 
+/**
+ * Which file Chrome keeps the profile's bookmarks in: `Bookmarks` for local
+ * bookmarks, `AccountBookmarks` once the profile saves bookmarks in the
+ * signed-in Google Account.
+ */
+export type ChromeBookmarkSource = 'local' | 'account'
+
 export interface ClipboardPluginPage {
   kind: 'clipboard'
   pluginId: string
@@ -161,6 +168,7 @@ export interface ChromeBookmarksPluginPage {
   selectedProfile: string | null
   userDataDir: string
   bookmarkFile: string | null
+  bookmarkSource: ChromeBookmarkSource | null
   bookmarks: ChromeBookmark[]
   error: string | null
 }

@@ -3,8 +3,13 @@ import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
-import type { ChromeBookmark, ChromeProfile, PlatformId } from '@shared/types'
+import { delimiter, dirname, join } from 'node:path'
+import type {
+  ChromeBookmark,
+  ChromeBookmarkSource,
+  ChromeProfile,
+  PlatformId
+} from '@shared/types'
 import { domainOf } from '@shared/fuzzy'
 import { log } from './logger'
 
@@ -71,12 +76,26 @@ interface LocalState {
 
 const PROFILE_DIR_PATTERN = /^Profile \d+$/
 
+/**
+ * Chrome keeps bookmarks in one of two profile files. `Bookmarks` holds the
+ * local library; once the profile saves bookmarks in the signed-in Google
+ * Account the library lives in `AccountBookmarks` and `Bookmarks` is not
+ * written at all.
+ */
+export const CHROME_BOOKMARK_FILES: ReadonlyArray<{
+  name: string
+  source: ChromeBookmarkSource
+}> = [
+  { name: 'Bookmarks', source: 'local' },
+  { name: 'AccountBookmarks', source: 'account' }
+]
+
 function looksLikeProfileDir(name: string, dir: string): boolean {
   return (
     name === 'Default' ||
     PROFILE_DIR_PATTERN.test(name) ||
     existsSync(join(dir, 'Preferences')) ||
-    existsSync(join(dir, 'Bookmarks'))
+    CHROME_BOOKMARK_FILES.some((file) => existsSync(join(dir, file.name)))
   )
 }
 
@@ -203,8 +222,45 @@ export interface ChromeBookmarksResult {
   selectedProfile: string | null
   userDataDir: string
   bookmarkFile: string | null
+  bookmarkSource: ChromeBookmarkSource | null
   bookmarks: ChromeBookmark[]
   error: string | null
+}
+
+interface BookmarkCandidate {
+  path: string
+  source: ChromeBookmarkSource
+  mtimeMs: number
+}
+
+async function bookmarkCandidates(profileDir: string): Promise<BookmarkCandidate[]> {
+  const candidates: BookmarkCandidate[] = []
+  for (const file of CHROME_BOOKMARK_FILES) {
+    const path = join(profileDir, file.name)
+    try {
+      const info = await stat(path)
+      if (!info.isFile() || info.size === 0) continue
+      candidates.push({ path, source: file.source, mtimeMs: info.mtimeMs })
+    } catch {
+      // Missing file: the profile simply uses the other storage.
+    }
+  }
+  // Chrome only writes the file backing the active storage, so the most
+  // recently written one wins. Ties go to the account file because a profile
+  // migrated to account storage stops updating the local one.
+  candidates.sort(
+    (a, b) => b.mtimeMs - a.mtimeMs || (a.source === 'account' ? -1 : b.source === 'account' ? 1 : 0)
+  )
+  return candidates
+}
+
+/** Resolves which bookmark file the profile is actually using, if any. */
+export async function findBookmarksFile(
+  profileDir: string
+): Promise<{ path: string; source: ChromeBookmarkSource } | null> {
+  const candidates = await bookmarkCandidates(profileDir)
+  const first = candidates[0]
+  return first ? { path: first.path, source: first.source } : null
 }
 
 export async function readChromeBookmarks(
@@ -218,6 +274,7 @@ export async function readChromeBookmarks(
       selectedProfile: null,
       userDataDir,
       bookmarkFile: null,
+      bookmarkSource: null,
       bookmarks: [],
       error: '未找到 Chrome Profile'
     }
@@ -228,60 +285,54 @@ export async function readChromeBookmarks(
     profiles.find((item) => item.dir === 'Default') ??
     profiles[0]
 
-  try {
-    // Chrome only materialises `Bookmarks` after the first bookmark exists.
-    // A freshly used profile is still selectable and simply has no bookmarks.
-    if (!existsSync(profile.bookmarksPath)) {
-      return {
-        profiles,
-        selectedProfile: profile.dir,
-        userDataDir,
-        bookmarkFile: profile.bookmarksPath,
-        bookmarks: [],
-        error: null
-      }
-    }
-    const info = await stat(profile.bookmarksPath)
-    if (info.size > 40 * 1024 * 1024) {
-      return {
-        profiles,
-        selectedProfile: profile.dir,
-        userDataDir,
-        bookmarkFile: profile.bookmarksPath,
-        bookmarks: [],
-        error: '书签文件过大，无法读取'
-      }
-    }
-    if (info.size === 0) {
-      return {
-        profiles,
-        selectedProfile: profile.dir,
-        userDataDir,
-        bookmarkFile: profile.bookmarksPath,
-        bookmarks: [],
-        error: null
-      }
-    }
-    const raw = await readFile(profile.bookmarksPath, 'utf8')
-    const data = JSON.parse(raw) as BookmarksFile
+  const candidates = await bookmarkCandidates(dirname(profile.bookmarksPath))
+  if (candidates.length === 0) {
+    // Chrome only materialises a bookmark file after the first bookmark
+    // exists. A freshly used profile is still selectable and simply has none.
     return {
       profiles,
       selectedProfile: profile.dir,
       userDataDir,
       bookmarkFile: profile.bookmarksPath,
-      bookmarks: flattenBookmarks(data),
+      bookmarkSource: null,
+      bookmarks: [],
       error: null
     }
-  } catch (error) {
-    log.warn('reading Chrome bookmarks failed:', error)
-    return {
-      profiles,
-      selectedProfile: profile.dir,
-      userDataDir,
-      bookmarkFile: profile.bookmarksPath,
-      bookmarks: [],
-      error: '书签读取失败'
+  }
+
+  let oversized = false
+  let parseFailed = false
+  for (const candidate of candidates) {
+    try {
+      const info = await stat(candidate.path)
+      if (info.size > 40 * 1024 * 1024) {
+        oversized = true
+        continue
+      }
+      const data = JSON.parse(await readFile(candidate.path, 'utf8')) as BookmarksFile
+      return {
+        profiles,
+        selectedProfile: profile.dir,
+        userDataDir,
+        bookmarkFile: candidate.path,
+        bookmarkSource: candidate.source,
+        bookmarks: flattenBookmarks(data),
+        error: null
+      }
+    } catch (error) {
+      parseFailed = true
+      log.warn(`reading Chrome bookmarks failed (${candidate.path}):`, error)
     }
+  }
+
+  return {
+    profiles,
+    selectedProfile: profile.dir,
+    userDataDir,
+    bookmarkFile: candidates[0].path,
+    bookmarkSource: candidates[0].source,
+    bookmarks: [],
+    error: oversized && !parseFailed ? '书签文件过大，无法读取' : '书签读取失败'
   }
 }
 

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   discoverChromeProfiles,
+  findBookmarksFile,
   flattenBookmarks,
   readChromeBookmarks
 } from './chrome-bookmarks'
@@ -87,7 +88,124 @@ describe('Chrome profile discovery', () => {
     expect(result.error).toBeNull()
     expect(result.selectedProfile).toBe('Default')
     expect(result.bookmarks).toEqual([])
+    expect(result.bookmarkSource).toBeNull()
     expect(result.bookmarkFile).toBe(join(root, 'Default', 'Bookmarks'))
+  })
+
+  it('detects profiles that only contain account bookmarks', async () => {
+    await createChromeFixture(undefined, {
+      Team: { AccountBookmarks: '{"roots":{}}' },
+      Cache: {}
+    })
+
+    const { profiles } = await discoverChromeProfiles('linux')
+
+    expect(profiles.map((profile) => profile.dir)).toEqual(['Team'])
+  })
+})
+
+const accountsBookmarks = JSON.stringify({
+  roots: {
+    bookmark_bar: {
+      children: [
+        { type: 'url', name: 'GitHub', url: 'https://github.com', id: 'a' },
+        { type: 'url', name: 'Docs', url: 'https://example.com/docs', id: 'b' }
+      ]
+    }
+  }
+})
+
+const localBookmarks = JSON.stringify({
+  roots: {
+    bookmark_bar: {
+      children: [{ type: 'url', name: 'Local', url: 'https://local.example', id: 'c' }]
+    }
+  }
+})
+
+describe('Chrome account bookmarks', () => {
+  it('reads bookmarks Chrome keeps in the signed-in Google Account', async () => {
+    const root = await createChromeFixture(
+      { profile: { info_cache: { Default: { name: '文锋' } } } },
+      { Default: { Preferences: '{}', AccountBookmarks: accountsBookmarks } }
+    )
+
+    const result = await readChromeBookmarks('linux', null)
+
+    expect(result.error).toBeNull()
+    expect(result.bookmarkSource).toBe('account')
+    expect(result.bookmarkFile).toBe(join(root, 'Default', 'AccountBookmarks'))
+    expect(result.bookmarks.map((bookmark) => bookmark.title)).toEqual(['GitHub', 'Docs'])
+  })
+
+  it('picks the most recently written file when both exist', async () => {
+    const root = await createChromeFixture(
+      { profile: { info_cache: { Default: { name: '文锋' } } } },
+      {
+        Default: {
+          Preferences: '{}',
+          Bookmarks: localBookmarks,
+          AccountBookmarks: accountsBookmarks
+        }
+      }
+    )
+    const older = new Date(Date.now() - 120_000)
+    const newer = new Date(Date.now() - 60_000)
+    await utimes(join(root, 'Default', 'AccountBookmarks'), older, older)
+    await utimes(join(root, 'Default', 'Bookmarks'), newer, newer)
+
+    const result = await readChromeBookmarks('linux', null)
+
+    expect(result.bookmarkSource).toBe('local')
+    expect(result.bookmarks.map((bookmark) => bookmark.title)).toEqual(['Local'])
+    expect(await findBookmarksFile(join(root, 'Default'))).toEqual({
+      path: join(root, 'Default', 'Bookmarks'),
+      source: 'local'
+    })
+  })
+
+  it('prefers account bookmarks on a tie', async () => {
+    const root = await createChromeFixture(
+      { profile: { info_cache: { Default: { name: '文锋' } } } },
+      {
+        Default: {
+          Preferences: '{}',
+          Bookmarks: localBookmarks,
+          AccountBookmarks: accountsBookmarks
+        }
+      }
+    )
+    const same = new Date(Date.now() - 60_000)
+    await utimes(join(root, 'Default', 'AccountBookmarks'), same, same)
+    await utimes(join(root, 'Default', 'Bookmarks'), same, same)
+
+    const result = await readChromeBookmarks('linux', null)
+
+    expect(result.bookmarkSource).toBe('account')
+    expect(result.bookmarks.map((bookmark) => bookmark.title)).toEqual(['GitHub', 'Docs'])
+  })
+
+  it('falls back to the other file when the newest one is malformed', async () => {
+    const root = await createChromeFixture(
+      { profile: { info_cache: { Default: { name: '文锋' } } } },
+      {
+        Default: {
+          Preferences: '{}',
+          Bookmarks: localBookmarks,
+          AccountBookmarks: '{ not json'
+        }
+      }
+    )
+    const older = new Date(Date.now() - 120_000)
+    const newer = new Date(Date.now() - 60_000)
+    await utimes(join(root, 'Default', 'AccountBookmarks'), newer, newer)
+    await utimes(join(root, 'Default', 'Bookmarks'), older, older)
+
+    const result = await readChromeBookmarks('linux', null)
+
+    expect(result.error).toBeNull()
+    expect(result.bookmarkSource).toBe('local')
+    expect(result.bookmarks.map((bookmark) => bookmark.title)).toEqual(['Local'])
   })
 })
 

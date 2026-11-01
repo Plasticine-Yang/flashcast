@@ -15,7 +15,7 @@ import type { ClipboardService } from './clipboard-service'
 import type { ExternalPluginManager } from './external-plugins'
 import type { PlatformId } from '@shared/types'
 import { CHROME_BOOKMARKS_MANIFEST, CHROME_DEFAULTS, CLIPBOARD_DEFAULTS, CLIPBOARD_MANIFEST } from './builtins/manifests'
-import { discoverChromeProfiles, readChromeBookmarks } from './chrome-bookmarks'
+import { discoverChromeProfiles, findBookmarksFile, readChromeBookmarks } from './chrome-bookmarks'
 
 export class PluginService {
   constructor(
@@ -68,6 +68,7 @@ export class PluginService {
       selectedProfile: result.selectedProfile,
       userDataDir: result.userDataDir,
       bookmarkFile: result.bookmarkFile,
+      bookmarkSource: result.bookmarkSource,
       bookmarks: result.bookmarks,
       error: result.error
     }
@@ -114,6 +115,8 @@ export class PluginService {
       profiles.find((profile) => profile.dir === 'Default') ??
       profiles[0] ??
       null
+    const profilePath = selected ? join(userDataDir, selected.dir) : userDataDir
+    const bookmarksFile = selected ? await findBookmarksFile(profilePath) : null
 
     const fields: SettingsField[] = [
       {
@@ -132,10 +135,24 @@ export class PluginService {
         key: 'profilePath',
         type: 'text',
         label: 'Profile 路径',
-        value: selected ? join(userDataDir, selected.dir) : userDataDir,
+        value: profilePath,
         mono: true,
         readonly: true,
-        description: '该 Profile 的本地数据目录；Chrome 尚未创建 Bookmarks 时列表为空'
+        description: '该 Profile 的本地数据目录'
+      },
+      {
+        key: 'bookmarkFile',
+        type: 'text',
+        label: '书签文件',
+        value: bookmarksFile?.path ?? '',
+        mono: true,
+        readonly: true,
+        placeholder: '尚无书签文件',
+        description: bookmarksFile
+          ? bookmarksFile.source === 'account'
+            ? 'Chrome 把书签保存在登录的 Google 账户里（AccountBookmarks）'
+            : 'Chrome 把书签保存在本地（Bookmarks）'
+          : 'Chrome 还没有为该 Profile 创建书签文件；添加第一个书签后即可读取'
       }
     ]
 

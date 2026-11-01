@@ -60,6 +60,7 @@ export function BookmarksView({
         <h1 className="fc-plugin-title">Chrome 书签</h1>
         <span className="fc-plugin-head-meta">
           {page ? `${page.bookmarks.length} 个书签` : null}
+          {page?.bookmarkSource === 'account' ? ' · 账户书签' : ''}
           {profile ? ` · ${profile.name}` : ''}
         </span>
         <div className="fc-plugin-head-actions">

@@ -80,7 +80,8 @@ export function createMockApi(): FlashcastApi {
     profiles: mockChromeProfiles,
     selectedProfile: chromeProfile,
     userDataDir: '/home/you/.config/google-chrome',
-    bookmarkFile: '/home/you/.config/google-chrome/Default/Bookmarks',
+    bookmarkFile: '/home/you/.config/google-chrome/Default/AccountBookmarks',
+    bookmarkSource: 'account',
     bookmarks: mockBookmarks,
     error: null
   })
