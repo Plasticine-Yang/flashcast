@@ -32,7 +32,9 @@ win:
   target:
     - nsis
 linux:
-  icon: build/icon.png
+  # 必须给一整套标准尺寸（build/icons/NxN.png）：hicolor 的 index.theme 只索引到
+  # 512x512，单个 1024x1024 的 PNG 会被桌面当成“没有图标”。
+  icon: build/icons
   category: Utility
   # deb 包要求 maintainer；package.json 的 author 没有邮箱时 electron-builder 会拒绝打包。
   maintainer: Plasticine-Yang <Plasticine-Yang@users.noreply.github.com>

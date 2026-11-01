@@ -71,13 +71,14 @@ pnpm start         # 预览构建产物
 
 | | 生产版（deb / AppImage / dmg） | 开发版（`pnpm dev`） |
 |---|---|---|
+| 应用网格 | Flashcast | 不显示（`NoDisplay=true`） |
 | 应用名 / userData | `Flashcast` → `~/.config/Flashcast` | `Flashcast (Dev)` → `~/.config/Flashcast (Dev)` |
 | 桌面身份 / `.desktop` | `com.flashcast.app.desktop` | `com.flashcast.app.dev.desktop` |
 | 工作区 | `~/.flashcast` | `~/.flashcast-dev` |
 | 默认快捷键 | `Alt+Space` / `Ctrl+Alt+C` | `Alt+Shift+Space` / `Ctrl+Alt+Shift+C` |
 | 开机自启动条目 | `autostart/flashcast.desktop` | `autostart/flashcast-dev.desktop` |
 
-分流依据是 `app.isPackaged`：应用名与桌面身份在 `src/main/index.ts`，路径在 `src/main/paths.ts`，快捷键默认值在 `src/shared/shortcuts.ts`。两个进程因此各有独立的单实例锁、桌面项和数据，可以同时运行。
+分流依据是 `app.isPackaged`：应用名与桌面身份在 `src/main/index.ts`，路径在 `src/main/paths.ts`，快捷键默认值在 `src/shared/shortcuts.ts`。两个进程因此各有独立的单实例锁、桌面项和数据，可以同时运行。开发版仍然需要那个 `.desktop` 文件，但只为解析 Wayland 身份与匹配运行中窗口的图标，所以设为 `NoDisplay=true`，不占应用网格。
 
 > 桌面身份不能复用：`~/.local/share/applications` 在 XDG 查找顺序里排在 `/usr/share/applications` 之前，同名的用户级条目会遮住 deb 安装的生产版；而 Wayland portal 又要求身份能解析到同名 `.desktop` 文件。两条约束只有“各自用不同身份”能同时满足。
 
@@ -109,7 +110,7 @@ pnpm dist:mac
 pnpm dist:win
 ```
 
-`electron-builder.yml` 已配置三端目标（AppImage/deb、dmg/zip、nsis）、图标、`LSUIElement`（macOS 菜单栏应用）与 Linux 桌面项。修改 `build/*.svg` 后可运行 `pnpm icons` 重新生成 PNG 图标与视频封面占位图（需要本机有 Chrome/Chromium）。
+`electron-builder.yml` 已配置三端目标（AppImage/deb、dmg/zip、nsis）、图标、`LSUIElement`（macOS 菜单栏应用）与 Linux 桌面项。修改 `build/*.svg` 后可运行 `pnpm icons` 重新生成 PNG 图标与视频封面占位图（需要本机有 Chrome/Chromium）；Linux 用 `build/icons/NxN.png` 一整套标准尺寸（16–512），只给一张 1024×1024 的 PNG 不会出现在应用网格里 —— hicolor 的 `index.theme` 不索引 1024x1024。
 
 ### 发布
 

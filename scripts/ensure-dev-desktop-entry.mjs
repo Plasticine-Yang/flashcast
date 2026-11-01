@@ -9,8 +9,9 @@
  * 而 globalShortcut.register() 仍返回 true。
  *
  * 为什么不再沿用打包版的文件名：~/.local/share/applications 在 XDG 查找顺序里排在
- * /usr/share/applications 之前，同名条目会遮住 deb 安装的生产版，带 NoDisplay=true
- * 时更会让它在应用网格与搜索里彻底消失。开发版因此使用独立身份，两个条目并存。
+ * /usr/share/applications 之前，同名条目会遮住 deb 安装的生产版。开发版因此使用
+ * 独立身份；它带 NoDisplay=true，只用来解析身份与匹配运行中窗口的图标，不进入
+ * 应用网格。
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -64,14 +65,14 @@ const content = [
   'Type=Application',
   'Name=Flashcast (Dev)',
   'GenericName=Launcher',
-  'Comment=Flashcast 开发构建；启动最近一次构建的产物，数据与快捷键均与生产版分开',
+  'Comment=Flashcast 开发构建；不进入应用网格，仅提供桌面身份与图标',
   `TryExec=${electron}`,
   // 与 `pnpm dev` 一致地关掉 SUID sandbox：开发机上的 chrome-sandbox 没有 4755 权限。
   `Exec=${quote(electron)} --no-sandbox ${quote(root)} %U`,
   `Path=${root}`,
   `Icon=${existsSync(icon) ? icon : 'flashcast'}`,
   'Terminal=false',
-  'NoDisplay=false',
+  'NoDisplay=true',
   `StartupWMClass=${devName.replace(/\.desktop$/, '')}`,
   'Categories=Utility;',
   'Keywords=flashcast;launcher;dev;',

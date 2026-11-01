@@ -77,11 +77,12 @@ if (!chrome) {
   process.exit(0)
 }
 
-async function render(svg, name, width, height = width) {
+async function render(svg, name, width, height = width, dir = build) {
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}svg{display:block;width:${width}px;height:${height}px}</style></head><body>${svg}</body></html>`
   const htmlPath = join(temp, `${name}.html`)
   await writeFile(htmlPath, html)
   const profile = join(temp, 'chrome-profile')
+  const output = join(dir, `${name}.png`)
   await execFileAsync(
     chrome,
     [
@@ -94,15 +95,23 @@ async function render(svg, name, width, height = width) {
       `--window-size=${width},${height}`,
       '--default-background-color=00000000',
       `--user-data-dir=${profile}`,
-      `--screenshot=${join(build, `${name}.png`)}`,
+      `--screenshot=${output}`,
       `file://${htmlPath}`
     ],
     { timeout: 30000 }
   )
-  console.log(`generated build/${name}.png (${width}×${height})`)
+  console.log(`generated ${output.replace(`${root}/`, '')} (${width}×${height})`)
 }
 
 await render(appIconSvg, 'icon', 1024)
+
+// Linux 桌面图标需要一整套标准尺寸：hicolor 的 index.theme 只索引到 512x512，
+// 只装一个 1024x1024 的 PNG 会被 GNOME 当成“没有图标”而回退到通用齿轮图标。
+const ICON_SIZES = [16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512]
+await mkdir(join(build, 'icons'), { recursive: true })
+for (const size of ICON_SIZES) {
+  await render(appIconSvg, `${size}x${size}`, size, size, join(build, 'icons'))
+}
 await render(traySvg('#5B9DFF'), 'tray', 64)
 await render(traySvg('#000000'), 'trayTemplate', 32)
 await render(traySvg('#000000'), 'trayTemplate@2x', 64)
