@@ -1,10 +1,8 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { execFile } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { join, resolve } from 'node:path'
-import { promisify } from 'node:util'
 
-const execFileAsync = promisify(execFile)
 const root = process.cwd()
 const build = resolve(root, 'build')
 const temp = resolve(root, '.agent-tmp/icons')
@@ -69,7 +67,12 @@ await writeFile(join(build, 'trayTemplate.svg'), traySvg('#000000'))
 await writeFile(join(build, 'video-cover.svg'), videoCoverSvg)
 
 const chrome = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].find((command) => {
-  return (process.env.PATH ?? '').split(':').some((dir) => existsSync(join(dir, command)))
+  try {
+    execFileSync('which', [command], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
 })
 
 if (!chrome) {
@@ -77,13 +80,23 @@ if (!chrome) {
   process.exit(0)
 }
 
-async function render(svg, name, width, height = width, dir = build) {
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}svg{display:block;width:${width}px;height:${height}px}</style></head><body>${svg}</body></html>`
-  const htmlPath = join(temp, `${name}.html`)
-  await writeFile(htmlPath, html)
+const delay = (ms) => new Promise((resolveDelay) => setTimeout(resolveDelay, ms))
+
+/**
+ * 用 CDP 的 Emulation.setDeviceMetricsOverride + Page.captureScreenshot 精确截取
+ * 指定尺寸的画布。
+ *
+ * 为什么不能用 `--screenshot --window-size=W,H`：headless=new 的 `--window-size`
+ * 描述的是浏览器窗口而不是视口，视口高度会比 H 少掉一段（本机 Chrome 153 上稳定
+ * 少 87px）。小尺寸图标因此被裁掉底部，只剩顶部一条 —— 96×96 和 128×128 就是
+ * 这样被 GNOME 应用网格选中后显示成“半个图标”的。
+ */
+async function launchChrome() {
+  if (typeof WebSocket === 'undefined') {
+    throw new Error('Node 缺少全局 WebSocket（需要 >= 22.4），无法精确渲染图标')
+  }
   const profile = join(temp, 'chrome-profile')
-  const output = join(dir, `${name}.png`)
-  await execFileAsync(
+  const child = spawn(
     chrome,
     [
       '--headless=new',
@@ -92,27 +105,156 @@ async function render(svg, name, width, height = width, dir = build) {
       '--hide-scrollbars',
       '--disable-dev-shm-usage',
       '--force-device-scale-factor=1',
-      `--window-size=${width},${height}`,
-      '--default-background-color=00000000',
+      '--remote-debugging-port=0',
+      '--remote-allow-origins=*',
       `--user-data-dir=${profile}`,
-      `--screenshot=${output}`,
-      `file://${htmlPath}`
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-extensions',
+      '--mute-audio',
+      'about:blank'
     ],
-    { timeout: 30000 }
+    { stdio: ['ignore', 'ignore', 'pipe'] }
   )
-  console.log(`generated ${output.replace(`${root}/`, '')} (${width}×${height})`)
+
+  let stderr = ''
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk
+  })
+
+  const portFile = join(profile, 'DevToolsActivePort')
+  for (let attempt = 0; attempt < 200 && !existsSync(portFile); attempt += 1) {
+    if (child.exitCode !== null) break
+    await delay(50)
+  }
+  if (!existsSync(portFile)) {
+    child.kill('SIGKILL')
+    throw new Error(`Chrome 未能启动（端口文件缺失）${stderr.trim() ? `：${stderr.trim()}` : ''}`)
+  }
+
+  const [port] = (await readFile(portFile, 'utf8')).trim().split('\n')
+  let targets = []
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`)
+      targets = await response.json()
+      if (targets.some((target) => target.type === 'page' && target.webSocketDebuggerUrl)) break
+    } catch {
+      // 调试端口还没就绪，继续等。
+    }
+    await delay(50)
+  }
+
+  const page =
+    targets.find((target) => target.type === 'page' && target.webSocketDebuggerUrl) ??
+    targets.find((target) => target.type === 'other' && target.webSocketDebuggerUrl)
+  if (!page) {
+    child.kill('SIGKILL')
+    throw new Error('Chrome 调试端口没有可用的页面目标')
+  }
+
+  const socket = new WebSocket(page.webSocketDebuggerUrl)
+  await new Promise((resolveOpen, rejectOpen) => {
+    socket.addEventListener('open', resolveOpen, { once: true })
+    socket.addEventListener('error', () => rejectOpen(new Error('无法连接 Chrome 调试端口')), { once: true })
+  })
+
+  const pending = new Map()
+  const listeners = new Map()
+  let nextId = 0
+
+  socket.addEventListener('message', (event) => {
+    const message = JSON.parse(event.data)
+    if (typeof message.id === 'number') {
+      const request = pending.get(message.id)
+      if (!request) return
+      pending.delete(message.id)
+      if (message.error) request.reject(new Error(`${request.method}: ${message.error.message}`))
+      else request.resolve(message.result)
+      return
+    }
+    const callbacks = listeners.get(message.method)
+    if (!callbacks) return
+    listeners.delete(message.method)
+    for (const callback of callbacks) callback(message.params)
+  })
+
+  const send = (method, params = {}) =>
+    new Promise((resolveSend, rejectSend) => {
+      const id = (nextId += 1)
+      pending.set(id, { resolve: resolveSend, reject: rejectSend, method })
+      socket.send(JSON.stringify({ id, method, params }))
+    })
+
+  const once = (method, timeoutMs = 10_000) =>
+    new Promise((resolveEvent, rejectEvent) => {
+      const timer = setTimeout(() => rejectEvent(new Error(`等待 ${method} 超时`)), timeoutMs)
+      const callback = (params) => {
+        clearTimeout(timer)
+        resolveEvent(params)
+      }
+      listeners.set(method, [...(listeners.get(method) ?? []), callback])
+    })
+
+  await send('Page.enable')
+  await send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 0 } })
+
+  return {
+    send,
+    once,
+    async close() {
+      socket.close()
+      child.kill('SIGKILL')
+    }
+  }
 }
 
-await render(appIconSvg, 'icon', 1024)
+const client = await launchChrome()
 
-// Linux 桌面图标需要一整套标准尺寸：hicolor 的 index.theme 只索引到 512x512，
-// 只装一个 1024x1024 的 PNG 会被 GNOME 当成“没有图标”而回退到通用齿轮图标。
-const ICON_SIZES = [16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512]
-await mkdir(join(build, 'icons'), { recursive: true })
-for (const size of ICON_SIZES) {
-  await render(appIconSvg, `${size}x${size}`, size, size, join(build, 'icons'))
+try {
+  async function render(svg, name, width, height = width, dir = build) {
+    const htmlPath = join(temp, `${name}.html`)
+    const html = `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}svg{display:block;width:${width}px;height:${height}px}</style></head><body>${svg}</body></html>`
+    await writeFile(htmlPath, html)
+
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: false
+    })
+    const loaded = client.once('Page.loadEventFired')
+    await client.send('Page.navigate', { url: `file://${htmlPath}` })
+    await loaded
+    // 等两帧，确保 SVG 的渐变/滤镜绘制完成后再截图。
+    await client.send('Runtime.evaluate', {
+      expression: 'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(1))))',
+      awaitPromise: true
+    })
+
+    const { data } = await client.send('Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: false,
+      clip: { x: 0, y: 0, width, height, scale: 1 }
+    })
+    const output = join(dir, `${name}.png`)
+    await writeFile(output, Buffer.from(data, 'base64'))
+    console.log(`generated ${output.replace(`${root}/`, '')} (${width}×${height})`)
+  }
+
+  await render(appIconSvg, 'icon', 1024)
+
+  // Linux 桌面图标需要一整套标准尺寸：hicolor 的 index.theme 只索引到 512x512，
+  // 只装一个 1024x1024 的 PNG 会被 GNOME 当成“没有图标”而回退到通用齿轮图标。
+  const ICON_SIZES = [16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512]
+  await mkdir(join(build, 'icons'), { recursive: true })
+  for (const size of ICON_SIZES) {
+    await render(appIconSvg, `${size}x${size}`, size, size, join(build, 'icons'))
+  }
+  await render(traySvg('#5B9DFF'), 'tray', 64)
+  await render(traySvg('#000000'), 'trayTemplate', 32)
+  await render(traySvg('#000000'), 'trayTemplate@2x', 64)
+  await render(videoCoverSvg, 'video-cover', 1280, 720)
+} finally {
+  await client.close()
 }
-await render(traySvg('#5B9DFF'), 'tray', 64)
-await render(traySvg('#000000'), 'trayTemplate', 32)
-await render(traySvg('#000000'), 'trayTemplate@2x', 64)
-await render(videoCoverSvg, 'video-cover', 1280, 720)
