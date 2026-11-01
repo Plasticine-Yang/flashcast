@@ -65,7 +65,19 @@ export function chromeUserDataDirs(platform: PlatformId): string[] {
 interface LocalState {
   profile?: {
     info_cache?: Record<string, { name?: string; gaia_name?: string; shortcut_name?: string }>
+    profiles_order?: string[]
   }
+}
+
+const PROFILE_DIR_PATTERN = /^Profile \d+$/
+
+function looksLikeProfileDir(name: string, dir: string): boolean {
+  return (
+    name === 'Default' ||
+    PROFILE_DIR_PATTERN.test(name) ||
+    existsSync(join(dir, 'Preferences')) ||
+    existsSync(join(dir, 'Bookmarks'))
+  )
 }
 
 export async function discoverChromeProfiles(platform: PlatformId): Promise<{
@@ -81,22 +93,45 @@ export async function discoverChromeProfiles(platform: PlatformId): Promise<{
       continue
     }
 
-    let infoCache: LocalState['profile'] = {}
+    let profileState: LocalState['profile'] = {}
     try {
       const state = JSON.parse(await readFile(join(dir, 'Local State'), 'utf8')) as LocalState
-      infoCache = state.profile ?? {}
+      profileState = state.profile ?? {}
     } catch {
-      infoCache = {}
+      profileState = {}
     }
 
-    const profiles: ChromeProfile[] = []
+    const infoCache = profileState.info_cache ?? {}
+    const dirs = new Map<string, string>()
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      const bookmarksPath = join(dir, entry.name, 'Bookmarks')
-      if (!existsSync(bookmarksPath)) continue
-      const info = infoCache.info_cache?.[entry.name]
-      const displayName = info?.name || info?.shortcut_name || entry.name
-      profiles.push({ dir: entry.name, name: displayName, bookmarksPath })
+      if (entry.isDirectory()) dirs.set(entry.name, join(dir, entry.name))
+    }
+
+    // `Local State` is authoritative for profile names and catches profiles
+    // that have never written a Bookmarks file. Fall back to the usual
+    // Default / Profile N directories when Local State is missing or stale.
+    const candidates = [
+      ...(profileState.profiles_order ?? []),
+      'Default',
+      ...Object.keys(infoCache),
+      ...dirs.keys()
+    ]
+    const profiles: ChromeProfile[] = []
+    const seen = new Set<string>()
+    for (const name of candidates) {
+      if (!name || seen.has(name)) continue
+      seen.add(name)
+      const profileDir = dirs.get(name)
+      if (!profileDir) continue
+      const known = Object.prototype.hasOwnProperty.call(infoCache, name)
+      if (!known && !looksLikeProfileDir(name, profileDir)) continue
+      const info = infoCache[name]
+      const displayName = info?.name || info?.shortcut_name || name
+      profiles.push({
+        dir: name,
+        name: displayName,
+        bookmarksPath: join(profileDir, 'Bookmarks')
+      })
     }
 
     if (profiles.length > 0) {
@@ -194,6 +229,18 @@ export async function readChromeBookmarks(
     profiles[0]
 
   try {
+    // Chrome only materialises `Bookmarks` after the first bookmark exists.
+    // A freshly used profile is still selectable and simply has no bookmarks.
+    if (!existsSync(profile.bookmarksPath)) {
+      return {
+        profiles,
+        selectedProfile: profile.dir,
+        userDataDir,
+        bookmarkFile: profile.bookmarksPath,
+        bookmarks: [],
+        error: null
+      }
+    }
     const info = await stat(profile.bookmarksPath)
     if (info.size > 40 * 1024 * 1024) {
       return {
@@ -203,6 +250,16 @@ export async function readChromeBookmarks(
         bookmarkFile: profile.bookmarksPath,
         bookmarks: [],
         error: '书签文件过大，无法读取'
+      }
+    }
+    if (info.size === 0) {
+      return {
+        profiles,
+        selectedProfile: profile.dir,
+        userDataDir,
+        bookmarkFile: profile.bookmarksPath,
+        bookmarks: [],
+        error: null
       }
     }
     const raw = await readFile(profile.bookmarksPath, 'utf8')

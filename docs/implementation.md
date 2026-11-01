@@ -83,8 +83,10 @@ src/shared/
 - 内容以 SHA-256 fingerprint 去重并置顶；容量超过插件配置（默认 10）时删除最旧项及其媒体文件。
 - 图片保存原图与缩略图；视频优先用 `ffmpeg` 截首帧，缺失时复制内置设计封面；音乐保留文件名与大小（预览用音符图标）。
 - 媒体文件位于 `<workspace>/state/clipboard/media`，渲染层通过注册的自定义协议 `flashcast-media://media/<file>` 加载；协议校验文件名与目录，仅暴露媒体目录。
-- 预览：进入剪切板且存在选中项后默认展开右侧 300px 面板，不再有 1s 停留计时；鼠标或 `j/k` 切换只原位更新内容，不收起、不重放动画，也不重启动画层（避免闪烁）；`ctrl+h` / `esc` / 关闭按钮收起，`ctrl+l` 重新展开；显式收起后切换选中不会自动重开，重新进入插件恢复默认展开；进入设置/帮助或无结果时临时收起。面板展开时列表让出 320px 内边距。
-- 预览出场由 `ClipboardView` 在打开瞬间测量选中行与预览的 rect，生成贴着预览左缘、对齐选中行的 12×8px 水珠，再用 WAAPI 展开 `clip-path`（圆角 6 → 14）、`translateX(16 → 0)` 与 opacity，总长 420ms；收起为 180ms。旧版的 2px 停留进度线已移除。
+- 预览：预览是剪切板页面的常驻组成部分，进入剪切板且存在选中项后展开右侧 300px 面板，不再有 1s 停留计时，也不提供收起动作；鼠标或 `j/k` 切换只原位更新内容，不收起、不重放动画。只有搜索无结果（没有选中项）或离开插件时预览才消失。面板展开时列表让出 320px 内边距；鼠标悬停只改选中，不触发滚动，键盘 `j/k` 才把选中项滚入视野。
+- 预览出场由 `ClipboardView` 在挂载时测量选中行与预览的 rect，生成贴着预览左缘、对齐选中行的 12×8px 水珠，再用 WAAPI 展开 `clip-path`（圆角 6 → 14）、`translateX(16 → 0)` 与 opacity，总长 420ms；预览不再播放收起动画。旧版的 2px 停留进度线已移除。
+- 列表 FLIP 只在条目集合/顺序变化时测量 `offsetTop`；悬停、预览内容更新等普通渲染不会重启动画，避免行在鼠标移动时抖动。
+- 快捷键路径的 `esc`：通过全局剪切板快捷键直接进入时，`esc` 直接关闭启动器；从全局搜索页主动进入剪切板时，`esc` 仍退出插件回到全局页。设置页内 `esc` 先返回插件主页。
 - 回车：写回系统剪贴板 → 置顶 → 关闭动画 → 隐藏窗口，不粘贴。
 - `Alt/Option+Enter`：同上，并在窗口隐藏后由主进程调用平台粘贴助手。
 - `Ctrl+Backspace`：行先 120ms 淡出，随后删除；剩余行通过 `useFlipAnimation` 做 220ms FLIP。
@@ -92,8 +94,8 @@ src/shared/
 
 ### 3.5 Chrome 书签
 
-- 解析平台默认 Chrome 用户数据目录（可用 `FLASHCAST_CHROME_USER_DATA` 覆盖），读取 `Local State` 展示 Profile 名称，优先 `Default`。
-- 递归扁平化 `roots.bookmark_bar / other / synced`，只保留 http/https/file，记录 Chrome 顺序与文件夹路径；设置页选择 Profile 后立即写插件配置。
+- 解析平台默认 Chrome 用户数据目录（可用 `FLASHCAST_CHROME_USER_DATA` 覆盖），读取 `Local State` 展示 Profile 名称，优先 `Default`。Profile 发现以 `Local State#profile.info_cache` 与 `profiles_order` 为准，目录存在即可选中，不再要求已经生成 `Bookmarks`；缺少 Local State 时回退到 `Default` / `Profile N` / 含 `Preferences` 的目录。
+- 递归扁平化 `roots.bookmark_bar / other / synced`，只保留 http/https/file，记录 Chrome 顺序与文件夹路径；设置页选择 Profile 后立即写插件配置。Chrome 尚未创建 `Bookmarks`（从未添加书签）时返回空列表而不是“未找到 Profile”。
 - favicon 按域请求 Google s2 并缓存为 PNG data URL，渲染为 32px 图标；失败回退 Globe。
 - 打开时通过检测到的 Chrome 可执行文件 `--new-tab` 打开；macOS 使用 `open -a "Google Chrome"`。找不到 Chrome / 解析失败均提供就地错误与重试。
 
@@ -179,4 +181,4 @@ src/shared/
 - 外部插件 UI 为宿主渲染的列表 + 设置 schema，不支持插件自带 React bundle；这是为了跨进程安全和安装可审查性。
 - 自动更新只提供检查入口与明确提示，未接入发布服务器。
 - 书签超过 60 行使用固定行高虚拟列表；模糊匹配仍在渲染线程完成，超大书签库（1000+）后续可迁移到 Worker 并做 60ms 防抖。
-- 外部插件通过宿主渲染的声明式列表与设置 schema 扩展，暂不支持插件自带页面 bundle，也暂不让插件消费 `esc`（内置剪切板预览会优先消费）。
+- 外部插件通过宿主渲染的声明式列表与设置 schema 扩展，暂不支持插件自带页面 bundle，也暂不让插件消费 `esc`（`esc` 始终由宿主路由；剪切板预览不再消费它）。

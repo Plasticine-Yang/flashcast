@@ -1,6 +1,95 @@
-import { describe, expect, it } from 'vitest'
-import { flattenBookmarks } from './chrome-bookmarks'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  discoverChromeProfiles,
+  flattenBookmarks,
+  readChromeBookmarks
+} from './chrome-bookmarks'
 import { parseDesktopEntry, parseExec } from './apps'
+
+const fixtureDirs: string[] = []
+
+async function createChromeFixture(
+  localState: unknown,
+  profiles: Record<string, Record<string, string>>
+): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'flashcast-chrome-'))
+  fixtureDirs.push(root)
+  if (localState !== undefined) {
+    await writeFile(join(root, 'Local State'), JSON.stringify(localState), 'utf8')
+  }
+  for (const [name, files] of Object.entries(profiles)) {
+    const profileDir = join(root, name)
+    await mkdir(profileDir, { recursive: true })
+    for (const [file, content] of Object.entries(files)) {
+      await writeFile(join(profileDir, file), content, 'utf8')
+    }
+  }
+  vi.stubEnv('FLASHCAST_CHROME_USER_DATA', root)
+  return root
+}
+
+afterEach(async () => {
+  vi.unstubAllEnvs()
+  await Promise.all(fixtureDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+})
+
+describe('Chrome profile discovery', () => {
+  it('finds a profile that has never written a Bookmarks file', async () => {
+    const root = await createChromeFixture(
+      { profile: { info_cache: { Default: { name: '文锋' } } } },
+      { Default: { Preferences: '{}' } }
+    )
+
+    const { profiles, userDataDir } = await discoverChromeProfiles('linux')
+
+    expect(userDataDir).toBe(root)
+    expect(profiles).toEqual([
+      { dir: 'Default', name: '文锋', bookmarksPath: join(root, 'Default', 'Bookmarks') }
+    ])
+  })
+
+  it('trusts Local State profiles even before Chrome writes profile markers', async () => {
+    const root = await createChromeFixture(
+      { profile: { info_cache: { 'Profile 1': { name: 'Work' } } } },
+      { 'Profile 1': {} }
+    )
+
+    const { profiles } = await discoverChromeProfiles('linux')
+
+    expect(profiles).toEqual([
+      { dir: 'Profile 1', name: 'Work', bookmarksPath: join(root, 'Profile 1', 'Bookmarks') }
+    ])
+  })
+
+  it('falls back to profile directories when Local State is missing', async () => {
+    await createChromeFixture(undefined, {
+      Default: { Preferences: '{}' },
+      'Profile 1': { Bookmarks: '{"roots":{}}' },
+      Crashpad: {}
+    })
+
+    const { profiles } = await discoverChromeProfiles('linux')
+
+    expect(profiles.map((profile) => profile.dir)).toEqual(['Default', 'Profile 1'])
+  })
+
+  it('treats a missing Bookmarks file as an empty profile instead of failing', async () => {
+    const root = await createChromeFixture(
+      { profile: { info_cache: { Default: { name: '文锋' } } } },
+      { Default: { Preferences: '{}' } }
+    )
+
+    const result = await readChromeBookmarks('linux', null)
+
+    expect(result.error).toBeNull()
+    expect(result.selectedProfile).toBe('Default')
+    expect(result.bookmarks).toEqual([])
+    expect(result.bookmarkFile).toBe(join(root, 'Default', 'Bookmarks'))
+  })
+})
 
 describe('Chrome bookmark parsing', () => {
   it('flattens nested folders in bookmark-bar order', () => {

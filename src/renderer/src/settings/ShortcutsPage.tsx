@@ -197,8 +197,8 @@ export function ShortcutsPage({
           <div className="settings-fixed-list">
             <FixedRow label="向下移动光标" keys={vimKeys(platform, 'j')} />
             <FixedRow label="向上移动光标" keys={vimKeys(platform, 'k')} />
-            <FixedRow label="向右：展开预览 / 进入详情" keys={vimKeys(platform, 'l')} />
-            <FixedRow label="向左：收起预览 / 返回" keys={vimKeys(platform, 'h')} />
+            <FixedRow label="设置页：下一个字段" keys={vimKeys(platform, 'l')} />
+            <FixedRow label="设置页：回到输入框" keys={vimKeys(platform, 'h')} />
             <FixedRow label="打开选中项" keys={['↵']} />
             <FixedRow label="关闭窗口 / 返回上一层" keys={['esc']} />
             <FixedRow label="快捷键帮助" keys={['?']} />

@@ -1,4 +1,4 @@
-import { Clipboard as ClipboardIcon, Image as ImageIcon, Music2, Play, SearchX, Settings, X } from 'lucide-react'
+import { Clipboard as ClipboardIcon, Image as ImageIcon, Music2, Play, SearchX, Settings } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { ClipboardItem } from '@shared/types'
 import { kindLabel, relativeTime } from '@shared/time'
@@ -6,149 +6,129 @@ import { Highlight, IconButton, Keycap } from '../components/ui'
 import { useFlipAnimation } from '../components/ui'
 import { mediaUrl, type ClipboardRowModel } from './helpers'
 
-export interface PreviewState {
-  mounted: boolean
-  open: boolean
-  item: ClipboardItem | null
-}
-
 export function ClipboardView({
   rows,
   totalCount,
   maxItems,
   query,
   selectedIndex,
+  scrollNonce,
   deletingId,
-  preview,
+  previewItem,
   onHover,
   onActivate,
-  onSettings,
-  onPreviewClose
+  onSettings
 }: {
   rows: ClipboardRowModel[]
   totalCount: number
   maxItems: number
   query: string
   selectedIndex: number
+  scrollNonce: number
   deletingId: string | null
-  preview: PreviewState
+  previewItem: ClipboardItem | null
   onHover: (index: number) => void
   onActivate: (index: number) => void
   onSettings: () => void
-  onPreviewClose: () => void
 }): React.JSX.Element {
-  const { containerRef: scrollRef } = useFlipAnimation(rows, (row) => row.item.id)
+  const { containerRef: scrollRef } = useFlipAnimation(rows)
   const previewRef = useRef<HTMLElement>(null)
   const previewContentRef = useRef<HTMLDivElement>(null)
   const previewWasOpenRef = useRef(false)
 
+  const selectedIndexRef = useRef(selectedIndex)
+  selectedIndexRef.current = selectedIndex
+
+  // Pointer hover must not scroll: moving the list under the cursor changes
+  // the hovered row again and produces a scroll feedback loop. Only keyboard
+  // navigation (scrollNonce) brings the selection into view.
   useEffect(() => {
-    const node = scrollRef.current?.querySelector<HTMLElement>(`[data-index="${selectedIndex}"]`)
+    if (scrollNonce === 0) return
+    const node = scrollRef.current?.querySelector<HTMLElement>(
+      `[data-index="${selectedIndexRef.current}"]`
+    )
     if (node) node.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [selectedIndex])
+  }, [scrollNonce, scrollRef])
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 })
+  }, [query, scrollRef])
 
   // Content is updated in place (no remount / opacity restart) so fast j/k
   // does not blink; only reset its scroll offset when the item changes.
   useLayoutEffect(() => {
     if (previewContentRef.current) previewContentRef.current.scrollTop = 0
-  }, [preview.item?.id, preview.open])
+  }, [previewItem?.id])
 
   // The preview unfolds from a tiny bead aligned with the selected row, then
-  // expands into the 300px panel like liquid. Keeping this in WAAPI lets us
-  // measure the row at open time; the old translate+clip transition always
-  // started from the panel's top-right and read as a generic slide-in.
+  // expands into the 300px panel like liquid. It is part of the clipboard
+  // layout: once open it stays open while the selection changes, and the
+  // launcher's close animation handles the exit.
   useLayoutEffect(() => {
-    if (!preview.mounted) {
+    if (!previewItem) {
       previewWasOpenRef.current = false
       return
     }
     const node = previewRef.current
-    if (!node) return
+    if (!node || previewWasOpenRef.current) return
+    previewWasOpenRef.current = true
+    for (const animation of node.getAnimations()) animation.cancel()
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-    if (preview.open) {
-      if (previewWasOpenRef.current) return
-      previewWasOpenRef.current = true
-      for (const animation of node.getAnimations()) animation.cancel()
-      if (reduced) {
-        node.style.transform = 'translateX(0px)'
-        node.style.clipPath = 'inset(0px round 14px)'
-        const fade = node.animate([{ opacity: 0 }, { opacity: 1 }], {
-          duration: 120,
-          easing: 'ease-out',
-          fill: 'both'
-        })
-        fade.onfinish = () => {
-          node.style.opacity = '1'
-          fade.cancel()
-        }
-        return
-      }
-
-      const row = scrollRef.current?.querySelector<HTMLElement>(
-        `[data-index="${selectedIndex}"]`
-      )
-      const body = node.offsetParent as HTMLElement | null
-      const rowRect = row?.getBoundingClientRect()
-      const bodyRect = body?.getBoundingClientRect()
-      const height = node.offsetHeight
-      const width = node.offsetWidth
-      let center = height / 2
-      if (rowRect && bodyRect) {
-        center = rowRect.top + rowRect.height / 2 - bodyRect.top - node.offsetTop
-      }
-      const beadHalf = 4
-      const top = Math.min(Math.max(center - beadHalf, 0), Math.max(0, height - beadHalf * 2))
-      const bottom = Math.max(0, height - top - beadHalf * 2)
-      const right = Math.max(0, width - 12)
-      const bead = `inset(${top}px ${right}px ${bottom}px 0px round 6px)`
-
-      const openAnimation = node.animate(
-        [
-          { opacity: 0, transform: 'translateX(22px)', clipPath: bead, offset: 0 },
-          {
-            opacity: 1,
-            transform: 'translateX(16px)',
-            clipPath: bead,
-            offset: 0.16,
-            easing: 'cubic-bezier(0.16, 1, 0.3, 1)'
-          },
-          { opacity: 1, transform: 'translateX(0px)', clipPath: 'inset(0px round 14px)', offset: 1 }
-        ],
-        { duration: 420, easing: 'linear', fill: 'both' }
-      )
-      openAnimation.onfinish = () => {
+    if (reduced) {
+      node.style.transform = 'translateX(0px)'
+      node.style.clipPath = 'inset(0px round 14px)'
+      const fade = node.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: 120,
+        easing: 'ease-out',
+        fill: 'both'
+      })
+      fade.onfinish = () => {
         node.style.opacity = '1'
-        node.style.transform = 'translateX(0px)'
-        node.style.clipPath = 'inset(0px round 14px)'
-        openAnimation.cancel()
+        fade.cancel()
       }
       return
     }
 
-    if (!previewWasOpenRef.current) return
-    previewWasOpenRef.current = false
-    const computed = window.getComputedStyle(node)
-    const startOpacity = computed.opacity
-    const startTransform = computed.transform
-    const startClip = computed.clipPath
-    for (const animation of node.getAnimations()) animation.cancel()
-    node.animate(
-      [
-        { opacity: startOpacity, transform: startTransform, clipPath: startClip },
-        {
-          opacity: 0,
-          transform: 'translateX(16px)',
-          clipPath: 'inset(0px 0px 0px 24px round 14px)'
-        }
-      ],
-      {
-        duration: reduced ? 120 : 180,
-        easing: 'cubic-bezier(0.4, 0, 1, 1)',
-        fill: 'both'
-      }
+    const row = scrollRef.current?.querySelector<HTMLElement>(
+      `[data-index="${selectedIndex}"]`
     )
-  }, [preview.open, preview.mounted, selectedIndex, scrollRef])
+    const body = node.offsetParent as HTMLElement | null
+    const rowRect = row?.getBoundingClientRect()
+    const bodyRect = body?.getBoundingClientRect()
+    const height = node.offsetHeight
+    const width = node.offsetWidth
+    let center = height / 2
+    if (rowRect && bodyRect) {
+      center = rowRect.top + rowRect.height / 2 - bodyRect.top - node.offsetTop
+    }
+    const beadHalf = 4
+    const top = Math.min(Math.max(center - beadHalf, 0), Math.max(0, height - beadHalf * 2))
+    const bottom = Math.max(0, height - top - beadHalf * 2)
+    const right = Math.max(0, width - 12)
+    const bead = `inset(${top}px ${right}px ${bottom}px 0px round 6px)`
+
+    const openAnimation = node.animate(
+      [
+        { opacity: 0, transform: 'translateX(22px)', clipPath: bead, offset: 0 },
+        {
+          opacity: 1,
+          transform: 'translateX(16px)',
+          clipPath: bead,
+          offset: 0.16,
+          easing: 'cubic-bezier(0.16, 1, 0.3, 1)'
+        },
+        { opacity: 1, transform: 'translateX(0px)', clipPath: 'inset(0px round 14px)', offset: 1 }
+      ],
+      { duration: 420, easing: 'linear', fill: 'both' }
+    )
+    openAnimation.onfinish = () => {
+      node.style.opacity = '1'
+      node.style.transform = 'translateX(0px)'
+      node.style.clipPath = 'inset(0px round 14px)'
+      openAnimation.cancel()
+    }
+  }, [previewItem, selectedIndex, scrollRef])
 
   return (
     <div className="fc-plugin">
@@ -164,7 +144,7 @@ export function ClipboardView({
         </div>
       </div>
       <div className="fc-plugin-body fc-clipboard-body">
-        <div className={`fc-clipboard-list-wrap${preview.open ? ' is-preview-open' : ''}`}>
+        <div className={`fc-clipboard-list-wrap${previewItem ? ' is-preview-open' : ''}`}>
           {rows.length === 0 ? (
             <ClipboardEmpty query={query} totalCount={totalCount} />
           ) : (
@@ -240,23 +220,14 @@ export function ClipboardView({
             </div>
           )}
         </div>
-        {preview.mounted && preview.item ? (
-          <aside
-            className="fc-preview"
-            ref={previewRef}
-            data-open={preview.open}
-            aria-label="剪切板预览"
-            aria-hidden={!preview.open}
-          >
+        {previewItem ? (
+          <aside className="fc-preview" ref={previewRef} aria-label="剪切板预览">
             <div className="fc-preview-head">
-              <span>{kindLabel(preview.item.kind)}</span>
-              <IconButton label="收起预览" onClick={onPreviewClose}>
-                <X size={13} strokeWidth={1.75} aria-hidden="true" />
-              </IconButton>
+              <span>{kindLabel(previewItem.kind)}</span>
             </div>
             <div className="fc-preview-divider" />
             <div className="fc-preview-content" ref={previewContentRef}>
-              <PreviewBody item={preview.item} />
+              <PreviewBody item={previewItem} />
             </div>
           </aside>
         ) : null}

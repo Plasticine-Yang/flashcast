@@ -9,6 +9,7 @@ import type {
   PluginSummary,
   SettingsField
 } from '@shared/types'
+import { join } from 'node:path'
 import type { ConfigStore } from './config-store'
 import type { ClipboardService } from './clipboard-service'
 import type { ExternalPluginManager } from './external-plugins'
@@ -131,10 +132,10 @@ export class PluginService {
         key: 'profilePath',
         type: 'text',
         label: 'Profile 路径',
-        value: selected?.bookmarksPath ?? userDataDir,
+        value: selected ? join(userDataDir, selected.dir) : userDataDir,
         mono: true,
         readonly: true,
-        description: '书签数据来自该 Chrome 配置文件'
+        description: '该 Profile 的本地数据目录；Chrome 尚未创建 Bookmarks 时列表为空'
       }
     ]
 

@@ -53,8 +53,6 @@ export function HelpOverlay({
   const navRows: ShortcutRow[] = [
     { label: '向下移动', keys: vimKeycap('j', platform) },
     { label: '向上移动', keys: vimKeycap('k', platform) },
-    { label: '向右 / 展开预览', keys: vimKeycap('l', platform) },
-    { label: '向左 / 收起预览', keys: vimKeycap('h', platform) },
     { label: '方向键辅助', keys: ['↑', '↓'] },
     { label: '切换焦点', keys: ['Tab'] }
   ]
@@ -64,8 +62,7 @@ export function HelpOverlay({
     { label: '置顶、关闭并粘贴', keys: [keycapParts('Alt+Enter', platform)[0], '↵'] },
     { label: '删除选中项', keys: [keycapParts('Control+Backspace', platform)[0], '⌫'] },
     { label: '清空全部（二次确认）', keys: keycapParts(clearAllAccelerator(platform), platform) },
-    { label: '立即展开预览', keys: vimKeycap('l', platform) },
-    { label: '收起预览', keys: vimKeycap('h', platform) }
+    { label: '关闭或退出', keys: ['esc'] }
   ]
 
   const bookmarkRows: ShortcutRow[] = [
@@ -77,7 +74,8 @@ export function HelpOverlay({
   const settingsRows: ShortcutRow[] = [
     { label: '返回插件主页', keys: ['esc'] },
     { label: '切换到下一个字段', keys: ['Tab'] },
-    { label: '在字段间移动', keys: [...vimKeycap('j', platform), '/', ...vimKeycap('k', platform)] }
+    { label: '在字段间上下移动', keys: [...vimKeycap('j', platform), '/', ...vimKeycap('k', platform)] },
+    { label: '在字段间左右移动', keys: [...vimKeycap('h', platform), '/', ...vimKeycap('l', platform)] }
   ]
 
   return (

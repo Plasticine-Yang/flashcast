@@ -281,13 +281,17 @@ export function ErrorCard({
   )
 }
 
-export function useFlipAnimation<T>(
-  items: T[],
-  getKey: (item: T) => string
-): { containerRef: React.RefObject<HTMLDivElement | null> } {
+export function useFlipAnimation<T>(items: T[]): {
+  containerRef: React.RefObject<HTMLDivElement | null>
+} {
   const containerRef = useRef<HTMLDivElement>(null)
   const positions = useRef(new Map<string, number>())
 
+  // Only item membership/order changes should schedule a FLIP. Measuring on
+  // every render (e.g. a hover or preview update re-render) makes rows chase
+  // their own running transforms and reads as flicker while the pointer moves.
+  // Layout offsets are also immune to ancestor entrance transforms and list
+  // scrolling, both of which changed getBoundingClientRect() mid-animation.
   useLayoutEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -297,18 +301,18 @@ export function useFlipAnimation<T>(
     for (const node of nodes) {
       const key = node.dataset.flipId
       if (!key) continue
-      const rect = node.getBoundingClientRect()
+      const top = node.offsetTop
       const previous = positions.current.get(key)
-      if (previous !== undefined && Math.abs(previous - rect.top) > 0.5 && !reduced) {
+      if (previous !== undefined && Math.abs(previous - top) > 0.5 && !reduced) {
         node.animate(
-          [{ transform: `translateY(${previous - rect.top}px)` }, { transform: 'translateY(0)' }],
+          [{ transform: `translateY(${previous - top}px)` }, { transform: 'translateY(0)' }],
           { duration: 220, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' }
         )
       }
-      next.set(key, rect.top)
+      next.set(key, top)
     }
     positions.current = next
-  }, [items, getKey])
+  }, [items])
 
   return { containerRef }
 }

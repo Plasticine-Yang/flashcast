@@ -232,20 +232,12 @@
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
-  opacity: 0;
-  transform: translateX(22px);
-  clip-path: inset(0 0 0 100% round 6px);
-  pointer-events: none;
   will-change: transform, opacity, clip-path;
 }
 
-/* The open / close animation is driven by WAAPI in ClipboardView so the bead
-   can start at the selected row's measured Y position. CSS only owns the
-   resting/hidden defaults and hit-testing. */
-.fc-preview[data-open='true'] {
-  pointer-events: auto;
-}
-
+/* The unfold animation is driven by WAAPI in ClipboardView so the bead can
+   start at the selected row's measured Y position. The panel itself is part
+   of the clipboard layout and never collapses while the plugin is open. */
 .fc-preview-head {
   display: flex;
   align-items: center;
@@ -257,12 +249,6 @@
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--fc-text-tertiary);
-}
-
-.fc-preview-head .fc-icon-button {
-  width: 22px;
-  height: 22px;
-  margin-left: auto;
 }
 
 .fc-preview-divider {

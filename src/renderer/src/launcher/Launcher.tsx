@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppEntry,
   BootstrapData,
@@ -19,7 +19,7 @@ import {
 import { api, isMock } from '../bridge'
 import { SkeletonRows, Toast, useToast } from '../components/ui'
 import { BookmarksView } from './BookmarksView'
-import { ClipboardView, type PreviewState } from './ClipboardView'
+import { ClipboardView } from './ClipboardView'
 import { ExternalPluginView } from './ExternalPluginView'
 import { Footer, type FooterHint } from './Footer'
 import { GlobalSearchView } from './GlobalSearchView'
@@ -44,8 +44,7 @@ const PANEL_COLLAPSED_HEIGHT = 62
 const ANIMATION = {
   openPanel: 470,
   closePanel: 170,
-  closeHide: 180,
-  previewUnmount: 360
+  closeHide: 180
 }
 
 interface PageError {
@@ -77,8 +76,7 @@ export function Launcher(): React.JSX.Element {
   const [showNonce, setShowNonce] = useState(0)
   const [clearArmed, setClearArmed] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [previewMounted, setPreviewMounted] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
+  const [clipboardScrollNonce, setClipboardScrollNonce] = useState(0)
   const { toast, showToast, dismissToast } = useToast()
 
   const inputRef = useRef<HTMLInputElement>(null)
@@ -88,12 +86,12 @@ export function Launcher(): React.JSX.Element {
   const closeTokenRef = useRef(0)
   const activePluginIdRef = useRef<string | null>(null)
   const bootstrapRef = useRef<BootstrapData | null>(null)
-  const previewUnmountRef = useRef<number | null>(null)
   const clearTimerRef = useRef<number | null>(null)
   const pageRequestRef = useRef(0)
   const settingsRequestRef = useRef(0)
-  const previewDismissedRef = useRef(false)
+  const directClipboardRef = useRef(false)
   const pendingOpenRef = useRef<string | null>(null)
+  const pendingDirectRef = useRef(false)
   const autoScenarioRef = useRef(false)
   const autoSettingsRef = useRef(false)
   const lastEntranceRef = useRef(0)
@@ -177,11 +175,6 @@ export function Launcher(): React.JSX.Element {
   const readOnly = helpOpen || closing || settingsOpen || (isPluginView && !searchable)
 
   const previewItem = selectedClipboard?.item ?? null
-  const preview: PreviewState = {
-    mounted: previewMounted,
-    open: previewOpen,
-    item: previewItem
-  }
 
   /* ------------------------------- helpers ------------------------------- */
 
@@ -194,41 +187,13 @@ export function Launcher(): React.JSX.Element {
     document.documentElement.dataset.platform = platformId
   }
 
-  const clearPreviewUnmount = (): void => {
-    if (previewUnmountRef.current) window.clearTimeout(previewUnmountRef.current)
-    previewUnmountRef.current = null
-  }
-
-  // Transient closes (settings/help/no results/leaving plugin) keep the user's
-  // explicit dismissal state; only an actual close action dismisses the preview.
-  const closePreviewVisual = (dismiss = false): void => {
-    if (dismiss) previewDismissedRef.current = true
-    setPreviewOpen(false)
-    clearPreviewUnmount()
-    previewUnmountRef.current = window.setTimeout(
-      () => setPreviewMounted(false),
-      ANIMATION.previewUnmount
-    )
-  }
-
-  const closePreview = (dismiss = true): void => {
-    closePreviewVisual(dismiss)
-  }
-
-  const showPreview = (): void => {
-    if (!isClipboard || settingsOpen || helpOpen || pluginLeaving || !selectedClipboard) return
-    previewDismissedRef.current = false
-    clearPreviewUnmount()
-    setPreviewMounted(true)
-    setPreviewOpen(true)
-  }
-
   const moveSelection = (delta: number): void => {
     if (currentCount === 0) return
     setSelection((value) => {
       const safe = Math.min(value, currentCount - 1)
       return Math.min(currentCount - 1, Math.max(0, safe + delta))
     })
+    setClipboardScrollNonce((value) => value + 1)
   }
 
   const setCurrentSelection = (index: number): void => {
@@ -258,19 +223,17 @@ export function Launcher(): React.JSX.Element {
     }
   }
 
-  const openPlugin = (pluginId: string): void => {
+  const openPlugin = (pluginId: string, options?: { direct?: boolean }): void => {
     const data = bootstrapRef.current
     const plugin = data?.plugins.find((entry) => entry.id === pluginId)
     if (!data || !plugin || !plugin.enabled) {
       pendingOpenRef.current = pluginId
+      pendingDirectRef.current = options?.direct === true
       return
     }
     if (pluginLeaving) return
     pageRequestRef.current += 1
-    previewDismissedRef.current = false
-    clearPreviewUnmount()
-    setPreviewMounted(false)
-    setPreviewOpen(false)
+    directClipboardRef.current = options?.direct === true && pluginId === 'clipboard'
     setHelpOpen(false)
     setClearArmed(false)
     if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
@@ -295,13 +258,13 @@ export function Launcher(): React.JSX.Element {
     if (!activePluginId || pluginLeaving) return
     pageRequestRef.current += 1
     settingsRequestRef.current += 1
+    directClipboardRef.current = false
     setSettingsOpen(false)
     setSettingsPage(null)
     setSettingsError(null)
     setHelpOpen(false)
     setClearArmed(false)
     if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
-    closePreview(false)
     setQuery('')
     setPluginLeaving(true)
     const leavingId = activePluginId
@@ -326,7 +289,6 @@ export function Launcher(): React.JSX.Element {
     const request = ++settingsRequestRef.current
     setQuery('')
     setSelection(0)
-    closePreview(false)
     setSettingsError(null)
     setSettingsPage(null)
     setSettingsOpen(true)
@@ -456,7 +418,6 @@ export function Launcher(): React.JSX.Element {
       else {
         setClipboardItems([])
         if (result.toast) showToast(result.toast)
-        closePreview(false)
       }
     })
   }
@@ -482,7 +443,6 @@ export function Launcher(): React.JSX.Element {
   }
 
   const openHelp = (): void => {
-    closePreview(false)
     setHelpOpen(true)
   }
 
@@ -583,10 +543,7 @@ export function Launcher(): React.JSX.Element {
     setHelpOpen(false)
     setClearArmed(false)
     if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
-    clearPreviewUnmount()
-    setPreviewMounted(false)
-    setPreviewOpen(false)
-    previewDismissedRef.current = false
+    directClipboardRef.current = false
     lastEntranceRef.current = 0
     setIdlePanelSurface()
     setSettingsOpen(false)
@@ -727,8 +684,10 @@ export function Launcher(): React.JSX.Element {
     applyTheme(bootstrap.theme, bootstrap.platform)
     if (pendingOpenRef.current) {
       const id = pendingOpenRef.current
+      const direct = pendingDirectRef.current
       pendingOpenRef.current = null
-      openPluginRef.current(id)
+      pendingDirectRef.current = false
+      openPluginRef.current(id, { direct })
     }
   }, [bootstrap])
 
@@ -773,11 +732,14 @@ export function Launcher(): React.JSX.Element {
     offs.push(api.on('launcher:close-request', () => void closeLauncherRef.current(false)))
     offs.push(
       api.on('launcher:open-plugin', ({ pluginId }) => {
+        // Only the global clipboard hotkey enters through this channel. Mark it
+        // so esc can close the launcher directly instead of leaving the plugin.
         if (!bootstrapRef.current) {
           pendingOpenRef.current = pluginId
+          pendingDirectRef.current = true
           return
         }
-        openPluginRef.current(pluginId)
+        openPluginRef.current(pluginId, { direct: true })
       })
     )
     offs.push(
@@ -831,32 +793,8 @@ export function Launcher(): React.JSX.Element {
     }
   }, [])
 
-  // The clipboard preview is part of the default layout: show it as soon as a
-  // row exists, and keep it open while browsing. Only an explicit close (or a
-  // state that hides the clipboard content) removes it. There is deliberately
-  // no hover/dwell timer, so pointer and j/k movement can never arm a delayed
-  // open/close loop.
-  useLayoutEffect(() => {
-    if (!isClipboard || settingsOpen || helpOpen || pluginLeaving || !selectedClipboard) {
-      if (previewOpen) closePreviewVisual(false)
-      return
-    }
-    if (previewDismissedRef.current || previewOpen) return
-    showPreview()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    isClipboard,
-    settingsOpen,
-    helpOpen,
-    pluginLeaving,
-    selectedClipboard?.item.id,
-    query,
-    previewOpen
-  ])
-
   useEffect(() => {
     return () => {
-      clearPreviewUnmount()
       if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -944,17 +882,19 @@ export function Launcher(): React.JSX.Element {
 
     if (key === 'Escape') {
       if (isPluginView) {
-        if (previewOpen) {
-          event.preventDefault()
-          closePreview(true)
-          return
-        }
         if (clearArmed) {
           event.preventDefault()
           disarmClear()
           return
         }
         event.preventDefault()
+        // The clipboard hotkey is a direct shortcut into the plugin, so esc
+        // should close the launcher instead of peeling back to the global
+        // search page first. Entering from the global page still returns there.
+        if (isClipboard && directClipboardRef.current) {
+          void closeLauncher(false)
+          return
+        }
         exitPlugin()
         return
       }
@@ -975,20 +915,6 @@ export function Launcher(): React.JSX.Element {
       if (!isPluginView || currentCount > 0) {
         event.preventDefault()
         moveSelection(key === 'ArrowDown' ? 1 : -1)
-      }
-      return
-    }
-
-    if (event.ctrlKey && !event.altKey && !event.metaKey && (key === 'h' || key === 'l')) {
-      if (isClipboard) {
-        event.preventDefault()
-        if (key === 'l' && selectedClipboard) {
-          showPreview()
-        } else if (key === 'h' && (previewOpen || previewMounted)) {
-          closePreview(true)
-        }
-      } else if (!isPluginView && key === 'l' && inEditable) {
-        event.preventDefault()
       }
       return
     }
@@ -1049,18 +975,11 @@ export function Launcher(): React.JSX.Element {
     }
     if (isPluginView && !pluginLeaving) {
       if (isClipboard) {
-        if (previewOpen) {
-          return [
-            { keys: keycapParts('Control+H', platform), label: '收起预览' },
-            { keys: ['↵'], label: '置顶并关闭' },
-            { keys: [primaryActionModifier(platform), '↵'], label: '粘贴' }
-          ]
-        }
         return [
           { keys: ['↵'], label: '置顶并关闭' },
-          { keys: keycapParts('Control+L', platform), label: '预览' },
           { keys: [primaryActionModifier(platform), '↵'], label: '粘贴' },
-          { keys: keycapParts('Control+Backspace', platform), label: '删除' }
+          { keys: keycapParts('Control+Backspace', platform), label: '删除' },
+          { keys: ['esc'], label: directClipboardRef.current ? '关闭' : '退出' }
         ]
       }
       if (isBookmarks) {
@@ -1181,15 +1100,15 @@ export function Launcher(): React.JSX.Element {
           maxItems={clipboardMax}
           query={query}
           selectedIndex={currentIndex}
+          scrollNonce={clipboardScrollNonce}
           deletingId={deletingId}
-          preview={preview}
+          previewItem={previewItem}
           onHover={setCurrentSelection}
           onActivate={(index) => {
             const row = clipboardRows[index]
             if (row) void runClipboardActivation(row.item.id, false)
           }}
           onSettings={() => void openPluginSettings()}
-          onPreviewClose={() => closePreview(true)}
         />
       )
     }
