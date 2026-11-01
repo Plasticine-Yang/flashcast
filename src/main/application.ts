@@ -30,6 +30,7 @@ import { ClipboardService } from './clipboard-service'
 import { ConfigStore } from './config-store'
 import { ExternalPluginManager } from './external-plugins'
 import { FaviconService } from './favicons'
+import { desktopEntryDirs, findDesktopEntry, packageDesktopName, usesWayland } from './linux-portal'
 import { log } from './logger'
 import { pasteIntoActiveApp } from './native-paste'
 import {
@@ -141,12 +142,16 @@ export class FlashcastApplication {
     }
     this.markLaunched()
 
-    if (this.shortcuts.getErrors().length > 0) {
-      const error = this.shortcuts.getErrors()[0]
+    const shortcutErrors = this.shortcutErrors()
+    if (shortcutErrors.length > 0) {
+      log.warn('global shortcut issues:', shortcutErrors)
+      const error = shortcutErrors[0]
       try {
         new Notification({
           title: 'Flashcast 全局快捷键注册失败',
-          body: `${error.accelerator}：${error.message}。可从托盘打开设置并更换快捷键。`
+          body: `${error.accelerator}：${error.message}${
+            error.id === 'system' ? '' : '。可从托盘打开设置并更换快捷键'
+          }`
         }).show()
       } catch {
         // Notifications are best-effort.
@@ -198,7 +203,7 @@ export class FlashcastApplication {
       prefs: this.config.getPrefs(),
       theme: this.resolvedTheme(),
       shortcuts: this.shortcuts.getInfo(),
-      shortcutErrors: this.shortcuts.getErrors(),
+      shortcutErrors: this.shortcutErrors(),
       plugins: this.plugins.getSummaries(),
       commands: COMMANDS,
       workspace: this.workspace.getSummary(),
@@ -207,6 +212,31 @@ export class FlashcastApplication {
       dataDir: this.config.dataDir,
       isDev: isDev()
     }
+  }
+
+  /**
+   * Registration errors plus environment problems that make every global
+   * shortcut silently inoperative. On Wayland the portal refuses to bind
+   * shortcuts for an app identity it cannot resolve to an installed
+   * `.desktop` file, and `globalShortcut.register()` still reports success.
+   */
+  private shortcutErrors(): ShortcutError[] {
+    return [...this.shortcuts.getErrors(), ...this.portalIdentityErrors()]
+  }
+
+  private portalIdentityErrors(): ShortcutError[] {
+    if (this.platform !== 'linux' || !usesWayland()) return []
+    const desktopName = packageDesktopName()
+    if (findDesktopEntry(desktopName, desktopEntryDirs())) return []
+    return [
+      {
+        id: 'system',
+        accelerator: desktopName,
+        message:
+          'Wayland 下全局快捷键经由 xdg-desktop-portal 注册，系统找不到同名的 .desktop 文件时会静默拒绝绑定。' +
+          '开发时重新运行 pnpm dev 会自动写入，重新打包安装后也会随包提供。'
+      }
+    ]
   }
 
   async getApps() {
@@ -349,7 +379,7 @@ export class FlashcastApplication {
     })
     this.broadcast(IPC.shortcutsChanged, {
       shortcuts: this.shortcuts.getInfo(),
-      errors: this.shortcuts.getErrors()
+      errors: this.shortcutErrors()
     })
     this.broadcast(IPC.workspaceChanged, this.workspace.getSummary())
     this.broadcast(IPC.clipboardChanged, this.clipboard.getItems())
@@ -407,9 +437,9 @@ export class FlashcastApplication {
     }
     this.broadcast(IPC.shortcutsChanged, {
       shortcuts: this.shortcuts.getInfo(),
-      errors: this.shortcuts.getErrors()
+      errors: this.shortcutErrors()
     })
-    return { shortcuts: this.shortcuts.getInfo(), errors: this.shortcuts.getErrors() }
+    return { shortcuts: this.shortcuts.getInfo(), errors: this.shortcutErrors() }
   }
 
   async resetShortcuts(): Promise<{ shortcuts: ShortcutInfo[]; errors: ShortcutError[] }> {
@@ -423,9 +453,9 @@ export class FlashcastApplication {
     }
     this.broadcast(IPC.shortcutsChanged, {
       shortcuts: this.shortcuts.getInfo(),
-      errors: this.shortcuts.getErrors()
+      errors: this.shortcutErrors()
     })
-    return { shortcuts: this.shortcuts.getInfo(), errors: this.shortcuts.getErrors() }
+    return { shortcuts: this.shortcuts.getInfo(), errors: this.shortcutErrors() }
   }
 
   async checkUpdates(): Promise<{

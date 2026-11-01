@@ -1,6 +1,6 @@
 import { AlertTriangle, Keyboard, RotateCcw } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import type { BootstrapData, ShortcutInfo } from '@shared/types'
+import type { BootstrapData, ShortcutError, ShortcutInfo } from '@shared/types'
 import {
   acceleratorFromEvent,
   clearAllAccelerator,
@@ -12,6 +12,11 @@ import { AcceleratorKeys, Keycaps } from '../components/ui'
 import { PageHeader, Section, Modal, InlineSpinner } from './components'
 
 type ToastTone = 'default' | 'success' | 'warning' | 'danger'
+
+/** `system` 诊断描述的是环境问题（如 Wayland portal 身份缺失），不是本次保存失败。 */
+function registrationErrors(errors: ShortcutError[]): ShortcutError[] {
+  return errors.filter((error) => error.id !== 'system')
+}
 
 export function ShortcutsPage({
   data,
@@ -67,8 +72,9 @@ export function ShortcutsPage({
     setSaving(true)
     try {
       const result = await api.setShortcuts({ [recording.id]: accelerator })
-      if (result.errors.length > 0) {
-        setConflict(result.errors[0].message)
+      const failures = registrationErrors(result.errors)
+      if (failures.length > 0) {
+        setConflict(failures[0].message)
         return
       }
       onData({ ...data, shortcuts: result.shortcuts, shortcutErrors: result.errors })
@@ -87,8 +93,9 @@ export function ShortcutsPage({
     setResetting(true)
     try {
       const result = await api.resetShortcuts()
+      const failed = registrationErrors(result.errors).length > 0
       onData({ ...data, shortcuts: result.shortcuts, shortcutErrors: result.errors })
-      onToast(result.errors.length ? '已恢复默认，但部分快捷键注册失败' : '已恢复默认快捷键', result.errors.length ? 'warning' : 'success')
+      onToast(failed ? '已恢复默认，但部分快捷键注册失败' : '已恢复默认快捷键', failed ? 'warning' : 'success')
     } catch (error) {
       onToast((error as Error).message, 'danger')
     } finally {
@@ -119,7 +126,7 @@ export function ShortcutsPage({
           <div className="settings-error-banner" role="alert">
             <AlertTriangle size={15} strokeWidth={1.75} aria-hidden="true" />
             <div>
-              <strong>部分全局快捷键未能注册</strong>
+              <strong>全局快捷键未能生效</strong>
               <ul>
                 {data.shortcutErrors.map((error) => (
                   <li key={`${error.id}-${error.accelerator}`}>
@@ -154,8 +161,9 @@ export function ShortcutsPage({
                             const result = await api.setShortcuts({
                               [shortcut.id]: shortcut.defaultAccelerator
                             })
-                            if (result.errors.length > 0) {
-                              onToast(result.errors[0].message, 'danger')
+                            const failures = registrationErrors(result.errors)
+                            if (failures.length > 0) {
+                              onToast(failures[0].message, 'danger')
                             } else {
                               onData({ ...data, shortcuts: result.shortcuts, shortcutErrors: result.errors })
                               onToast('已恢复默认组合', 'success')

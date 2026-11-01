@@ -113,6 +113,8 @@ src/shared/
 
 - 全局动作存储为规范 accelerator（`Control+Alt+C`、`Meta+...`），运行时按平台映射为 Electron accelerator（macOS 的 `Meta→Command`，Linux/Windows 的 `Meta→Super`）。
 - 设置页录制使用真实 `keydown`，要求至少一个主修饰键；与另一个全局动作冲突时禁止保存。主进程注册失败会事务式恢复旧组合并返回错误。
+- Wayland 会话不经过 X11 抓键，而是由 `xdg-desktop-portal` 的 `GlobalShortcuts` 接口绑定：Electron 把 `package.json#desktopName`（`com.flashcast.app.desktop`）作为 portal 身份，因此该名字必须与已安装的 `.desktop` 文件一致（打包由 `linux.syncDesktopName` 保证，开发由 `scripts/ensure-dev-desktop-entry.mjs` 写入用户目录）。身份无法解析时 portal 会拒绝绑定而 `globalShortcut.register()` 仍返回 `true`，所以 `src/main/linux-portal.ts` 在启动时检查身份解析结果，把问题写入设置页的 `shortcutErrors`（`id: 'system'`）并发送系统通知。
+- 设置页把 `system` 诊断与“本次保存失败”区分开：录制/恢复默认的错误判断会过滤该 id，避免环境问题被当成冲突而拒绝保存。
 - `Ctrl+J/K/H/L`、`Esc`、`Enter`、`Ctrl+Backspace`、清空组合键、`?` 都经过渲染器统一的 `keyHandler`；输入法组合输入期间全部忽略。
 
 ## 4. UI 设计令牌与组件
@@ -137,7 +139,7 @@ src/shared/
 
 - `pnpm typecheck` 通过；`pnpm test` 20 个用例通过（模糊匹配、快捷键、Chrome 书签扁平化、`.desktop`/Exec 解析）。
 - `pnpm build` 通过；`electron-builder --dir --linux` 生成可运行的 unpacked 应用，asar 与 `resources/build` 图标/封面资源路径验证通过。
-- 在 Ubuntu GNOME/Wayland 的 XWayland 环境启动真实 Electron 应用：全局快捷键注册成功、无渲染错误。
+- 在 Ubuntu 26.04 / GNOME 50 Wayland 会话启动真实 Electron 应用：渲染正常、无崩溃。此前记录的“全局快捷键注册成功”只反映 `globalShortcut.register()` 的返回值；Wayland 下实际绑定由 portal 完成，需要应用身份能解析到已安装的 `.desktop` 文件（见 3.8）。
 - 通过 Chrome DevTools Protocol 驱动真实应用：
   - `ArrowDown` / `Ctrl+J` 改变选中项；
   - `Enter` 激活剪切板项后窗口 `IsUnMapped`，系统剪贴板变为该文件路径，历史顺序置顶；

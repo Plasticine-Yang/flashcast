@@ -109,6 +109,8 @@ pnpm dist:win
 
 全局快捷键可在 **设置 → 快捷键** 中录制与恢复默认；冲突会即时提示。macOS 的“自动粘贴”需要辅助功能权限；Linux 的自动粘贴需要系统存在 `wtype`（Wayland）或 `xdotool`（X11），否则内容仍会复制到剪贴板并给出系统通知。
 
+> **Linux Wayland 下的全局快捷键**：Electron 通过 `xdg-desktop-portal` 的 `GlobalShortcuts` 接口绑定快捷键，应用身份取自 `package.json` 的 `desktopName`（`com.flashcast.app.desktop`）。该身份必须能解析到已安装的同名 `.desktop` 文件，否则 xdg-desktop-portal 1.21+ / GNOME 50 会静默拒绝绑定（`globalShortcut.register()` 仍返回 `true`）。`pnpm dev` 会自动写入 `~/.local/share/applications/com.flashcast.app.desktop`（删除该文件即可移除，它会覆盖同名的打包安装项）；首次绑定会弹出一次系统确认框，允许后快捷键才真正生效。
+
 ## 工作区
 
 首次启动会在 `~/.flashcast` 初始化一个带 `main` 分支的 Git 仓库，并提交初始配置。也可以在 **设置 → 工作区 → 重新关联仓库** 选择任意 Git 仓库。工作区布局：
@@ -219,7 +221,7 @@ module.exports = {
 ## 平台说明与已知限制
 
 - **Linux 透明/模糊**：GNOME/KWin 等合成器下保留透明遮罩与 CSS 毛玻璃；按规范在没有窗口模糊支持时使用不透明 `#18181B` 面板。
-- **Wayland 全局快捷键**：启用 `GlobalShortcutsPortal`；若桌面未实现 portal 或快捷键被占用，设置页会显示错误，X11 下仍可工作。
+- **Wayland 全局快捷键**：走 `xdg-desktop-portal` 的 `GlobalShortcuts`（Electron 45 默认启用，无需 feature flag）。应用身份来自 `package.json#desktopName`，必须与已安装的 `.desktop` 文件同名：开发时由 `pnpm dev` 写入 `~/.local/share/applications/com.flashcast.app.desktop`，打包时由 electron-builder 的 `syncDesktopName` 安装为同名文件。身份无法解析时系统会静默拒绝绑定，应用会在启动时写入设置页诊断并发系统通知；首次绑定需要用户在系统弹窗中确认。X11 会话直接抓键，不受影响。
 - **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限）；Windows 使用 PowerShell SendKeys；Linux 依赖 `wtype`/`xdotool`/`ydotool`。失败时保留系统剪贴板内容并发送系统通知。
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。
 - **视频封面**：若系统安装 `ffmpeg`，截取首帧作为封面；否则使用内置设计封面。视频不播放。
@@ -237,7 +239,7 @@ src/renderer/    React 启动器与设置窗口、设计令牌
 src/shared/      类型、模糊匹配、快捷键、时间格式化
 examples/        外部插件示例
 docs/            PRD、UI/UX 规格、实现说明、截图
-scripts/         图标/封面生成
+scripts/         图标/封面生成、开发用桌面项（Wayland 全局快捷键身份）
 ```
 
 ## 许可

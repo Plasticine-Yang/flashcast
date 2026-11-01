@@ -37,6 +37,10 @@ linux:
   target:
     - AppImage
     - deb
+  # 安装的 .desktop 文件名必须与 package.json#desktopName 一致（com.flashcast.app.desktop）：
+  # Electron 用它作为 XDG app_id / WM_CLASS，xdg-desktop-portal 也要求 Wayland 全局快捷键的
+  # 应用身份能解析到同名 .desktop 文件。
+  syncDesktopName: true
   desktop:
     entry:
       Name: Flashcast

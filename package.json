@@ -6,10 +6,11 @@
   "author": "Flashcast",
   "license": "MIT",
   "private": true,
+  "desktopName": "com.flashcast.app.desktop",
   "packageManager": "pnpm@12.5.1",
   "scripts": {
     "postinstall": "install-electron",
-    "dev": "electron-vite dev --noSandbox",
+    "dev": "node scripts/ensure-dev-desktop-entry.mjs && electron-vite dev --noSandbox",
     "start": "electron-vite preview",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
