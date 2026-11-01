@@ -4,8 +4,18 @@ import { resolve } from 'node:path'
 import { CLIPBOARD_MEDIA_SCHEME, DESKTOP_WALLPAPER_SCHEME, type PlatformId } from '@shared/types'
 import { FlashcastApplication } from './application'
 import { log } from './logger'
+import { desktopName, isDev } from './paths'
 
-app.setName('Flashcast')
+const dev = isDev()
+
+// 开发版与打包版并存：应用名决定 userData 目录（单实例锁也按它区分），桌面身份
+// 决定 .desktop 文件与 Wayland app_id。两者都必须和打包版分开，否则开发版会顶掉
+// 日常使用的生产版（隐藏其图标、抢占单实例锁与全局快捷键）。
+app.setName(dev ? 'Flashcast (Dev)' : 'Flashcast')
+if (dev && process.platform === 'linux') {
+  // 打包版继续由 package.json#desktopName（electron-builder 的 syncDesktopName）决定。
+  app.setDesktopName(desktopName())
+}
 
 if (process.env.FLASHCAST_USER_DATA) {
   const userData = resolve(process.env.FLASHCAST_USER_DATA)

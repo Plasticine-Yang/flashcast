@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { desktopEntryDirs, findDesktopEntry, packageDesktopName, usesWayland } from './linux-portal'
+import { desktopEntryDirs, findDesktopEntry, packageDesktopName, packageDesktopNames, usesWayland } from './linux-portal'
 
 describe('usesWayland', () => {
   it('follows the session type when both displays exist', () => {
@@ -53,5 +53,14 @@ describe('findDesktopEntry', () => {
 describe('packageDesktopName', () => {
   it('reads desktopName from package.json', () => {
     expect(packageDesktopName()).toBe('com.flashcast.app.desktop')
+  })
+})
+
+describe('packageDesktopNames', () => {
+  it('gives the dev build an identity of its own', () => {
+    const names = packageDesktopNames()
+    expect(names.packaged).toBe('com.flashcast.app.desktop')
+    expect(names.dev).toBe('com.flashcast.app.dev.desktop')
+    expect(names.dev).not.toBe(names.packaged)
   })
 })

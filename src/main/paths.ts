@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { packageDesktopNames } from './linux-portal'
 
 export interface LauncherState {
   activeWorkspace?: string
@@ -25,7 +26,8 @@ export function readLauncherState(): LauncherState {
 }
 
 export function defaultWorkspacePath(): string {
-  return join(homedir(), '.flashcast')
+  // 开发版用独立工作区，避免迭代时的配置或自动提交污染日常使用的仓库。
+  return join(homedir(), isDev() ? '.flashcast-dev' : '.flashcast')
 }
 
 export function resolveInitialWorkspace(): string {
@@ -48,6 +50,15 @@ export function assetsDir(): string {
 
 export function isDev(): boolean {
   return !app.isPackaged
+}
+
+/**
+ * 当前进程对外使用的桌面身份：Wayland app_id、X11 WM_CLASS 与 portal app id。
+ * 必须与实际安装的 .desktop 文件名一致（见 scripts/ensure-dev-desktop-entry.mjs）。
+ */
+export function desktopName(): string {
+  const names = packageDesktopNames()
+  return isDev() ? names.dev : names.packaged
 }
 
 export function appVersion(): string {

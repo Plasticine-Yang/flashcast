@@ -15,13 +15,14 @@ export class ShortcutManager {
 
   constructor(
     private readonly platform: PlatformId,
-    private readonly handlers: ShortcutHandlers
+    private readonly handlers: ShortcutHandlers,
+    private readonly dev = false
   ) {
-    this.hotkeys = defaultHotkeys(platform)
+    this.hotkeys = defaultHotkeys(platform, dev)
   }
 
   getInfo(): ShortcutInfo[] {
-    const defaults = defaultHotkeys(this.platform)
+    const defaults = defaultHotkeys(this.platform, this.dev)
     return [
       {
         id: 'launcher',

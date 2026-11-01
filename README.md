@@ -65,6 +65,22 @@ pnpm start         # 预览构建产物
 
 `postinstall` 会下载 Electron 运行时；如果 GitHub 下载受限，可在安装前设置镜像，例如 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ pnpm install`。
 
+### 开发版与生产版并存
+
+开发构建与安装版可以同时装在一台机器上，互不干扰：
+
+| | 生产版（deb / AppImage / dmg） | 开发版（`pnpm dev`） |
+|---|---|---|
+| 应用名 / userData | `Flashcast` → `~/.config/Flashcast` | `Flashcast (Dev)` → `~/.config/Flashcast (Dev)` |
+| 桌面身份 / `.desktop` | `com.flashcast.app.desktop` | `com.flashcast.app.dev.desktop` |
+| 工作区 | `~/.flashcast` | `~/.flashcast-dev` |
+| 默认快捷键 | `Alt+Space` / `Ctrl+Alt+C` | `Alt+Shift+Space` / `Ctrl+Alt+Shift+C` |
+| 开机自启动条目 | `autostart/flashcast.desktop` | `autostart/flashcast-dev.desktop` |
+
+分流依据是 `app.isPackaged`：应用名与桌面身份在 `src/main/index.ts`，路径在 `src/main/paths.ts`，快捷键默认值在 `src/shared/shortcuts.ts`。两个进程因此各有独立的单实例锁、桌面项和数据，可以同时运行。
+
+> 桌面身份不能复用：`~/.local/share/applications` 在 XDG 查找顺序里排在 `/usr/share/applications` 之前，同名的用户级条目会遮住 deb 安装的生产版；而 Wayland portal 又要求身份能解析到同名 `.desktop` 文件。两条约束只有“各自用不同身份”能同时满足。
+
 仅查看 UI（无需 Electron）的可视化预览：
 
 ```bash
@@ -127,11 +143,11 @@ node scripts/release.mjs 1.4.0   # 指定版本
 
 全局快捷键可在 **设置 → 快捷键** 中录制与恢复默认；冲突会即时提示。macOS 的“自动粘贴”需要辅助功能权限；Linux 的自动粘贴需要系统存在 `wtype`（Wayland）或 `xdotool`（X11），否则内容仍会复制到剪贴板并给出系统通知。
 
-> **Linux Wayland 下的全局快捷键**：Electron 通过 `xdg-desktop-portal` 的 `GlobalShortcuts` 接口绑定快捷键，应用身份取自 `package.json` 的 `desktopName`（`com.flashcast.app.desktop`）。该身份必须能解析到已安装的同名 `.desktop` 文件，否则 xdg-desktop-portal 1.21+ / GNOME 50 会静默拒绝绑定（`globalShortcut.register()` 仍返回 `true`）。`pnpm dev` 会自动写入 `~/.local/share/applications/com.flashcast.app.desktop`（删除该文件即可移除，它会覆盖同名的打包安装项）；首次绑定会弹出一次系统确认框，允许后快捷键才真正生效。
+> **Linux Wayland 下的全局快捷键**：Electron 通过 `xdg-desktop-portal` 的 `GlobalShortcuts` 接口绑定快捷键，应用身份取自 `package.json` 的 `desktopName`（`com.flashcast.app.desktop`），开发版由主进程的 `app.setDesktopName()` 换成 `com.flashcast.app.dev.desktop`。该身份必须能解析到已安装的同名 `.desktop` 文件，否则 xdg-desktop-portal 1.21+ / GNOME 50 会静默拒绝绑定（`globalShortcut.register()` 仍返回 `true`）。`pnpm dev` 会自动写入 `~/.local/share/applications/com.flashcast.app.dev.desktop`（应用网格里显示为「Flashcast (Dev)」，删除该文件即可移除；旧版本写成同名的开发条目会被自动清理）；首次绑定会弹出一次系统确认框，允许后快捷键才真正生效。
 
 ## 工作区
 
-首次启动会在 `~/.flashcast` 初始化一个带 `main` 分支的 Git 仓库，并提交初始配置。也可以在 **设置 → 工作区 → 重新关联仓库** 选择任意 Git 仓库。工作区布局：
+首次启动会在 `~/.flashcast` 初始化一个带 `main` 分支的 Git 仓库，并提交初始配置（开发版用 `~/.flashcast-dev`，两者互不影响）。也可以在 **设置 → 工作区 → 重新关联仓库** 选择任意 Git 仓库。工作区布局：
 
 ```text
 <workspace>/
@@ -148,7 +164,7 @@ node scripts/release.mjs 1.4.0   # 指定版本
 - 自动提交默认关闭；开启后只提交 Flashcast 管理的路径（`config.json`、`plugins/`、`README.md`、`.gitignore`），不会 stage 仓库中的其他文件。
 - 有 upstream 时自动尝试推送；没有远程仓库或推送失败会以状态/错误呈现，不阻塞配置保存。
 - 开发与自动化可使用环境变量：
-  - `FLASHCAST_WORKSPACE`：覆盖工作区路径
+  - `FLASHCAST_WORKSPACE`：覆盖工作区路径（默认 `~/.flashcast`，开发版为 `~/.flashcast-dev`）
   - `FLASHCAST_USER_DATA`：覆盖 Electron userData（便于沙箱测试）
   - `FLASHCAST_CHROME_USER_DATA`：覆盖 Chrome 用户数据目录
   - `FLASHCAST_SHOW_ON_START=1`：开发时启动后立即展示启动器
@@ -240,7 +256,7 @@ module.exports = {
 ## 平台说明与已知限制
 
 - **透明与模糊**：启动器是透明窗口，面板由半透明蓝色玻璃、内部光源与磨砂颗粒构成；GNOME 与 Windows 会读取当前桌面壁纸，重度模糊后以 `mix-blend-mode: color` 混入玻璃，形成真实的壁纸磨砂（macOS 无免授权接口，回退纯玻璃）。桌面级实时模糊依赖系统材质（`NSVisualEffectView` / Mica），本期未启用。设置窗口内部绘制蓝色极光背景，侧栏与卡片在其上做真实模糊。
-- **Wayland 全局快捷键**：走 `xdg-desktop-portal` 的 `GlobalShortcuts`（Electron 45 默认启用，无需 feature flag）。应用身份来自 `package.json#desktopName`，必须与已安装的 `.desktop` 文件同名：开发时由 `pnpm dev` 写入 `~/.local/share/applications/com.flashcast.app.desktop`，打包时由 electron-builder 的 `syncDesktopName` 安装为同名文件。身份无法解析时系统会静默拒绝绑定，应用会在启动时写入设置页诊断并发系统通知；首次绑定需要用户在系统弹窗中确认。X11 会话直接抓键，不受影响。
+- **Wayland 全局快捷键**：走 `xdg-desktop-portal` 的 `GlobalShortcuts`（Electron 45 默认启用，无需 feature flag）。应用身份来自 `package.json#desktopName`，必须与已安装的 `.desktop` 文件同名：生产版由 electron-builder 的 `syncDesktopName` 安装为 `com.flashcast.app.desktop`，开发版由 `pnpm dev` 写入 `~/.local/share/applications/com.flashcast.app.dev.desktop`。身份无法解析时系统会静默拒绝绑定，应用会在启动时写入设置页诊断并发系统通知；首次绑定需要用户在系统弹窗中确认。X11 会话直接抓键，不受影响。
 - **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限）；Windows 使用 PowerShell SendKeys；Linux 依赖 `wtype`/`xdotool`/`ydotool`。失败时保留系统剪贴板内容并发送系统通知。
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。
 - **视频封面**：若系统安装 `ffmpeg`，截取首帧作为封面；否则使用内置设计封面。视频不播放。

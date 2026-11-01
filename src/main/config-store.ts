@@ -21,7 +21,8 @@ export class ConfigStore extends EventEmitter {
 
   constructor(
     layout: WorkspaceLayout,
-    private readonly platform: PlatformId
+    private readonly platform: PlatformId,
+    private readonly dev = false
   ) {
     super()
     this.layout = layout
@@ -34,7 +35,7 @@ export class ConfigStore extends EventEmitter {
       launchAtLogin: false,
       language: 'zh-CN',
       autoCommit: false,
-      hotkeys: defaultHotkeys(this.platform),
+      hotkeys: defaultHotkeys(this.platform, this.dev),
       enabledPlugins: {}
     }
   }

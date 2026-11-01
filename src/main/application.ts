@@ -30,12 +30,13 @@ import { ClipboardService } from './clipboard-service'
 import { ConfigStore } from './config-store'
 import { ExternalPluginManager } from './external-plugins'
 import { FaviconService } from './favicons'
-import { desktopEntryDirs, findDesktopEntry, packageDesktopName, usesWayland } from './linux-portal'
+import { desktopEntryDirs, findDesktopEntry, usesWayland } from './linux-portal'
 import { log } from './logger'
 import { pasteIntoActiveApp } from './native-paste'
 import {
   appVersion,
   assetsDir,
+  desktopName,
   launcherStatePath,
   readLauncherState,
   resolveInitialWorkspace,
@@ -84,7 +85,7 @@ export class FlashcastApplication {
 
   async init(): Promise<void> {
     const initialPath = resolveInitialWorkspace()
-    this.config = new ConfigStore(workspaceLayout(initialPath), this.platform)
+    this.config = new ConfigStore(workspaceLayout(initialPath), this.platform, isDev())
     await this.config.init()
 
     this.workspace = new WorkspaceService(this.config, initialPath)
@@ -117,10 +118,14 @@ export class FlashcastApplication {
     this.windows = new WindowManager(this.platform, {
       onPasteAfterHide: () => pasteIntoActiveApp(this.platform)
     })
-    this.shortcuts = new ShortcutManager(this.platform, {
-      launcher: () => this.windows.toggleLauncher(),
-      openClipboard: () => this.windows.openClipboardPlugin()
-    })
+    this.shortcuts = new ShortcutManager(
+      this.platform,
+      {
+        launcher: () => this.windows.toggleLauncher(),
+        openClipboard: () => this.windows.openClipboardPlugin()
+      },
+      isDev()
+    )
 
     this.wireEvents()
     this.registerMediaProtocol()
@@ -229,12 +234,12 @@ export class FlashcastApplication {
 
   private portalIdentityErrors(): ShortcutError[] {
     if (this.platform !== 'linux' || !usesWayland()) return []
-    const desktopName = packageDesktopName()
-    if (findDesktopEntry(desktopName, desktopEntryDirs())) return []
+    const identity = desktopName()
+    if (findDesktopEntry(identity, desktopEntryDirs())) return []
     return [
       {
         id: 'system',
-        accelerator: desktopName,
+        accelerator: identity,
         message:
           'Wayland 下全局快捷键经由 xdg-desktop-portal 注册，系统找不到同名的 .desktop 文件时会静默拒绝绑定。' +
           '开发时重新运行 pnpm dev 会自动写入，重新打包安装后也会随包提供。'
@@ -481,16 +486,18 @@ export class FlashcastApplication {
   async applyLaunchAtLogin(enabled: boolean): Promise<void> {
     try {
       if (this.platform === 'linux') {
+        const dev = isDev()
         const autostartDir = process.env.FLASHCAST_AUTOSTART_DIR ?? join(homedir(), '.config', 'autostart')
-        const file = join(autostartDir, 'flashcast.desktop')
+        // 开发版写独立文件，开关自启动时不会覆盖打包版的条目。
+        const file = join(autostartDir, dev ? 'flashcast-dev.desktop' : 'flashcast.desktop')
         if (enabled) {
           await mkdir(autostartDir, { recursive: true })
           const exec =
             process.env.APPIMAGE ??
-            `${quoteExec(process.execPath)}${isDev() ? ` ${quoteExec(app.getAppPath())}` : ''}`
+            `${quoteExec(process.execPath)}${dev ? ` --no-sandbox ${quoteExec(app.getAppPath())}` : ''}`
           await writeFile(
             file,
-            `[Desktop Entry]\nType=Application\nName=Flashcast\nComment=Keyboard-first launcher\nExec=${exec}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n`,
+            `[Desktop Entry]\nType=Application\nName=${dev ? 'Flashcast (Dev)' : 'Flashcast'}\nComment=Keyboard-first launcher\nExec=${exec}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n`,
             'utf8'
           )
         } else if (existsSync(file)) {
@@ -541,7 +548,7 @@ export class FlashcastApplication {
         return
       }
       this.tray = new Tray(iconPath)
-      this.tray.setToolTip('Flashcast')
+      this.tray.setToolTip(isDev() ? 'Flashcast (Dev)' : 'Flashcast')
       const menu = Menu.buildFromTemplate([
         { label: '打开 Flashcast', click: () => this.windows.toggleLauncher() },
         { label: '设置…', click: () => this.windows.openSettings() },

@@ -7,6 +7,7 @@
   "license": "MIT",
   "private": true,
   "desktopName": "com.flashcast.app.desktop",
+  "devDesktopName": "com.flashcast.app.dev.desktop",
   "packageManager": "pnpm@12.5.1",
   "scripts": {
     "postinstall": "install-electron",

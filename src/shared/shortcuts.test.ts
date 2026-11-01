@@ -3,6 +3,7 @@ import {
   acceleratorFromEvent,
   canonicalizeAccelerator,
   clearAllAccelerator,
+  defaultHotkeys,
   eventMatchesAccelerator,
   formatAccelerator,
   keycapParts,
@@ -72,5 +73,25 @@ describe('shortcut handling', () => {
         ctrlKey: true
       })
     ).toBe(false)
+  })
+})
+
+describe('defaultHotkeys', () => {
+  it('keeps the packaged defaults on every platform', () => {
+    expect(defaultHotkeys('linux')).toEqual({
+      launcher: 'Alt+Space',
+      openClipboard: 'Control+Alt+C'
+    })
+    expect(defaultHotkeys('darwin').launcher).toBe('Alt+Space')
+    expect(defaultHotkeys('darwin').openClipboard).toBe('Control+Meta+C')
+  })
+
+  it('gives the dev build its own combinations so both can run at once', () => {
+    const production = defaultHotkeys('linux')
+    const dev = defaultHotkeys('linux', true)
+    expect(dev).toEqual({ launcher: 'Alt+Shift+Space', openClipboard: 'Control+Alt+Shift+C' })
+    expect(dev.launcher).not.toBe(production.launcher)
+    expect(dev.openClipboard).not.toBe(production.openClipboard)
+    expect(defaultHotkeys('darwin', true).openClipboard).toBe('Control+Meta+Shift+C')
   })
 })

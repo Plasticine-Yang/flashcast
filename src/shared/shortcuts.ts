@@ -16,7 +16,17 @@ export function isMac(platform: PlatformId): boolean {
   return platform === 'darwin'
 }
 
-export function defaultHotkeys(platform: PlatformId): GlobalHotkeys {
+/**
+ * 开发版的默认组合与打包版错开：两个进程可能同时运行，同一个加速键只能被其中
+ * 一方注册成功，后启动的一方会静默失败。
+ */
+export function defaultHotkeys(platform: PlatformId, dev = false): GlobalHotkeys {
+  if (dev) {
+    return {
+      launcher: 'Alt+Shift+Space',
+      openClipboard: platform === 'darwin' ? 'Control+Meta+Shift+C' : 'Control+Alt+Shift+C'
+    }
+  }
   return {
     launcher: 'Alt+Space',
     openClipboard: platform === 'darwin' ? 'Control+Meta+C' : 'Control+Alt+C'

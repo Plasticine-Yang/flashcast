@@ -23,18 +23,41 @@ export function usesWayland(env: NodeJS.ProcessEnv = process.env): boolean {
   return wayland
 }
 
-/** 读取 Electron 实际会报告给桌面的身份（默认回退到 Flashcast 的 slug）。 */
-export function packageDesktopName(baseDir: string = __dirname): string {
+/** 读不到 package.json 时开发版使用的身份，仍然是一个合法的反向域名 id。 */
+export const DEV_DESKTOP_NAME = 'com.flashcast.app.dev.desktop'
+
+function withDesktopSuffix(name: string): string {
+  return name.endsWith('.desktop') ? name : `${name}.desktop`
+}
+
+/**
+ * 打包版与开发版的两套桌面身份。两者必须不同名：同名 .desktop 会按 XDG 顺序
+ * 互相遮蔽，开发版的用户级条目会盖住 deb 安装的系统条目。
+ */
+export function packageDesktopNames(baseDir: string = __dirname): {
+  packaged: string
+  dev: string
+} {
   try {
     const pkg = JSON.parse(readFileSync(join(baseDir, '../../package.json'), 'utf8')) as {
       desktopName?: string
+      devDesktopName?: string
     }
-    const name = pkg.desktopName?.trim()
-    if (name) return name.endsWith('.desktop') ? name : `${name}.desktop`
+    const packaged = pkg.desktopName?.trim()
+    const dev = pkg.devDesktopName?.trim()
+    return {
+      packaged: packaged ? withDesktopSuffix(packaged) : 'flashcast.desktop',
+      dev: dev ? withDesktopSuffix(dev) : DEV_DESKTOP_NAME
+    }
   } catch {
     // 打包后可读路径不同，忽略并回退。
+    return { packaged: 'flashcast.desktop', dev: DEV_DESKTOP_NAME }
   }
-  return 'flashcast.desktop'
+}
+
+/** 读取 Electron 实际会报告给桌面的身份（默认回退到 Flashcast 的 slug）。 */
+export function packageDesktopName(baseDir: string = __dirname): string {
+  return packageDesktopNames(baseDir).packaged
 }
 
 export function desktopEntryDirs(
