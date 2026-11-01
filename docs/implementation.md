@@ -94,8 +94,9 @@ src/shared/
 
 ### 3.5 Chrome 书签
 
-- 解析平台默认 Chrome 用户数据目录（可用 `FLASHCAST_CHROME_USER_DATA` 覆盖），读取 `Local State` 展示 Profile 名称，优先 `Default`。Profile 发现以 `Local State#profile.info_cache` 与 `profiles_order` 为准，目录存在即可选中，不再要求已经生成 `Bookmarks`；缺少 Local State 时回退到 `Default` / `Profile N` / 含 `Preferences` 的目录。
-- 递归扁平化 `roots.bookmark_bar / other / synced`，只保留 http/https/file，记录 Chrome 顺序与文件夹路径；设置页选择 Profile 后立即写插件配置。Chrome 尚未创建 `Bookmarks`（从未添加书签）时返回空列表而不是“未找到 Profile”。
+- 解析平台默认 Chrome 用户数据目录（可用 `FLASHCAST_CHROME_USER_DATA` 覆盖），读取 `Local State` 展示 Profile 名称，优先 `Default`。Profile 发现以 `Local State#profile.info_cache` 与 `profiles_order` 为准，目录存在即可选中；缺少 Local State 时回退到 `Default` / `Profile N` / 含 `Preferences`、`Bookmarks` 或 `AccountBookmarks` 的目录。
+- Chrome 有两种书签存储：本地 `Bookmarks`，以及登录 Google 账户并启用账户书签后的 `AccountBookmarks`（新版 Chrome 的默认行为，此时 `Bookmarks` 根本不会生成）。两者格式一致，读取时按 `mtime` 选择最近写入的一份，时间相同取 `AccountBookmarks`；最新文件解析失败时回退到另一份。设置页显示当前实际使用的书签文件与来源（本地 / 账户）。
+- 递归扁平化 `roots.bookmark_bar / other / synced`，只保留 http/https/file，记录 Chrome 顺序与文件夹路径；设置页选择 Profile 后立即写插件配置。两个文件都不存在（从未添加书签）时返回空列表而不是“未找到 Profile”，`bookmarkSource` 为 `null`。
 - favicon 按域请求 Google s2 并缓存为 PNG data URL，渲染为 32px 图标；失败回退 Globe。
 - 打开时通过检测到的 Chrome 可执行文件 `--new-tab` 打开；macOS 使用 `open -a "Google Chrome"`。找不到 Chrome / 解析失败均提供就地错误与重试。
 
@@ -122,6 +123,13 @@ src/shared/
 - 设置页把 `system` 诊断与“本次保存失败”区分开：录制/恢复默认的错误判断会过滤该 id，避免环境问题被当成冲突而拒绝保存。
 - `Ctrl+J/K/H/L`、`Esc`、`Enter`、`Ctrl+Backspace`、清空组合键、`?` 都经过渲染器统一的 `keyHandler`；输入法组合输入期间全部忽略。
 
+### 3.9 发布流水线
+
+- 发布以 tag 为唯一事实来源：`scripts/release.mjs`（`pnpm release:minor` / `release:patch` / `release:major`，或直接传 `x.y.z`）升 `package.json` 版本、提交「chore(release): 发布 vX.Y.Z」、打附注 tag 并推送。
+- `.github/workflows/release.yml` 在 `v*` tag 上运行：先校验 tag 与 `package.json` 版本一致，再并行构建 Linux（AppImage/deb）、macOS（dmg/zip，x64 + arm64）、Windows（nsis）。各 job 先把产物上传为 workflow artifact，由独立的 `publish` job 汇总、生成 `SHA256SUMS.txt` 后用 `gh release create` 创建 Release（已存在时 `--clobber` 覆盖资产），避免多 job 并发写同一个 Release。
+- 产物未签名（仓库没有证书）：macOS 需右键打开，Windows 会触发 SmartScreen；macOS 通过 `CSC_IDENTITY_AUTO_DISCOVERY=false` 跳过签名发现。
+- `.github/workflows/ci.yml` 在 PR 与 `main` 推送时执行 `typecheck`、`test`、`build`。
+
 ## 4. UI 设计令牌与组件
 
 - `styles/tokens.css` 完整实现 UI 规范第 3 节的深色/浅色颜色、字体、间距、圆角、阴影和动效令牌；Linux 面板按规范使用不透明底。
@@ -142,7 +150,8 @@ src/shared/
 
 ## 6. 已验证范围
 
-- `pnpm typecheck` 通过；`pnpm test` 20 个用例通过（模糊匹配、快捷键、Chrome 书签扁平化、`.desktop`/Exec 解析）。
+- `pnpm typecheck` 通过；`pnpm test` 37 个用例通过（模糊匹配、快捷键、Chrome 书签扁平化与账户书签选择、`.desktop`/Exec 解析）。
+- 用本机真实 Chrome（153，登录 Google 账户，Profile 内只有 `AccountBookmarks`）验证：能读出 18 条书签及其文件夹路径，`bookmarkSource` 为 `account`。
 - `pnpm build` 通过；`electron-builder --dir --linux` 生成可运行的 unpacked 应用，asar 与 `resources/build` 图标/封面资源路径验证通过。
 - 在 Ubuntu 26.04 / GNOME 50 Wayland 会话启动真实 Electron 应用：渲染正常、无崩溃。此前记录的“全局快捷键注册成功”只反映 `globalShortcut.register()` 的返回值；Wayland 下实际绑定由 portal 完成，需要应用身份能解析到已安装的 `.desktop` 文件（见 3.8）。
 - 通过 Chrome DevTools Protocol 驱动真实应用：

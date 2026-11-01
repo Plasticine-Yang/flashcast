@@ -1,0 +1,107 @@
+name: Release
+
+# 推送 v* tag 触发：校验版本号 → 三端打包 → 创建 GitHub Release。
+# 本地用 `pnpm release:minor` / `release:patch` / `release:major` 升版本并推送 tag。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: 校验版本号
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: tag 必须与 package.json 版本一致
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 package.json 版本 ${version} 不一致，请用 pnpm release:* 发布"
+            exit 1
+          fi
+          echo "发布版本 ${version}"
+
+  build:
+    name: 打包 ${{ matrix.name }}
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            args: --linux --x64
+          - name: macos
+            os: macos-latest
+            args: --mac --x64 --arm64
+          - name: windows-x64
+            os: windows-latest
+            args: --win --x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: 打包（不直接发布）
+        run: pnpm exec electron-builder ${{ matrix.args }} --publish never
+        env:
+          # 仓库没有 macOS / Windows 开发者证书，显式跳过签名发现，避免打包失败。
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.dmg
+            dist/*.zip
+            dist/*.exe
+            dist/*.blockmap
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: 创建 Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: 生成 SHA256 校验和
+        run: |
+          set -euo pipefail
+          cd assets
+          ls -lh
+          sha256sum * > SHA256SUMS.txt
+      - name: 发布到 GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber
+          else
+            gh release create "$TAG" assets/* \
+              --title "Flashcast ${TAG#v}" \
+              --generate-notes \
+              --verify-tag
+          fi

@@ -1,5 +1,8 @@
 # Flashcast
 
+[![CI](https://github.com/Plasticine-Yang/flashcast/actions/workflows/ci.yml/badge.svg)](https://github.com/Plasticine-Yang/flashcast/actions/workflows/ci.yml)
+[![Release](https://github.com/Plasticine-Yang/flashcast/actions/workflows/release.yml/badge.svg)](https://github.com/Plasticine-Yang/flashcast/releases)
+
 像一道闪电一样打开工作流。Flashcast 是一个键盘优先、插件驱动、动画流畅的跨平台启动器，设计目标对齐 Raycast：输入即搜、`ctrl + j/k/h/l` 移动光标、流体式的窗口与插件切换、以及可版本化的工作区配置。
 
 ![Flashcast 启动器](docs/screenshots/launcher.jpg)
@@ -30,7 +33,7 @@
 - **流体动画**：启动器先出现输入框、再像液体一样长出列表，不做全屏压暗遮罩；插件进入/退出、预览水珠展开、列表 FLIP 删除、窗口收回后粘贴；遵循 `prefers-reduced-motion`。
 - **内置插件**：
   - `剪切板`：文本 / 图片 / 视频 / 音乐；右侧预览常驻、切换选中原位更新；回车置顶并关闭；`Alt/Option+Enter` 粘贴；`Ctrl+Backspace` 删除；二次确认清空。通过全局快捷键直接进入时，`Esc` 直接关闭启动器；从主页面进入时先返回主页面。
-  - `Chrome 书签`：自动发现 Chrome Profile、读书架、favicon、文件夹 chip、在 Chrome 中打开；即使 Profile 尚未生成 `Bookmarks` 也能识别。
+  - `Chrome 书签`：自动发现 Chrome Profile、读书架、favicon、文件夹 chip、在 Chrome 中打开；同时支持本地 `Bookmarks` 与登录 Google 账户后的 `AccountBookmarks`，即使 Profile 尚未生成书签文件也能识别。
 - **设置窗口**：通用（主题、开机自启、语言）、插件管理、工作区、快捷键录制、关于与许可。
 - **无障碍**：完整键盘路径、可见焦点环、`aria-live` 结果播报、对比度按 UI 规范核算、减少动效/高对比适配。
 
@@ -91,6 +94,19 @@ pnpm dist:win
 ```
 
 `electron-builder.yml` 已配置三端目标（AppImage/deb、dmg/zip、nsis）、图标、`LSUIElement`（macOS 菜单栏应用）与 Linux 桌面项。修改 `build/*.svg` 后可运行 `pnpm icons` 重新生成 PNG 图标与视频封面占位图（需要本机有 Chrome/Chromium）。
+
+### 发布
+
+发布由 GitHub Actions 完成：推送 `v*` tag 后，`.github/workflows/release.yml` 会校验 tag 与 `package.json` 版本一致，再并行构建 Linux（AppImage/deb）、macOS（dmg/zip，x64 + arm64）、Windows（nsis）产物，最后创建 GitHub Release 并附上 `SHA256SUMS.txt`。
+
+```bash
+pnpm release:minor   # 0.1.0 → 0.2.0：升版本、提交、打 tag 并推送
+pnpm release:patch   # 0.1.0 → 0.1.1
+pnpm release:major   # 0.1.0 → 1.0.0
+node scripts/release.mjs 1.4.0   # 指定版本
+```
+
+脚本要求工作区干净且位于 `main` 分支。tag 必须与 `package.json` 版本一致，否则 release 流水线在第一步就会失败。产物未做代码签名：macOS 首次打开需右键「打开」，Windows SmartScreen 会提示「仍要运行」。PR / 合入 `main` 会触发 `.github/workflows/ci.yml` 跑类型检查、测试与构建。
 
 ## 快捷键
 

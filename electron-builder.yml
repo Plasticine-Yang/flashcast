@@ -34,6 +34,8 @@ win:
 linux:
   icon: build/icon.png
   category: Utility
+  # deb 包要求 maintainer；package.json 的 author 没有邮箱时 electron-builder 会拒绝打包。
+  maintainer: Plasticine-Yang <Plasticine-Yang@users.noreply.github.com>
   target:
     - AppImage
     - deb
