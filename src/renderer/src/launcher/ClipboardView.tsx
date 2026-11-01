@@ -9,7 +9,6 @@ import { mediaUrl, type ClipboardRowModel } from './helpers'
 export interface PreviewState {
   mounted: boolean
   open: boolean
-  pinned: boolean
   item: ClipboardItem | null
 }
 
@@ -24,8 +23,7 @@ export function ClipboardView({
   onHover,
   onActivate,
   onSettings,
-  onPreviewClose,
-  onActivity
+  onPreviewClose
 }: {
   rows: ClipboardRowModel[]
   totalCount: number
@@ -38,7 +36,6 @@ export function ClipboardView({
   onActivate: (index: number) => void
   onSettings: () => void
   onPreviewClose: () => void
-  onActivity: (event?: React.SyntheticEvent) => void
 }): React.JSX.Element {
   const { containerRef: scrollRef } = useFlipAnimation(rows, (row) => row.item.id)
   const previewRef = useRef<HTMLElement>(null)
@@ -177,8 +174,6 @@ export function ClipboardView({
               role="listbox"
               id="fc-results"
               aria-label="剪切板记录"
-              onScroll={(event) => onActivity(event)}
-              onMouseMove={(event) => onActivity(event)}
             >
               {rows.map((row, index) => {
                 const selected = index === selectedIndex
@@ -255,7 +250,6 @@ export function ClipboardView({
           >
             <div className="fc-preview-head">
               <span>{kindLabel(preview.item.kind)}</span>
-              {preview.pinned ? <span className="fc-chip fc-chip--accent">已固定</span> : null}
               <IconButton label="收起预览" onClick={onPreviewClose}>
                 <X size={13} strokeWidth={1.75} aria-hidden="true" />
               </IconButton>

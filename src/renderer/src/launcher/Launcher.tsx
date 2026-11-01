@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   AppEntry,
   BootstrapData,
@@ -43,12 +43,9 @@ const GLOBAL_PLACEHOLDER = '搜索应用、插件或命令'
 const PANEL_COLLAPSED_HEIGHT = 62
 const ANIMATION = {
   openPanel: 470,
-  openScrim: 180,
   closePanel: 170,
-  closeScrim: 120,
   closeHide: 180,
-  previewHold: 1000,
-  previewClose: 360
+  previewUnmount: 360
 }
 
 interface PageError {
@@ -82,29 +79,24 @@ export function Launcher(): React.JSX.Element {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [previewMounted, setPreviewMounted] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
-  const [previewPinned, setPreviewPinned] = useState(false)
   const { toast, showToast, dismissToast } = useToast()
 
   const inputRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLElement>(null)
-  const scrimRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
   const closingRef = useRef(false)
   const closeTokenRef = useRef(0)
   const activePluginIdRef = useRef<string | null>(null)
   const bootstrapRef = useRef<BootstrapData | null>(null)
-  const previewTimerRef = useRef<number | null>(null)
   const previewUnmountRef = useRef<number | null>(null)
   const clearTimerRef = useRef<number | null>(null)
   const pageRequestRef = useRef(0)
   const settingsRequestRef = useRef(0)
-  const previewSuppressedRef = useRef(false)
+  const previewDismissedRef = useRef(false)
   const pendingOpenRef = useRef<string | null>(null)
   const autoScenarioRef = useRef(false)
   const autoSettingsRef = useRef(false)
   const lastEntranceRef = useRef(0)
-  const lastMouseRef = useRef<{ x: number; y: number } | null>(null)
-  const lastSelectedIdRef = useRef<string | null>(null)
 
   activePluginIdRef.current = activePluginId
   bootstrapRef.current = bootstrap
@@ -188,7 +180,6 @@ export function Launcher(): React.JSX.Element {
   const preview: PreviewState = {
     mounted: previewMounted,
     open: previewOpen,
-    pinned: previewPinned,
     item: previewItem
   }
 
@@ -203,71 +194,37 @@ export function Launcher(): React.JSX.Element {
     document.documentElement.dataset.platform = platformId
   }
 
-  const clearPreviewTimers = (): void => {
-    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current)
-    previewTimerRef.current = null
+  const clearPreviewUnmount = (): void => {
     if (previewUnmountRef.current) window.clearTimeout(previewUnmountRef.current)
     previewUnmountRef.current = null
   }
 
-  const closePreviewVisual = (): void => {
+  // Transient closes (settings/help/no results/leaving plugin) keep the user's
+  // explicit dismissal state; only an actual close action dismisses the preview.
+  const closePreviewVisual = (dismiss = false): void => {
+    if (dismiss) previewDismissedRef.current = true
     setPreviewOpen(false)
-    if (previewUnmountRef.current) window.clearTimeout(previewUnmountRef.current)
-    previewUnmountRef.current = window.setTimeout(() => setPreviewMounted(false), ANIMATION.previewClose)
+    clearPreviewUnmount()
+    previewUnmountRef.current = window.setTimeout(
+      () => setPreviewMounted(false),
+      ANIMATION.previewUnmount
+    )
   }
 
-  const closePreview = (suppress = true): void => {
-    previewSuppressedRef.current = suppress
-    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current)
-    previewTimerRef.current = null
-    setPreviewPinned(false)
-    closePreviewVisual()
+  const closePreview = (dismiss = true): void => {
+    closePreviewVisual(dismiss)
   }
 
-  const armPreviewTimer = (): void => {
-    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current)
-    previewTimerRef.current = window.setTimeout(() => {
-      previewTimerRef.current = null
-      if (previewUnmountRef.current) {
-        window.clearTimeout(previewUnmountRef.current)
-        previewUnmountRef.current = null
-      }
-      // Mount and open in the same commit; ClipboardView measures the selected
-      // row before paint and plays the liquid reveal from that origin.
-      setPreviewMounted(true)
-      setPreviewOpen(true)
-      setPreviewPinned(false)
-    }, ANIMATION.previewHold)
-  }
-
-  // Any real navigation (pointer or keyboard) re-enables the dwell preview
-  // after an explicit close. Merely moving the pointer while the preview is
-  // already open must never tear it down: doing so was the source of the
-  // flicker loop.
-  const noteUserNavigation = (): void => {
-    previewSuppressedRef.current = false
-    if (isClipboard && !settingsOpen && !helpOpen && !previewOpen && !previewPinned) {
-      armPreviewTimer()
-    }
-  }
-
-  const handleClipboardActivity = (event?: SyntheticEvent): void => {
-    if (!isClipboard || settingsOpen || helpOpen) return
-    if (previewPinned) return
-    if (event && event.type === 'mousemove') {
-      const native = event.nativeEvent as MouseEvent
-      const last = lastMouseRef.current
-      if (last && Math.hypot(native.clientX - last.x, native.clientY - last.y) < 8) return
-      lastMouseRef.current = { x: native.clientX, y: native.clientY }
-    }
-    if (previewOpen) return
-    previewSuppressedRef.current = false
-    armPreviewTimer()
+  const showPreview = (): void => {
+    if (!isClipboard || settingsOpen || helpOpen || pluginLeaving || !selectedClipboard) return
+    previewDismissedRef.current = false
+    clearPreviewUnmount()
+    setPreviewMounted(true)
+    setPreviewOpen(true)
   }
 
   const moveSelection = (delta: number): void => {
     if (currentCount === 0) return
-    noteUserNavigation()
     setSelection((value) => {
       const safe = Math.min(value, currentCount - 1)
       return Math.min(currentCount - 1, Math.max(0, safe + delta))
@@ -275,10 +232,7 @@ export function Launcher(): React.JSX.Element {
   }
 
   const setCurrentSelection = (index: number): void => {
-    if (index >= 0 && index < currentCount) {
-      noteUserNavigation()
-      setSelection(index)
-    }
+    if (index >= 0 && index < currentCount) setSelection(index)
   }
 
   /* ------------------------------- loading ------------------------------- */
@@ -313,13 +267,10 @@ export function Launcher(): React.JSX.Element {
     }
     if (pluginLeaving) return
     pageRequestRef.current += 1
-    previewSuppressedRef.current = false
-    clearPreviewTimers()
+    previewDismissedRef.current = false
+    clearPreviewUnmount()
     setPreviewMounted(false)
     setPreviewOpen(false)
-    setPreviewPinned(false)
-    lastSelectedIdRef.current = null
-    lastMouseRef.current = null
     setHelpOpen(false)
     setClearArmed(false)
     if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
@@ -375,11 +326,7 @@ export function Launcher(): React.JSX.Element {
     const request = ++settingsRequestRef.current
     setQuery('')
     setSelection(0)
-    previewSuppressedRef.current = true
-    clearPreviewTimers()
-    setPreviewOpen(false)
-    setPreviewPinned(false)
-    setPreviewMounted(false)
+    closePreview(false)
     setSettingsError(null)
     setSettingsPage(null)
     setSettingsOpen(true)
@@ -405,7 +352,6 @@ export function Launcher(): React.JSX.Element {
     setSettingsError(null)
     setSelection(0)
     setQuery('')
-    previewSuppressedRef.current = false
     void loadPluginPage(activePluginId)
     focusInput()
   }
@@ -495,8 +441,6 @@ export function Launcher(): React.JSX.Element {
     if (!isClipboard || !selectedClipboard) return
     const id = selectedClipboard.item.id
     setDeletingId(id)
-    previewSuppressedRef.current = true
-    closePreview(true)
     window.setTimeout(async () => {
       const result = await api.deleteClipboard(id)
       setDeletingId(null)
@@ -512,7 +456,7 @@ export function Launcher(): React.JSX.Element {
       else {
         setClipboardItems([])
         if (result.toast) showToast(result.toast)
-        closePreview(true)
+        closePreview(false)
       }
     })
   }
@@ -538,13 +482,12 @@ export function Launcher(): React.JSX.Element {
   }
 
   const openHelp = (): void => {
-    previewSuppressedRef.current = true
+    closePreview(false)
     setHelpOpen(true)
   }
 
   const closeHelp = (): void => {
     setHelpOpen(false)
-    previewSuppressedRef.current = false
     focusInput()
   }
 
@@ -560,8 +503,7 @@ export function Launcher(): React.JSX.Element {
 
   const playEntrance = (): void => {
     const panel = panelRef.current
-    const scrim = scrimRef.current
-    if (!panel || !scrim) return
+    if (!panel) return
     const now = Date.now()
     if (now - lastEntranceRef.current < 180) return
     lastEntranceRef.current = now
@@ -570,11 +512,6 @@ export function Launcher(): React.JSX.Element {
     for (const animation of panel.getAnimations()) animation.cancel()
     panel.style.opacity = '0'
     panel.style.height = reduced ? '100%' : `${PANEL_COLLAPSED_HEIGHT}px`
-    scrim.animate([{ opacity: 0 }, { opacity: 1 }], {
-      duration: reduced ? 120 : ANIMATION.openScrim,
-      easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-      fill: 'both'
-    })
 
     if (reduced) {
       const entrance = panel.animate([{ opacity: 0 }, { opacity: 1 }], {
@@ -646,13 +583,10 @@ export function Launcher(): React.JSX.Element {
     setHelpOpen(false)
     setClearArmed(false)
     if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
-    clearPreviewTimers()
+    clearPreviewUnmount()
     setPreviewMounted(false)
     setPreviewOpen(false)
-    setPreviewPinned(false)
-    previewSuppressedRef.current = false
-    lastSelectedIdRef.current = null
-    lastMouseRef.current = null
+    previewDismissedRef.current = false
     lastEntranceRef.current = 0
     setIdlePanelSurface()
     setSettingsOpen(false)
@@ -678,19 +612,14 @@ export function Launcher(): React.JSX.Element {
     const closeToken = ++closeTokenRef.current
     setClosing(true)
     const panel = panelRef.current
-    const scrim = scrimRef.current
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    if (panel && scrim) {
+    if (panel) {
       const computed = window.getComputedStyle(panel)
       const startHeight = computed.height
       const startOpacity = computed.opacity
       for (const animation of panel.getAnimations()) animation.cancel()
       if (reduced) {
         panel.animate([{ opacity: Number(startOpacity) }, { opacity: 0 }], {
-          duration: 120,
-          fill: 'both'
-        })
-        scrim.animate([{ opacity: 1 }, { opacity: 0 }], {
           duration: 120,
           fill: 'both'
         })
@@ -720,10 +649,6 @@ export function Launcher(): React.JSX.Element {
             fill: 'both'
           }
         )
-        scrim.animate([{ opacity: 1 }, { opacity: 0 }], {
-          duration: ANIMATION.closeScrim,
-          fill: 'both'
-        })
       }
     }
     window.setTimeout(() => {
@@ -906,29 +831,32 @@ export function Launcher(): React.JSX.Element {
     }
   }, [])
 
-  // Dwell preview: arm a 1s timer on stable selection / query. Once the panel
-  // is open, selection changes only swap the preview content (120ms crossfade);
-  // they must not close and re-open it, otherwise every pointer or j/k move
-  // makes the panel blink.
-  useEffect(() => {
-    if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current)
-    previewTimerRef.current = null
-    if (!isClipboard || settingsOpen || helpOpen || !selectedClipboard) {
-      if (previewOpen) closePreviewVisual()
+  // The clipboard preview is part of the default layout: show it as soon as a
+  // row exists, and keep it open while browsing. Only an explicit close (or a
+  // state that hides the clipboard content) removes it. There is deliberately
+  // no hover/dwell timer, so pointer and j/k movement can never arm a delayed
+  // open/close loop.
+  useLayoutEffect(() => {
+    if (!isClipboard || settingsOpen || helpOpen || pluginLeaving || !selectedClipboard) {
+      if (previewOpen) closePreviewVisual(false)
       return
     }
-    if (previewPinned || previewSuppressedRef.current || previewOpen) return
-    armPreviewTimer()
-    return () => {
-      if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current)
-      previewTimerRef.current = null
-    }
+    if (previewDismissedRef.current || previewOpen) return
+    showPreview()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isClipboard, settingsOpen, helpOpen, previewPinned, selectedClipboard?.item.id, query])
+  }, [
+    isClipboard,
+    settingsOpen,
+    helpOpen,
+    pluginLeaving,
+    selectedClipboard?.item.id,
+    query,
+    previewOpen
+  ])
 
   useEffect(() => {
     return () => {
-      clearPreviewTimers()
+      clearPreviewUnmount()
       if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1055,12 +983,8 @@ export function Launcher(): React.JSX.Element {
       if (isClipboard) {
         event.preventDefault()
         if (key === 'l' && selectedClipboard) {
-          clearPreviewTimers()
-          previewSuppressedRef.current = false
-          setPreviewPinned(true)
-          setPreviewMounted(true)
-          setPreviewOpen(true)
-        } else if (previewOpen || previewMounted) {
+          showPreview()
+        } else if (key === 'h' && (previewOpen || previewMounted)) {
           closePreview(true)
         }
       } else if (!isPluginView && key === 'l' && inEditable) {
@@ -1134,6 +1058,7 @@ export function Launcher(): React.JSX.Element {
         }
         return [
           { keys: ['↵'], label: '置顶并关闭' },
+          { keys: keycapParts('Control+L', platform), label: '预览' },
           { keys: [primaryActionModifier(platform), '↵'], label: '粘贴' },
           { keys: keycapParts('Control+Backspace', platform), label: '删除' }
         ]
@@ -1265,7 +1190,6 @@ export function Launcher(): React.JSX.Element {
           }}
           onSettings={() => void openPluginSettings()}
           onPreviewClose={() => closePreview(true)}
-          onActivity={handleClipboardActivity}
         />
       )
     }
@@ -1327,8 +1251,7 @@ export function Launcher(): React.JSX.Element {
       aria-busy={!bootstrap}
     >
       <div
-        className="fc-scrim"
-        ref={scrimRef}
+        className="fc-dismiss-layer"
         onClick={() => void closeLauncher(false)}
         aria-hidden="true"
       />
@@ -1352,7 +1275,6 @@ export function Launcher(): React.JSX.Element {
               onChange={(value) => {
                 setQuery(value)
                 setSelection(0)
-                previewSuppressedRef.current = false
               }}
               onClear={() => {
                 setQuery('')

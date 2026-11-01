@@ -10,7 +10,7 @@
     <td><img src="docs/screenshots/bookmarks.jpg" alt="Chrome 书签插件" /></td>
   </tr>
   <tr>
-    <td align="center">剪切板插件 · 1s 停留预览</td>
+    <td align="center">剪切板插件 · 默认右侧预览</td>
     <td align="center">Chrome 书签插件 · 模糊匹配</td>
   </tr>
 </table>
@@ -27,9 +27,9 @@
 - **全局模糊搜索**：应用、插件关键字、命令统一搜索；子序列命中（`fbb` → `Foo-Bar-Baz`）、连续/词首加分、中文整串包含、逐字高亮。
 - **插件机制**：类似 Cordis 的上下文/生命周期模型；从 Git 仓库或本地目录安装、启停、更新、卸载；插件设置由插件维护并存入工作区。
 - **工作区**：关联一个 Git 仓库，集中保存配置、插件设置；自动提交并推送（可选）；状态、分支、最近提交、冲突与差异可视化。
-- **流体动画**：启动器先出现输入框、再像液体一样长出列表；插件进入/退出、预览水珠展开、列表 FLIP 删除、窗口收回后粘贴；遵循 `prefers-reduced-motion`。
+- **流体动画**：启动器先出现输入框、再像液体一样长出列表，不做全屏压暗遮罩；插件进入/退出、预览水珠展开、列表 FLIP 删除、窗口收回后粘贴；遵循 `prefers-reduced-motion`。
 - **内置插件**：
-  - `剪切板`：文本 / 图片 / 视频 / 音乐；1s 停留预览；回车置顶并关闭；`Alt/Option+Enter` 粘贴；`Ctrl+Backspace` 删除；二次确认清空。
+  - `剪切板`：文本 / 图片 / 视频 / 音乐；右侧默认预览、切换选中原位更新；回车置顶并关闭；`Alt/Option+Enter` 粘贴；`Ctrl+Backspace` 删除；二次确认清空。
   - `Chrome 书签`：自动发现 Chrome Profile、读书架、favicon、文件夹 chip、在 Chrome 中打开。
 - **设置窗口**：通用（主题、开机自启、语言）、插件管理、工作区、快捷键录制、关于与许可。
 - **无障碍**：完整键盘路径、可见焦点环、`aria-live` 结果播报、对比度按 UI 规范核算、减少动效/高对比适配。
@@ -220,7 +220,7 @@ module.exports = {
 
 ## 平台说明与已知限制
 
-- **Linux 透明/模糊**：GNOME/KWin 等合成器下保留透明遮罩与 CSS 毛玻璃；按规范在没有窗口模糊支持时使用不透明 `#18181B` 面板。
+- **Linux 透明/模糊**：GNOME/KWin 等合成器下保留透明背景与 CSS 毛玻璃；按规范在没有窗口模糊支持时使用不透明 `#18181B` 面板。
 - **Wayland 全局快捷键**：走 `xdg-desktop-portal` 的 `GlobalShortcuts`（Electron 45 默认启用，无需 feature flag）。应用身份来自 `package.json#desktopName`，必须与已安装的 `.desktop` 文件同名：开发时由 `pnpm dev` 写入 `~/.local/share/applications/com.flashcast.app.desktop`，打包时由 electron-builder 的 `syncDesktopName` 安装为同名文件。身份无法解析时系统会静默拒绝绑定，应用会在启动时写入设置页诊断并发系统通知；首次绑定需要用户在系统弹窗中确认。X11 会话直接抓键，不受影响。
 - **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限）；Windows 使用 PowerShell SendKeys；Linux 依赖 `wtype`/`xdotool`/`ydotool`。失败时保留系统剪贴板内容并发送系统通知。
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。

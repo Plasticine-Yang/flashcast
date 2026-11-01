@@ -7,11 +7,12 @@
   color: var(--fc-text-primary);
 }
 
-.fc-scrim {
+.fc-dismiss-layer {
   position: absolute;
   inset: 0;
-  background: var(--fc-scrim);
-  will-change: opacity;
+  /* Invisible click target only: no full-screen dimming. Clicking outside the
+     panel still closes the launcher without darkening the desktop. */
+  background: transparent;
 }
 
 .fc-panel-anchor {
