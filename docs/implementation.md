@@ -132,7 +132,8 @@ src/shared/
 
 ## 4. UI 设计令牌与组件
 
-- `styles/tokens.css` 完整实现 UI 规范第 3 节的蓝色毛玻璃深色/浅色令牌（窗口、玻璃描边、内部光源、选中行、极光背景）、字体、间距、圆角、阴影和动效；三端统一使用半透明面板，`prefers-reduced-transparency` / `data-contrast="more"` 下退回接近不透明。
+- `styles/tokens.css` 完整实现 UI 规范第 3 节的蓝色毛玻璃深色/浅色令牌（窗口、玻璃描边、内部光源、磨砂颗粒、壁纸层、选中行、极光背景）、字体、间距、圆角、阴影和动效；三端统一使用半透明面板，`prefers-reduced-transparency` / `data-contrast="more"` 下退回接近不透明。
+- `main/wallpaper.ts` 通过 `gsettings`（GNOME）或注册表（Windows）定位壁纸，经 `nativeImage` 下采样后由 `flashcast-wallpaper://` 协议提供给启动器；macOS 回退纯玻璃。
 - `styles/base.css` 提供 Keycap、按钮、开关、Chip、Toast、Skeleton、焦点环与 `prefers-reduced-motion` / `prefers-contrast` 适配。
 - `styles/launcher.css` 负责窗口/面板、搜索栏、分组行、stagger 入场、Footer、Help 浮层、Toast。
 - `styles/plugin.css` 负责插件外壳、剪切板预览、设置表单、书签、错误卡、虚拟列表。

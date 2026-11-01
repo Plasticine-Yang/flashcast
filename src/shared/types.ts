@@ -390,6 +390,7 @@ export interface FlashcastApi {
 /* ------------------------------------------------------------------ */
 
 export const CLIPBOARD_MEDIA_SCHEME = 'flashcast-media'
+export const DESKTOP_WALLPAPER_SCHEME = 'flashcast-wallpaper'
 export const CLIPBOARD_MEDIA_PREFIX = 'media/'
 export const BUILTIN_PLUGIN_IDS = ['clipboard', 'chrome-bookmarks'] as const
 export type BuiltinPluginId = (typeof BUILTIN_PLUGIN_IDS)[number]

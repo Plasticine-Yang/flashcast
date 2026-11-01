@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type {
-  AppEntry,
-  BootstrapData,
-  ChromeBookmarksPluginPage,
-  ClipboardItem,
-  ExternalPluginItem,
-  ExternalPluginPage,
-  PluginPage,
-  PluginSettingsPage,
-  PluginSummary
+import {
+  DESKTOP_WALLPAPER_SCHEME,
+  type AppEntry,
+  type BootstrapData,
+  type ChromeBookmarksPluginPage,
+  type ClipboardItem,
+  type ExternalPluginItem,
+  type ExternalPluginPage,
+  type PluginPage,
+  type PluginSettingsPage,
+  type PluginSummary
 } from '@shared/types'
 import {
   clearAllAccelerator,
@@ -16,7 +17,7 @@ import {
   keycapParts,
   primaryActionModifier
 } from '@shared/shortcuts'
-import { api, isMock } from '../bridge'
+import { api, isMock, previewWallpaper } from '../bridge'
 import { SkeletonRows, Toast, useToast } from '../components/ui'
 import { BookmarksView } from './BookmarksView'
 import { ClipboardView } from './ClipboardView'
@@ -77,6 +78,8 @@ export function Launcher(): React.JSX.Element {
   const [clearArmed, setClearArmed] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [clipboardScrollNonce, setClipboardScrollNonce] = useState(0)
+  const [loadedWallpaper, setLoadedWallpaper] = useState<string | null>(null)
+  const [failedWallpaper, setFailedWallpaper] = useState<string | null>(null)
   const { toast, showToast, dismissToast } = useToast()
 
   const inputRef = useRef<HTMLInputElement>(null)
@@ -175,6 +178,15 @@ export function Launcher(): React.JSX.Element {
   const readOnly = helpOpen || closing || settingsOpen || (isPluginView && !searchable)
 
   const previewItem = selectedClipboard?.item ?? null
+
+  /* ------------------------------ wallpaper ------------------------------ */
+
+  // A transparent Electron window cannot sample the desktop behind it, so the
+  // frosted backdrop is the current wallpaper: blurred and color-blended in CSS.
+  const wallpaperTheme: 'dark' | 'light' = bootstrap?.theme === 'light' ? 'light' : 'dark'
+  const wallpaperUrl = isMock
+    ? previewWallpaper(wallpaperTheme)
+    : `${DESKTOP_WALLPAPER_SCHEME}://current?theme=${wallpaperTheme}`
 
   /* ------------------------------- helpers ------------------------------- */
 
@@ -1182,6 +1194,18 @@ export function Launcher(): React.JSX.Element {
           aria-modal="true"
           aria-label="Flashcast"
         >
+          {failedWallpaper !== wallpaperUrl ? (
+            <img
+              key={wallpaperUrl}
+              className={`fc-wallpaper${loadedWallpaper === wallpaperUrl ? ' is-ready' : ''}`}
+              src={wallpaperUrl}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              onLoad={() => setLoadedWallpaper(wallpaperUrl)}
+              onError={() => setFailedWallpaper(wallpaperUrl)}
+            />
+          ) : null}
           <div className="fc-panel-inner">
             <SearchBar
               inputRef={inputRef}

@@ -1,7 +1,7 @@
 import { app, dialog, protocol, session } from 'electron'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { CLIPBOARD_MEDIA_SCHEME, type PlatformId } from '@shared/types'
+import { CLIPBOARD_MEDIA_SCHEME, DESKTOP_WALLPAPER_SCHEME, type PlatformId } from '@shared/types'
 import { FlashcastApplication } from './application'
 import { log } from './logger'
 
@@ -35,6 +35,16 @@ if (process.platform === 'linux') {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: CLIPBOARD_MEDIA_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true
+    }
+  },
+  {
+    scheme: DESKTOP_WALLPAPER_SCHEME,
     privileges: {
       standard: true,
       secure: true,

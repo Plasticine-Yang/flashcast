@@ -484,3 +484,81 @@ export const mockBootstrap: BootstrapData = {
   dataDir: '/home/you/.flashcast',
   isDev: true
 }
+
+/* ------------------------------------------------------------------------- */
+/* Preview desktop wallpaper                                                   */
+/* ------------------------------------------------------------------------- */
+
+function wallpaperDataUrl(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+}
+
+/**
+ * The preview harness has no desktop to sample, so it uses a generated
+ * wallpaper that matches the preview background. The launcher blurs and
+ * color-blends it exactly like the real GNOME/Windows wallpaper, which keeps
+ * the browser preview faithful to the Electron window.
+ */
+export const mockWallpaperDark = wallpaperDataUrl(`
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="872" viewBox="0 0 1200 872">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a1428"/>
+      <stop offset="0.44" stop-color="#0d1c38"/>
+      <stop offset="1" stop-color="#071019"/>
+    </linearGradient>
+    <radialGradient id="blue">
+      <stop offset="0" stop-color="#4080ff" stop-opacity="0.62"/>
+      <stop offset="1" stop-color="#4080ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cyan">
+      <stop offset="0" stop-color="#38c8eb" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#38c8eb" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="warm">
+      <stop offset="0" stop-color="#ffac5c" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#ffac5c" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="rose">
+      <stop offset="0" stop-color="#ff8a8a" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ff8a8a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="872" fill="url(#base)"/>
+  <ellipse cx="170" cy="35" rx="470" ry="360" fill="url(#blue)"/>
+  <ellipse cx="1030" cy="105" rx="380" ry="300" fill="url(#cyan)"/>
+  <ellipse cx="620" cy="400" rx="300" ry="240" fill="url(#rose)"/>
+  <ellipse cx="700" cy="925" rx="420" ry="360" fill="url(#warm)"/>
+</svg>`)
+
+export const mockWallpaperLight = wallpaperDataUrl(`
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="872" viewBox="0 0 1200 872">
+  <defs>
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eaf3ff"/>
+      <stop offset="0.46" stop-color="#f4f8ff"/>
+      <stop offset="1" stop-color="#e6f1fb"/>
+    </linearGradient>
+    <radialGradient id="blue">
+      <stop offset="0" stop-color="#609cff" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#609cff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cyan">
+      <stop offset="0" stop-color="#7dd3fc" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#7dd3fc" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="warm">
+      <stop offset="0" stop-color="#ffc480" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#ffc480" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="rose">
+      <stop offset="0" stop-color="#ff9d9d" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#ff9d9d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="872" fill="url(#base)"/>
+  <ellipse cx="170" cy="35" rx="470" ry="360" fill="url(#blue)"/>
+  <ellipse cx="1030" cy="105" rx="380" ry="300" fill="url(#cyan)"/>
+  <ellipse cx="620" cy="400" rx="300" ry="240" fill="url(#rose)"/>
+  <ellipse cx="700" cy="925" rx="420" ry="360" fill="url(#warm)"/>
+</svg>`)

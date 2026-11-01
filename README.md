@@ -233,12 +233,13 @@ module.exports = {
 ## 隐私与网络
 
 - 剪切板历史、图片、插件设置、工作区状态全部保存在本地工作区；没有遥测。
+- 启动器的壁纸磨砂只在本机读取系统壁纸路径（GNOME `gsettings` / Windows 注册表），用于生成模糊背景，不写入磁盘、不上传。
 - Chrome 书签插件的 favicon 会向 `https://www.google.com/s2/favicons` 请求，结果缓存在 `state/favicons`；离线或企业网络阻断时自动使用本地 `globe` 图标。
 - 插件安装/更新会访问你输入的 Git 地址；应用自身不访问其他网络。
 
 ## 平台说明与已知限制
 
-- **透明与模糊**：启动器是透明窗口，面板用半透明蓝色玻璃 + 内部光源绘制；桌面级模糊依赖系统材质（macOS `NSVisualEffectView` / Windows Mica），本期未启用，三端表现一致。设置窗口内部绘制蓝色极光背景，侧栏与卡片在其上做真实模糊。
+- **透明与模糊**：启动器是透明窗口，面板由半透明蓝色玻璃、内部光源与磨砂颗粒构成；GNOME 与 Windows 会读取当前桌面壁纸，重度模糊后以 `mix-blend-mode: color` 混入玻璃，形成真实的壁纸磨砂（macOS 无免授权接口，回退纯玻璃）。桌面级实时模糊依赖系统材质（`NSVisualEffectView` / Mica），本期未启用。设置窗口内部绘制蓝色极光背景，侧栏与卡片在其上做真实模糊。
 - **Wayland 全局快捷键**：走 `xdg-desktop-portal` 的 `GlobalShortcuts`（Electron 45 默认启用，无需 feature flag）。应用身份来自 `package.json#desktopName`，必须与已安装的 `.desktop` 文件同名：开发时由 `pnpm dev` 写入 `~/.local/share/applications/com.flashcast.app.desktop`，打包时由 electron-builder 的 `syncDesktopName` 安装为同名文件。身份无法解析时系统会静默拒绝绑定，应用会在启动时写入设置页诊断并发系统通知；首次绑定需要用户在系统弹窗中确认。X11 会话直接抓键，不受影响。
 - **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限）；Windows 使用 PowerShell SendKeys；Linux 依赖 `wtype`/`xdotool`/`ydotool`。失败时保留系统剪贴板内容并发送系统通知。
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。

@@ -29,6 +29,17 @@
   z-index: 1;
 }
 
+.settings-root::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: var(--fc-frost);
+  background-size: 180px 180px;
+  opacity: calc(var(--fc-frost-opacity) * 0.7);
+}
+
 .settings-root--message {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -64,7 +75,7 @@
   border-right: 1px solid var(--fc-border-subtle);
   background:
     linear-gradient(180deg, var(--fc-surface-1), transparent 160px),
-    color-mix(in srgb, var(--fc-window) 66%, transparent);
+    color-mix(in srgb, var(--fc-window) 80%, transparent);
   backdrop-filter: var(--fc-glass-filter-soft);
   -webkit-backdrop-filter: var(--fc-glass-filter-soft);
   box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);

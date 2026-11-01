@@ -44,8 +44,41 @@
   will-change: height, opacity;
 }
 
+/* The wallpaper is blurred and color-blended into the glass. It is painted at
+   the final panel height from the start, so the entrance animation reveals it
+   instead of re-scaling a huge blur every frame. */
+.fc-wallpaper {
+  position: absolute;
+  top: 0;
+  left: -15%;
+  width: 130%;
+  height: calc(var(--fc-panel-height) - 2px);
+  z-index: 0;
+  object-fit: cover;
+  pointer-events: none;
+  opacity: 0;
+  filter: blur(var(--fc-wallpaper-blur)) saturate(var(--fc-wallpaper-saturate));
+  mix-blend-mode: color;
+  transition: opacity 480ms var(--fc-ease-out);
+}
+
+.fc-wallpaper.is-ready {
+  opacity: var(--fc-wallpaper-opacity);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .fc-wallpaper {
+    display: none;
+  }
+}
+
+:root[data-contrast='more'] .fc-wallpaper {
+  display: none;
+}
+
 .fc-panel-inner {
   position: relative;
+  z-index: 1;
   width: 100%;
   /* Panel height includes its 1px top/bottom border; the inner layout must fit
      the border box exactly, otherwise the footer loses its last 2px. */
@@ -74,6 +107,20 @@
     inset 0 1px 0 var(--fc-glass-rim-top),
     inset 0 -1px 0 var(--fc-glass-rim-bottom);
   z-index: 20;
+}
+
+/* Frosted diffusion: fine grain behind the content so the glass reads as a
+   physical pane instead of a flat translucent sheet. */
+.fc-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background-image: var(--fc-frost);
+  background-size: 180px 180px;
+  opacity: var(--fc-frost-opacity);
 }
 
 .fc-searchbar {

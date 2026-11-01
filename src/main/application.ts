@@ -23,7 +23,7 @@ import type {
   WindowRole,
   WorkspaceSummary
 } from '@shared/types'
-import { CLIPBOARD_MEDIA_SCHEME } from '@shared/types'
+import { CLIPBOARD_MEDIA_SCHEME, DESKTOP_WALLPAPER_SCHEME } from '@shared/types'
 import { AppDiscovery } from './apps'
 import { discoverChromeProfiles, openInChrome } from './chrome-bookmarks'
 import { ClipboardService } from './clipboard-service'
@@ -46,6 +46,8 @@ import {
 import { COMMANDS, PluginService } from './plugin-service'
 import { CHROME_DEFAULTS, CLIPBOARD_DEFAULTS } from './builtins/manifests'
 import { ShortcutManager } from './shortcut-manager'
+import { readDesktopWallpaper } from './wallpaper'
+import { wallpaperRequestTheme } from './wallpaper-path'
 import { WindowManager } from './window-manager'
 import { WorkspaceService } from './workspace-service'
 import { registerIpcHandlers } from './ipc'
@@ -122,6 +124,7 @@ export class FlashcastApplication {
 
     this.wireEvents()
     this.registerMediaProtocol()
+    this.registerWallpaperProtocol()
     this.setupMenu()
 
     registerIpcHandlers(this)
@@ -573,6 +576,30 @@ export class FlashcastApplication {
       { role: 'editMenu' }
     ])
     Menu.setApplicationMenu(menu)
+  }
+
+  /**
+   * Serves the current desktop wallpaper as a downscaled JPEG. A transparent
+   * Electron window cannot sample the desktop behind it, so the launcher uses
+   * this image (heavily blurred in CSS) as the frosted backdrop instead.
+   */
+  private registerWallpaperProtocol(): void {
+    protocol.handle(DESKTOP_WALLPAPER_SCHEME, async (request) => {
+      try {
+        const theme = wallpaperRequestTheme(request.url)
+        if (!theme) return new Response('Not found', { status: 404 })
+        const wallpaper = await readDesktopWallpaper(theme)
+        if (!wallpaper) return new Response('Not found', { status: 404 })
+        return new Response(new Uint8Array(wallpaper.data), {
+          headers: {
+            'Content-Type': wallpaper.contentType,
+            'Cache-Control': 'no-cache'
+          }
+        })
+      } catch {
+        return new Response('Not found', { status: 404 })
+      }
+    })
   }
 
   private registerMediaProtocol(): void {

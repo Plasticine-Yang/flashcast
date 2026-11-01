@@ -10,17 +10,26 @@
   color-scheme: dark;
 
   /* Window glass ----------------------------------------------------------- */
-  --fc-window: rgba(11, 19, 37, 0.8);
-  --fc-window-solid: #0b1222;
-  --fc-glass-opaque: rgba(17, 29, 53, 0.94);
+  --fc-window: rgba(10, 18, 34, 0.92);
+  --fc-window-solid: #0a1222;
+  --fc-glass-opaque: rgba(16, 28, 50, 0.96);
+  /* Frosted grain: a very low-opacity monochrome noise that reads as the
+     diffusion layer of frosted glass. */
+  --fc-frost: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+  --fc-frost-opacity: 0.045;
+  /* Wallpaper-derived frosted backdrop. The blend keeps the panel's own
+     luminance (contrast stays stable) and only takes the wallpaper's hue. */
+  --fc-wallpaper-opacity: 0.5;
+  --fc-wallpaper-blur: 64px;
+  --fc-wallpaper-saturate: 1.15;
   --fc-glass-sheen:
     radial-gradient(120% 130% at 6% -24%, rgba(74, 141, 255, 0.24), transparent 58%),
     radial-gradient(90% 110% at 104% 112%, rgba(56, 189, 248, 0.14), transparent 62%);
 
   /* Translucent layers ----------------------------------------------------- */
-  --fc-surface-1: rgba(141, 180, 255, 0.06);
-  --fc-surface-2: rgba(146, 186, 255, 0.1);
-  --fc-surface-hover: rgba(141, 180, 255, 0.08);
+  --fc-surface-1: rgba(141, 180, 255, 0.07);
+  --fc-surface-2: rgba(146, 186, 255, 0.11);
+  --fc-surface-hover: rgba(141, 180, 255, 0.09);
   --fc-surface-selected: rgba(96, 152, 255, 0.2);
   --fc-surface-selected-strong: rgba(96, 152, 255, 0.3);
   --fc-border-subtle: rgba(147, 190, 255, 0.14);
@@ -41,9 +50,9 @@
   --fc-glass-rim-top: rgba(216, 234, 255, 0.26);
   --fc-glass-rim-bottom: rgba(120, 170, 255, 0.08);
   --fc-glass-filter: blur(44px) saturate(1.6) brightness(0.72);
-  --fc-glass-filter-soft: blur(20px) saturate(1.5) brightness(0.85);
+  --fc-glass-filter-soft: blur(28px) saturate(1.5) brightness(0.9);
   --fc-scrim: rgba(4, 10, 22, 0.58);
-  --fc-preview-bg: rgba(12, 21, 40, 0.9);
+  --fc-preview-bg: rgba(11, 20, 38, 0.95);
   --fc-preview-border: rgba(160, 200, 255, 0.26);
 
   /* Text ------------------------------------------------------------------- */
@@ -117,16 +126,18 @@
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --fc-window: rgba(240, 247, 255, 0.82);
-  --fc-window-solid: #f4f8ff;
-  --fc-glass-opaque: rgba(250, 252, 255, 0.96);
+  --fc-window: rgba(236, 245, 255, 0.9);
+  --fc-window-solid: #f2f7ff;
+  --fc-glass-opaque: rgba(250, 252, 255, 0.97);
+  --fc-frost-opacity: 0.035;
+  --fc-wallpaper-opacity: 0.42;
   --fc-glass-sheen:
     radial-gradient(120% 130% at 6% -24%, rgba(255, 255, 255, 0.94), transparent 62%),
     radial-gradient(90% 110% at 104% 112%, rgba(147, 197, 253, 0.46), transparent 62%);
 
-  --fc-surface-1: rgba(24, 60, 120, 0.045);
-  --fc-surface-2: rgba(20, 55, 115, 0.075);
-  --fc-surface-hover: rgba(24, 60, 120, 0.06);
+  --fc-surface-1: rgba(24, 60, 120, 0.055);
+  --fc-surface-2: rgba(20, 55, 115, 0.09);
+  --fc-surface-hover: rgba(24, 60, 120, 0.07);
   --fc-surface-selected: rgba(37, 99, 235, 0.1);
   --fc-surface-selected-strong: rgba(37, 99, 235, 0.16);
   --fc-border-subtle: rgba(28, 63, 120, 0.14);
@@ -144,9 +155,9 @@
   --fc-glass-rim-top: rgba(255, 255, 255, 0.95);
   --fc-glass-rim-bottom: rgba(147, 197, 253, 0.3);
   --fc-glass-filter: blur(44px) saturate(1.5) brightness(1.06);
-  --fc-glass-filter-soft: blur(20px) saturate(1.35) brightness(1.04);
+  --fc-glass-filter-soft: blur(28px) saturate(1.35) brightness(1.04);
   --fc-scrim: rgba(226, 238, 255, 0.6);
-  --fc-preview-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(226, 238, 255, 0.92));
+  --fc-preview-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(228, 240, 255, 0.95));
   --fc-preview-border: rgba(37, 99, 235, 0.18);
 
   --fc-text-primary: #0d1a2f;
@@ -213,6 +224,7 @@
   background:
     radial-gradient(820px 620px at 14% 4%, rgba(64, 128, 255, 0.42), transparent 62%),
     radial-gradient(660px 520px at 86% 12%, rgba(56, 200, 235, 0.24), transparent 60%),
+    radial-gradient(560px 460px at 50% 46%, rgba(255, 138, 138, 0.22), transparent 64%),
     radial-gradient(720px 620px at 58% 106%, rgba(255, 172, 92, 0.18), transparent 66%),
     linear-gradient(148deg, #0a1428 0%, #0d1c38 44%, #071019 100%);
 }
@@ -221,6 +233,7 @@
   background:
     radial-gradient(820px 620px at 14% 4%, rgba(96, 156, 255, 0.42), transparent 62%),
     radial-gradient(660px 520px at 86% 12%, rgba(125, 211, 252, 0.44), transparent 60%),
+    radial-gradient(560px 460px at 50% 46%, rgba(255, 157, 157, 0.32), transparent 64%),
     radial-gradient(720px 620px at 58% 106%, rgba(255, 196, 128, 0.3), transparent 66%),
     linear-gradient(148deg, #eaf3ff 0%, #f4f8ff 46%, #e6f1fb 100%);
 }
