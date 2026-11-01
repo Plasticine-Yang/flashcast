@@ -226,17 +226,17 @@ export const mockClipboardItems: ClipboardItem[] = [
     title: '视频',
     fileName: 'flashcast-launch-teaser.mp4',
     mediaPath: mockSvg(
-      `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1c1917"/><stop offset=".5" stop-color="#292524"/><stop offset="1" stop-color="#7c2d12"/></linearGradient></defs>
+      `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0d1828"/><stop offset=".5" stop-color="#13233c"/><stop offset="1" stop-color="#1f3f78"/></linearGradient></defs>
        <rect width="640" height="360" fill="url(#g)"/>
-       <circle cx="320" cy="165" r="38" fill="#ffb224" opacity=".16" stroke="#ffb224" stroke-opacity=".5"/>
-       <path d="M310 146 L342 165 L310 184 Z" fill="#ffb224"/>
-       <text x="320" y="240" text-anchor="middle" fill="#e7e5e4" font-family="Inter, sans-serif" font-size="17" font-weight="500">flashcast-launch-teaser.mp4</text>`,
+       <circle cx="320" cy="165" r="38" fill="#6fa8ff" opacity=".16" stroke="#6fa8ff" stroke-opacity=".5"/>
+       <path d="M310 146 L342 165 L310 184 Z" fill="#9ac4ff"/>
+       <text x="320" y="240" text-anchor="middle" fill="#eef4ff" font-family="Inter, sans-serif" font-size="17" font-weight="500">flashcast-launch-teaser.mp4</text>`,
       640,
       360
     ),
     thumbPath: mockSvg(
-      `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1c1917"/><stop offset="1" stop-color="#7c2d12"/></linearGradient></defs>
-       <rect width="160" height="160" fill="url(#g)"/><circle cx="80" cy="80" r="24" fill="#ffb224" opacity=".2"/><path d="M72 66 L94 80 L72 94 Z" fill="#ffb224"/>`,
+      `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0d1828"/><stop offset="1" stop-color="#1f3f78"/></linearGradient></defs>
+       <rect width="160" height="160" fill="url(#g)"/><circle cx="80" cy="80" r="24" fill="#6fa8ff" opacity=".2"/><path d="M72 66 L94 80 L72 94 Z" fill="#9ac4ff"/>`,
       160,
       160
     ),

@@ -8,17 +8,22 @@ export function Logo({ size = 28 }: { size?: number }): React.JSX.Element {
     <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
       <defs>
         <linearGradient id="fc-logo-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#26262c" />
-          <stop offset="1" stopColor="#141417" />
+          <stop offset="0" stopColor="#1b2c4d" />
+          <stop offset="1" stopColor="#09101f" />
         </linearGradient>
+        <radialGradient id="fc-logo-glow" cx="0.5" cy="0.35" r="0.6">
+          <stop offset="0" stopColor="#4c8dff" stopOpacity="0.45" />
+          <stop offset="1" stopColor="#4c8dff" stopOpacity="0" />
+        </radialGradient>
         <linearGradient id="fc-logo-bolt" x1="0.2" y1="0" x2="0.8" y2="1">
-          <stop offset="0" stopColor="#ffd166" />
-          <stop offset="0.5" stopColor="#ffb224" />
-          <stop offset="1" stopColor="#ff8a00" />
+          <stop offset="0" stopColor="#d9ecff" />
+          <stop offset="0.5" stopColor="#6fa8ff" />
+          <stop offset="1" stopColor="#2563eb" />
         </linearGradient>
       </defs>
       <rect width="64" height="64" rx="16" fill="url(#fc-logo-bg)" />
-      <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="15.25" fill="none" stroke="#fff" strokeOpacity="0.1" />
+      <rect width="64" height="64" rx="16" fill="url(#fc-logo-glow)" />
+      <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="15.25" fill="none" stroke="#d8eaff" strokeOpacity="0.16" />
       <path d="M36 8 L19 35 H30 L25 56 L46 27 H34 L41 8 Z" fill="url(#fc-logo-bolt)" />
     </svg>
   )

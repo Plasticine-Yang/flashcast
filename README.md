@@ -48,7 +48,7 @@
 | 字体 | Inter Variable + JetBrains Mono（打包进应用，中文回退 Noto Sans CJK） |
 | 测试 | Vitest |
 
-UI/UX 规范要求跨平台毛玻璃、原生剪贴板与全局快捷键。Electron 是目前唯一能在三端同时覆盖这些能力的 Web 技术栈，因此项目按 Electron 实现；在 Linux 上按规范降级为不透明面板。
+UI/UX 规范要求跨平台毛玻璃、原生剪贴板与全局快捷键。Electron 是目前唯一能在三端同时覆盖这些能力的 Web 技术栈，因此项目按 Electron 实现；三端统一为半透明蓝色毛玻璃面板，不依赖桌面级模糊。
 
 ## 快速开始
 
@@ -238,7 +238,7 @@ module.exports = {
 
 ## 平台说明与已知限制
 
-- **Linux 透明/模糊**：GNOME/KWin 等合成器下保留透明背景与 CSS 毛玻璃；按规范在没有窗口模糊支持时使用不透明 `#18181B` 面板。
+- **透明与模糊**：启动器是透明窗口，面板用半透明蓝色玻璃 + 内部光源绘制；桌面级模糊依赖系统材质（macOS `NSVisualEffectView` / Windows Mica），本期未启用，三端表现一致。设置窗口内部绘制蓝色极光背景，侧栏与卡片在其上做真实模糊。
 - **Wayland 全局快捷键**：走 `xdg-desktop-portal` 的 `GlobalShortcuts`（Electron 45 默认启用，无需 feature flag）。应用身份来自 `package.json#desktopName`，必须与已安装的 `.desktop` 文件同名：开发时由 `pnpm dev` 写入 `~/.local/share/applications/com.flashcast.app.desktop`，打包时由 electron-builder 的 `syncDesktopName` 安装为同名文件。身份无法解析时系统会静默拒绝绑定，应用会在启动时写入设置页诊断并发系统通知；首次绑定需要用户在系统弹窗中确认。X11 会话直接抓键，不受影响。
 - **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限）；Windows 使用 PowerShell SendKeys；Linux 依赖 `wtype`/`xdotool`/`ydotool`。失败时保留系统剪贴板内容并发送系统通知。
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。

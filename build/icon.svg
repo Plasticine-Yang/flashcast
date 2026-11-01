@@ -1,27 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#232329"/>
-      <stop offset="0.55" stop-color="#18181B"/>
-      <stop offset="1" stop-color="#101012"/>
+      <stop offset="0" stop-color="#21365C"/>
+      <stop offset="0.55" stop-color="#101B30"/>
+      <stop offset="1" stop-color="#070D18"/>
     </linearGradient>
     <linearGradient id="bolt" x1="0.2" y1="0" x2="0.8" y2="1">
-      <stop offset="0" stop-color="#FFD166"/>
-      <stop offset="0.45" stop-color="#FFB224"/>
-      <stop offset="1" stop-color="#FF8A00"/>
+      <stop offset="0" stop-color="#D9ECFF"/>
+      <stop offset="0.45" stop-color="#6FA8FF"/>
+      <stop offset="1" stop-color="#2563EB"/>
     </linearGradient>
     <radialGradient id="glow" cx="0.5" cy="0.46" r="0.5">
-      <stop offset="0" stop-color="#FFB224" stop-opacity="0.24"/>
-      <stop offset="1" stop-color="#FFB224" stop-opacity="0"/>
+      <stop offset="0" stop-color="#4C8DFF" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#4C8DFF" stop-opacity="0"/>
     </radialGradient>
     <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
       <feGaussianBlur stdDeviation="26"/>
     </filter>
   </defs>
   <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#bg)"/>
-  <rect x="33.5" y="33.5" width="957" height="957" rx="222.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="3"/>
+  <rect x="33.5" y="33.5" width="957" height="957" rx="222.5" fill="none" stroke="#D8EAFF" stroke-opacity="0.16" stroke-width="3"/>
   <circle cx="512" cy="490" r="310" fill="url(#glow)"/>
-  <path d="M566 150 L300 558 H470 L402 874 L746 434 H554 L654 150 Z" fill="#FFB224" opacity="0.35" filter="url(#soft)"/>
+  <path d="M566 150 L300 558 H470 L402 874 L746 434 H554 L654 150 Z" fill="#4C8DFF" opacity="0.38" filter="url(#soft)"/>
   <path d="M566 150 L300 558 H470 L402 874 L746 434 H554 L654 150 Z" fill="url(#bolt)"/>
-  <path d="M566 150 L300 558 H470 L402 874" fill="none" stroke="#FFF3D6" stroke-opacity="0.45" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M566 150 L300 558 H470 L402 874" fill="none" stroke="#EAF4FF" stroke-opacity="0.5" stroke-width="4" stroke-linejoin="round"/>
 </svg>

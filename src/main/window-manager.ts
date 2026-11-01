@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification, screen, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, Notification, screen, shell } from 'electron'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { IPC } from '@shared/ipc'
@@ -125,7 +125,7 @@ export class WindowManager extends EventEmitter {
       minHeight: 540,
       show: false,
       title: 'Flashcast 设置',
-      backgroundColor: '#18181B',
+      backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B1222' : '#F4F8FF',
       autoHideMenuBar: true,
       titleBarStyle: this.platform === 'darwin' ? 'hiddenInset' : 'default',
       icon: join(assetsDir(), 'icon.png'),

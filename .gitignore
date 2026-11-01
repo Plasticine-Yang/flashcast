@@ -10,3 +10,4 @@ coverage/
 extensions/
 .worktrees/
 .agent-tmp/
+__pycache__/

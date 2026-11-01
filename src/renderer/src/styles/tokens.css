@@ -1,47 +1,97 @@
+/* ----------------------------------------------------------------------------
+   Flashcast design tokens — "Blue Glass"
+   A cool, quiet azure glass language: one accent, thin luminous rims, and a
+   light source inside every surface. Dark and light are tuned independently so
+   both feel intentional; contrast is verified against the worst realistic
+   desktop backdrop (see docs/ui-ux.md §3).
+   -------------------------------------------------------------------------- */
+
 :root {
   color-scheme: dark;
 
-  --fc-window: rgba(24, 24, 27, 0.82);
-  --fc-window-solid: #18181b;
-  --fc-surface-1: rgba(255, 255, 255, 0.04);
-  --fc-surface-2: rgba(255, 255, 255, 0.07);
-  --fc-surface-hover: rgba(255, 255, 255, 0.06);
-  --fc-surface-selected: rgba(255, 255, 255, 0.1);
-  --fc-surface-selected-strong: rgba(255, 255, 255, 0.13);
-  --fc-border-subtle: rgba(255, 255, 255, 0.08);
-  --fc-border-strong: rgba(255, 255, 255, 0.16);
-  --fc-text-primary: #f5f5f7;
-  --fc-text-secondary: #a1a1a6;
-  --fc-text-tertiary: #8e8e93;
-  --fc-accent: #ffb224;
-  --fc-accent-strong: #ff9f0a;
-  --fc-accent-soft: rgba(255, 178, 36, 0.14);
-  --fc-accent-line: rgba(255, 178, 36, 0.45);
-  --fc-on-accent: #1a1206;
-  --fc-success: #30d158;
-  --fc-warning: #ffd60a;
-  --fc-danger: #ff453a;
-  --fc-danger-soft: rgba(255, 69, 58, 0.14);
-  --fc-success-soft: rgba(48, 209, 88, 0.13);
-  --fc-warning-soft: rgba(255, 214, 10, 0.13);
-  --fc-focus-ring: rgba(255, 178, 36, 0.65);
+  /* Window glass ----------------------------------------------------------- */
+  --fc-window: rgba(11, 19, 37, 0.8);
+  --fc-window-solid: #0b1222;
+  --fc-glass-opaque: rgba(17, 29, 53, 0.94);
+  --fc-glass-sheen:
+    radial-gradient(120% 130% at 6% -24%, rgba(74, 141, 255, 0.24), transparent 58%),
+    radial-gradient(90% 110% at 104% 112%, rgba(56, 189, 248, 0.14), transparent 62%);
 
+  /* Translucent layers ----------------------------------------------------- */
+  --fc-surface-1: rgba(141, 180, 255, 0.06);
+  --fc-surface-2: rgba(146, 186, 255, 0.1);
+  --fc-surface-hover: rgba(141, 180, 255, 0.08);
+  --fc-surface-selected: rgba(96, 152, 255, 0.2);
+  --fc-surface-selected-strong: rgba(96, 152, 255, 0.3);
+  --fc-border-subtle: rgba(147, 190, 255, 0.14);
+  --fc-border-strong: rgba(160, 200, 255, 0.28);
+
+  /* Selected list row: a deep azure well with a lit rim. Dark-on-dark keeps
+     contrast stable even when a bright wallpaper shows through the glass. */
+  --fc-row-selected-bg: linear-gradient(
+    180deg,
+    rgba(52, 108, 208, 0.46),
+    rgba(20, 46, 104, 0.54)
+  );
+  --fc-row-selected-rim: rgba(150, 196, 255, 0.3);
+  --fc-row-selected-glow: 0 8px 24px -14px rgba(47, 107, 255, 0.7);
+
+  /* Glass edges and light -------------------------------------------------- */
+  --fc-glass-border: rgba(150, 193, 255, 0.22);
+  --fc-glass-rim-top: rgba(216, 234, 255, 0.26);
+  --fc-glass-rim-bottom: rgba(120, 170, 255, 0.08);
+  --fc-glass-filter: blur(44px) saturate(1.6) brightness(0.72);
+  --fc-glass-filter-soft: blur(20px) saturate(1.5) brightness(0.85);
+  --fc-scrim: rgba(4, 10, 22, 0.58);
+  --fc-preview-bg: rgba(12, 21, 40, 0.9);
+  --fc-preview-border: rgba(160, 200, 255, 0.26);
+
+  /* Text ------------------------------------------------------------------- */
+  --fc-text-primary: #f2f6ff;
+  --fc-text-secondary: #c2cfe6;
+  --fc-text-tertiary: #b2c0d9;
+
+  /* One accent ------------------------------------------------------------- */
+  --fc-accent: #9ac4ff;
+  --fc-accent-strong: #c6dcff;
+  --fc-accent-soft: rgba(96, 152, 255, 0.18);
+  --fc-accent-line: rgba(120, 176, 255, 0.5);
+  --fc-accent-fill: #2563eb;
+  --fc-accent-fill-hover: #1d4fd8;
+  --fc-on-accent: #ffffff;
+
+  /* Feedback --------------------------------------------------------------- */
+  --fc-success: #4ade80;
+  --fc-warning: #fbbf24;
+  --fc-danger: #ff9e97;
+  --fc-danger-soft: rgba(255, 107, 107, 0.14);
+  --fc-success-soft: rgba(74, 222, 128, 0.14);
+  --fc-warning-soft: rgba(251, 191, 36, 0.14);
+  --fc-focus-ring: #9ac4ff;
+
+  /* Type ------------------------------------------------------------------- */
   --fc-font-ui: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC',
     'Noto Sans CJK SC', 'Source Han Sans SC', 'DejaVu Sans', sans-serif;
   --fc-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SFMono-Regular',
     Menlo, monospace;
 
-  --fc-radius-window: 18px;
+  /* Shape ------------------------------------------------------------------ */
+  --fc-radius-window: 20px;
   --fc-radius-row: 10px;
   --fc-radius-preview: 14px;
   --fc-radius-button: 8px;
-  --fc-radius-keycap: 5px;
-  --fc-radius-icon: 8px;
+  --fc-radius-keycap: 6px;
+  --fc-radius-icon: 9px;
 
-  --fc-shadow-window: 0 24px 80px rgba(0, 0, 0, 0.55);
-  --fc-shadow-popover: 0 16px 48px rgba(0, 0, 0, 0.45);
-  --fc-highlight-line: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* Depth ------------------------------------------------------------------ */
+  --fc-shadow-window:
+    0 32px 90px rgba(0, 6, 20, 0.62), 0 6px 24px rgba(0, 6, 20, 0.36),
+    0 0 80px -24px rgba(76, 141, 255, 0.55), 0 0 0 1px rgba(88, 140, 235, 0.06);
+  --fc-shadow-popover: 0 22px 64px rgba(0, 6, 20, 0.58), 0 2px 10px rgba(0, 6, 20, 0.32);
+  --fc-shadow-accent: 0 10px 26px -10px rgba(37, 99, 235, 0.65);
+  --fc-highlight-line: inset 0 1px 0 rgba(216, 234, 255, 0.16);
 
+  /* Motion ----------------------------------------------------------------- */
   --fc-dur-instant: 120ms;
   --fc-dur-fast: 180ms;
   --fc-dur-base: 240ms;
@@ -52,73 +102,143 @@
   --fc-ease-soft: cubic-bezier(0.22, 0.8, 0.24, 1);
   --fc-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
+  /* Settings window sky ---------------------------------------------------- */
+  --fc-aurora:
+    radial-gradient(1100px 720px at 4% -14%, rgba(58, 124, 255, 0.32), transparent 62%),
+    radial-gradient(900px 640px at 104% -8%, rgba(70, 208, 255, 0.16), transparent 58%),
+    radial-gradient(1040px 720px at 82% 116%, rgba(124, 92, 255, 0.2), transparent 64%),
+    linear-gradient(158deg, #0c1424 0%, #0a1120 52%, #070d18 100%);
+
+  /* Layout ----------------------------------------------------------------- */
   --fc-sidebar-width: 200px;
   --fc-content-padding: 32px;
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --fc-window: rgba(250, 250, 252, 0.92);
-  --fc-window-solid: #fafafc;
-  --fc-surface-1: rgba(0, 0, 0, 0.03);
-  --fc-surface-2: rgba(0, 0, 0, 0.06);
-  --fc-surface-hover: rgba(0, 0, 0, 0.045);
-  --fc-surface-selected: rgba(0, 0, 0, 0.07);
-  --fc-surface-selected-strong: rgba(0, 0, 0, 0.1);
-  --fc-border-subtle: rgba(0, 0, 0, 0.08);
-  --fc-border-strong: rgba(0, 0, 0, 0.16);
-  --fc-text-primary: #1c1c1e;
-  --fc-text-secondary: #3a3a3c;
-  --fc-text-tertiary: #6e6e73;
-  --fc-accent: #b45309;
-  --fc-accent-strong: #92400e;
-  --fc-accent-soft: rgba(180, 83, 9, 0.12);
-  --fc-accent-line: rgba(180, 83, 9, 0.45);
-  --fc-on-accent: #1a1206;
-  --fc-success: #16803c;
-  --fc-warning: #946200;
-  --fc-danger: #c1121f;
-  --fc-danger-soft: rgba(193, 18, 31, 0.1);
-  --fc-success-soft: rgba(22, 128, 60, 0.1);
-  --fc-warning-soft: rgba(148, 98, 0, 0.11);
-  --fc-focus-ring: rgba(180, 83, 9, 0.55);
-  --fc-shadow-window: 0 24px 80px rgba(0, 0, 0, 0.22);
-  --fc-shadow-popover: 0 16px 48px rgba(0, 0, 0, 0.18);
-  --fc-highlight-line: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+
+  --fc-window: rgba(240, 247, 255, 0.82);
+  --fc-window-solid: #f4f8ff;
+  --fc-glass-opaque: rgba(250, 252, 255, 0.96);
+  --fc-glass-sheen:
+    radial-gradient(120% 130% at 6% -24%, rgba(255, 255, 255, 0.94), transparent 62%),
+    radial-gradient(90% 110% at 104% 112%, rgba(147, 197, 253, 0.46), transparent 62%);
+
+  --fc-surface-1: rgba(24, 60, 120, 0.045);
+  --fc-surface-2: rgba(20, 55, 115, 0.075);
+  --fc-surface-hover: rgba(24, 60, 120, 0.06);
+  --fc-surface-selected: rgba(37, 99, 235, 0.1);
+  --fc-surface-selected-strong: rgba(37, 99, 235, 0.16);
+  --fc-border-subtle: rgba(28, 63, 120, 0.14);
+  --fc-border-strong: rgba(28, 63, 120, 0.24);
+
+  --fc-row-selected-bg: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.95),
+    rgba(219, 235, 255, 0.9)
+  );
+  --fc-row-selected-rim: rgba(37, 99, 235, 0.2);
+  --fc-row-selected-glow: 0 8px 22px -16px rgba(37, 99, 235, 0.45);
+
+  --fc-glass-border: rgba(255, 255, 255, 0.9);
+  --fc-glass-rim-top: rgba(255, 255, 255, 0.95);
+  --fc-glass-rim-bottom: rgba(147, 197, 253, 0.3);
+  --fc-glass-filter: blur(44px) saturate(1.5) brightness(1.06);
+  --fc-glass-filter-soft: blur(20px) saturate(1.35) brightness(1.04);
+  --fc-scrim: rgba(226, 238, 255, 0.6);
+  --fc-preview-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(226, 238, 255, 0.92));
+  --fc-preview-border: rgba(37, 99, 235, 0.18);
+
+  --fc-text-primary: #0d1a2f;
+  --fc-text-secondary: #2f4260;
+  --fc-text-tertiary: #43536f;
+
+  --fc-accent: #1a4db8;
+  --fc-accent-strong: #12398c;
+  --fc-accent-soft: rgba(37, 99, 235, 0.1);
+  --fc-accent-line: rgba(37, 99, 235, 0.45);
+  --fc-accent-fill: #2563eb;
+  --fc-accent-fill-hover: #1d4fd8;
+  --fc-on-accent: #ffffff;
+
+  --fc-success: #0b5b34;
+  --fc-warning: #704700;
+  --fc-danger: #9f1d14;
+  --fc-danger-soft: rgba(159, 29, 20, 0.09);
+  --fc-success-soft: rgba(11, 91, 52, 0.09);
+  --fc-warning-soft: rgba(112, 71, 0, 0.09);
+  --fc-focus-ring: #1b4fc4;
+
+  --fc-shadow-window:
+    0 30px 84px rgba(21, 48, 96, 0.18), 0 6px 20px rgba(21, 48, 96, 0.08),
+    0 0 70px -28px rgba(37, 99, 235, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.5);
+  --fc-shadow-popover: 0 22px 60px rgba(21, 48, 96, 0.16), 0 2px 10px rgba(21, 48, 96, 0.08);
+  --fc-shadow-accent: 0 10px 26px -10px rgba(37, 99, 235, 0.5);
+  --fc-highlight-line: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+
+  --fc-aurora:
+    radial-gradient(1100px 720px at 4% -14%, rgba(96, 156, 255, 0.6), transparent 62%),
+    radial-gradient(900px 640px at 104% -8%, rgba(125, 211, 252, 0.52), transparent 58%),
+    radial-gradient(1040px 720px at 82% 116%, rgba(167, 139, 250, 0.34), transparent 64%),
+    linear-gradient(158deg, #f5faff 0%, #ecf4ff 52%, #e4eefb 100%);
 }
 
+/* High-contrast mode keeps the tint but removes translucency so text never
+   fights the wallpaper. */
 :root[data-contrast='more'] {
-  --fc-border-subtle: rgba(255, 255, 255, 0.16);
-  --fc-border-strong: rgba(255, 255, 255, 0.28);
-  --fc-window: #18181b;
-  --fc-surface-1: rgba(255, 255, 255, 0.08);
-  --fc-surface-2: rgba(255, 255, 255, 0.12);
-  --fc-surface-selected: rgba(255, 255, 255, 0.18);
+  --fc-window: rgba(9, 16, 30, 0.96);
+  --fc-border-subtle: rgba(170, 205, 255, 0.28);
+  --fc-border-strong: rgba(180, 215, 255, 0.42);
+  --fc-surface-1: rgba(150, 190, 255, 0.12);
+  --fc-surface-2: rgba(155, 195, 255, 0.18);
+  --fc-surface-selected: rgba(120, 175, 255, 0.3);
+  --fc-text-secondary: #d6e1f5;
+  --fc-text-tertiary: #c5d2e8;
 }
 
 :root[data-theme='light'][data-contrast='more'] {
-  --fc-border-subtle: rgba(0, 0, 0, 0.16);
-  --fc-border-strong: rgba(0, 0, 0, 0.28);
-  --fc-window: #fafafc;
-  --fc-surface-1: rgba(0, 0, 0, 0.05);
-  --fc-surface-2: rgba(0, 0, 0, 0.1);
-  --fc-surface-selected: rgba(0, 0, 0, 0.12);
+  --fc-window: rgba(250, 252, 255, 0.97);
+  --fc-border-subtle: rgba(20, 48, 100, 0.24);
+  --fc-border-strong: rgba(20, 48, 100, 0.36);
+  --fc-surface-1: rgba(24, 60, 120, 0.08);
+  --fc-surface-2: rgba(20, 55, 115, 0.12);
+  --fc-surface-selected: rgba(37, 99, 235, 0.16);
+  --fc-text-secondary: #23354f;
+  --fc-text-tertiary: #35466a;
 }
 
+/* Browser-only preview: a plausible "desktop" so the glass can be reviewed
+   without Electron. Blue-hour for dark, clear morning for light. */
 :root[data-preview='true'] {
   background:
-    radial-gradient(900px 620px at 12% 8%, rgba(91, 76, 180, 0.5), transparent 65%),
-    radial-gradient(760px 560px at 88% 18%, rgba(255, 159, 10, 0.22), transparent 62%),
-    radial-gradient(900px 700px at 60% 100%, rgba(26, 92, 120, 0.42), transparent 70%),
-    linear-gradient(142deg, #10121c 0%, #161120 46%, #0b0f14 100%);
+    radial-gradient(820px 620px at 14% 4%, rgba(64, 128, 255, 0.42), transparent 62%),
+    radial-gradient(660px 520px at 86% 12%, rgba(56, 200, 235, 0.24), transparent 60%),
+    radial-gradient(720px 620px at 58% 106%, rgba(255, 172, 92, 0.18), transparent 66%),
+    linear-gradient(148deg, #0a1428 0%, #0d1c38 44%, #071019 100%);
 }
 
 :root[data-preview='true'][data-theme='light'] {
   background:
-    radial-gradient(900px 620px at 12% 8%, rgba(148, 163, 255, 0.55), transparent 65%),
-    radial-gradient(760px 560px at 88% 18%, rgba(255, 190, 92, 0.45), transparent 62%),
-    radial-gradient(900px 700px at 60% 100%, rgba(147, 197, 253, 0.45), transparent 70%),
-    linear-gradient(142deg, #e8ecf7 0%, #f3edf7 46%, #e9f1f7 100%);
+    radial-gradient(820px 620px at 14% 4%, rgba(96, 156, 255, 0.42), transparent 62%),
+    radial-gradient(660px 520px at 86% 12%, rgba(125, 211, 252, 0.44), transparent 60%),
+    radial-gradient(720px 620px at 58% 106%, rgba(255, 196, 128, 0.3), transparent 66%),
+    linear-gradient(148deg, #eaf3ff 0%, #f4f8ff 46%, #e6f1fb 100%);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --fc-window: rgba(9, 16, 30, 0.98);
+    --fc-glass-opaque: #0d162a;
+    --fc-glass-filter: none;
+    --fc-glass-filter-soft: none;
+    --fc-glass-sheen: none;
+  }
+
+  :root[data-theme='light'] {
+    --fc-window: rgba(247, 251, 255, 0.98);
+    --fc-glass-opaque: #f7fbff;
+    --fc-glass-sheen: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

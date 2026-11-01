@@ -36,11 +36,11 @@
   flex-direction: column;
   overflow: hidden;
   border-radius: var(--fc-radius-window);
-  border: 1px solid var(--fc-border-subtle);
+  border: 1px solid var(--fc-glass-border);
   box-shadow: var(--fc-shadow-window), var(--fc-highlight-line);
-  background: var(--fc-window);
-  backdrop-filter: blur(40px) saturate(1.12);
-  -webkit-backdrop-filter: blur(40px) saturate(1.12);
+  background: var(--fc-glass-sheen), var(--fc-window);
+  backdrop-filter: var(--fc-glass-filter);
+  -webkit-backdrop-filter: var(--fc-glass-filter);
   will-change: height, opacity;
 }
 
@@ -56,30 +56,12 @@
   min-height: 0;
 }
 
-:root[data-platform='linux'] .fc-panel {
-  background: var(--fc-window-solid);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
+/* Fallback: without backdrop-filter support the tinted glass still reads
+   correctly because every surface is translucent on its own. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .fc-panel {
     background: var(--fc-window-solid);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
   }
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .fc-panel {
-    background: var(--fc-window-solid);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-}
-
-:root[data-theme='light'][data-platform='linux'] .fc-panel {
-  background: var(--fc-window-solid);
 }
 
 .fc-panel::before {
@@ -88,7 +70,9 @@
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  box-shadow:
+    inset 0 1px 0 var(--fc-glass-rim-top),
+    inset 0 -1px 0 var(--fc-glass-rim-bottom);
   z-index: 20;
 }
 
@@ -198,24 +182,33 @@
   color: var(--fc-text-primary);
 }
 
+.fc-clear-button:focus-visible {
+  outline-offset: 1px;
+}
+
 .fc-plugin-badge {
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
-  border: 1px solid var(--fc-border-subtle);
-  background: var(--fc-accent-soft);
+  border-radius: 9px;
+  border: 1px solid var(--fc-accent-line);
+  background:
+    radial-gradient(120% 120% at 30% 0%, rgba(255, 255, 255, 0.22), transparent 70%),
+    var(--fc-accent-soft);
   color: var(--fc-accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
   animation: fc-badge-spring 260ms var(--fc-spring) both;
   transition:
     transform var(--fc-dur-instant) ease,
-    background var(--fc-dur-instant) ease;
+    background var(--fc-dur-instant) ease,
+    border-color var(--fc-dur-instant) ease;
 }
 
 .fc-plugin-badge:hover {
   transform: scale(1.05);
-  background: color-mix(in srgb, var(--fc-accent) 22%, transparent);
+  background: color-mix(in srgb, var(--fc-accent) 20%, transparent);
+  border-color: var(--fc-accent);
 }
 
 .fc-plugin-badge img {
@@ -347,12 +340,17 @@
   color: var(--fc-text-primary);
   transition:
     background var(--fc-dur-instant) ease,
+    box-shadow var(--fc-dur-instant) ease,
     color var(--fc-dur-instant) ease;
   will-change: transform;
 }
 
 .fc-row[aria-selected='true'] {
-  background: var(--fc-surface-selected);
+  background: var(--fc-row-selected-bg);
+  box-shadow:
+    inset 0 0 0 1px var(--fc-row-selected-rim),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    var(--fc-row-selected-glow);
 }
 
 .fc-row[aria-selected='true'] .fc-row-title {
@@ -370,7 +368,8 @@
   height: 32px;
   flex: none;
   border-radius: var(--fc-radius-icon);
-  background: var(--fc-surface-1);
+  background: linear-gradient(155deg, var(--fc-surface-2), var(--fc-surface-1));
+  box-shadow: inset 0 0 0 1px var(--fc-border-subtle);
   color: var(--fc-text-secondary);
   overflow: hidden;
 }
@@ -383,19 +382,23 @@
 
 .fc-row-icon--accent {
   color: var(--fc-accent);
-  background: var(--fc-accent-soft);
+  background:
+    radial-gradient(120% 120% at 30% 0%, rgba(255, 255, 255, 0.2), transparent 70%),
+    var(--fc-accent-soft);
+  box-shadow: inset 0 0 0 1px var(--fc-accent-line);
 }
 
 .fc-row-icon--letter {
   background: linear-gradient(
     145deg,
-    color-mix(in srgb, var(--fc-accent) 18%, transparent),
+    color-mix(in srgb, var(--fc-accent) 24%, transparent),
     var(--fc-surface-2)
   );
   color: var(--fc-accent);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.02em;
+  box-shadow: inset 0 0 0 1px var(--fc-accent-line);
 }
 
 .fc-row-body {
@@ -477,8 +480,11 @@
   height: 52px;
   margin-bottom: 4px;
   border-radius: 16px;
-  background: var(--fc-surface-1);
-  color: var(--fc-text-tertiary);
+  background:
+    radial-gradient(120% 120% at 30% 0%, rgba(120, 175, 255, 0.16), transparent 70%),
+    var(--fc-surface-1);
+  box-shadow: inset 0 0 0 1px var(--fc-border-subtle);
+  color: var(--fc-accent);
 }
 
 .fc-no-results-title {
@@ -513,7 +519,7 @@
   flex: none;
   padding: 0 12px;
   border-top: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-1);
+  background: linear-gradient(180deg, transparent, var(--fc-surface-1));
 }
 
 .fc-footer-hints {
@@ -592,7 +598,9 @@
 .fc-help-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.46);
+  background: var(--fc-scrim);
+  backdrop-filter: blur(10px) saturate(1.3);
+  -webkit-backdrop-filter: blur(10px) saturate(1.3);
   animation: fc-fade-in 140ms ease both;
 }
 
@@ -603,10 +611,12 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 14px;
-  border: 1px solid var(--fc-border-strong);
-  background: var(--fc-window-solid);
-  box-shadow: var(--fc-shadow-popover);
+  border-radius: 16px;
+  border: 1px solid var(--fc-glass-border);
+  background: var(--fc-glass-sheen), var(--fc-glass-opaque);
+  backdrop-filter: var(--fc-glass-filter-soft);
+  -webkit-backdrop-filter: var(--fc-glass-filter-soft);
+  box-shadow: var(--fc-shadow-popover), var(--fc-highlight-line);
   animation: fc-help-in 200ms var(--fc-ease-out) both;
 }
 
@@ -708,10 +718,12 @@
   gap: 8px;
   max-width: calc(100% - 48px);
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: 10px;
   border: 1px solid var(--fc-border-strong);
-  background: color-mix(in srgb, var(--fc-window-solid) 96%, transparent);
-  box-shadow: var(--fc-shadow-popover);
+  background: var(--fc-glass-opaque);
+  backdrop-filter: var(--fc-glass-filter-soft);
+  -webkit-backdrop-filter: var(--fc-glass-filter-soft);
+  box-shadow: var(--fc-shadow-popover), var(--fc-highlight-line);
   color: var(--fc-text-primary);
   font-size: 12px;
   font-weight: 500;

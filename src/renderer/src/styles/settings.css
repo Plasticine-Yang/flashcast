@@ -5,18 +5,34 @@
   display: grid;
   grid-template-columns: var(--fc-sidebar-width) minmax(0, 1fr);
   overflow: hidden;
-  background: var(--fc-window-solid);
+  background: var(--fc-aurora);
   color: var(--fc-text-primary);
   font-family: var(--fc-font-ui);
   font-feature-settings: 'cv11', 'ss01';
+  isolation: isolate;
+}
+
+/* A soft light source in the top-left corner: the same blue the launcher uses. */
+.settings-root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(640px 420px at 0% 0%, rgba(120, 175, 255, 0.14), transparent 62%),
+    radial-gradient(520px 380px at 100% 100%, rgba(56, 189, 248, 0.08), transparent 60%);
+  z-index: 0;
+}
+
+.settings-root > * {
+  position: relative;
+  z-index: 1;
 }
 
 .settings-root--message {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
-  background:
-    radial-gradient(700px 480px at 20% 0%, rgba(255, 178, 36, 0.08), transparent 60%),
-    var(--fc-window-solid);
 }
 
 .settings-titlebar {
@@ -47,8 +63,11 @@
   padding: 18px 12px 12px;
   border-right: 1px solid var(--fc-border-subtle);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--fc-surface-1) 80%, transparent), transparent 120px),
-    color-mix(in srgb, var(--fc-window-solid) 94%, var(--fc-surface-1));
+    linear-gradient(180deg, var(--fc-surface-1), transparent 160px),
+    color-mix(in srgb, var(--fc-window) 66%, transparent);
+  backdrop-filter: var(--fc-glass-filter-soft);
+  -webkit-backdrop-filter: var(--fc-glass-filter-soft);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.04);
 }
 
 .settings-brand {
@@ -90,7 +109,7 @@
   gap: 10px;
   height: 44px;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: 9px;
   color: var(--fc-text-secondary);
   font-size: 13px;
   font-weight: 500;
@@ -111,23 +130,16 @@
 }
 
 .settings-nav-item.is-active {
-  background: var(--fc-surface-selected);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--fc-accent) 18%, transparent), var(--fc-accent-soft));
+  box-shadow:
+    inset 0 0 0 1px var(--fc-accent-line),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
   color: var(--fc-text-primary);
 }
 
 .settings-nav-item.is-active svg {
   color: var(--fc-accent);
-}
-
-.settings-nav-item.is-active::before {
-  content: '';
-  position: absolute;
-  left: -12px;
-  top: 9px;
-  bottom: 9px;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: var(--fc-accent);
 }
 
 .settings-nav-count {
@@ -151,15 +163,19 @@
   flex-direction: column;
   gap: 5px;
   padding: 10px;
-  border-radius: 8px;
+  border-radius: 10px;
   border: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-1);
+  background: linear-gradient(180deg, var(--fc-surface-2), var(--fc-surface-1));
+  box-shadow: var(--fc-highlight-line);
   text-align: left;
-  transition: background var(--fc-dur-instant) ease;
+  transition:
+    background var(--fc-dur-instant) ease,
+    border-color var(--fc-dur-instant) ease;
 }
 
 .settings-sidebar-workspace:hover {
-  background: var(--fc-surface-2);
+  background: linear-gradient(180deg, var(--fc-surface-selected), var(--fc-surface-2));
+  border-color: var(--fc-border-strong);
 }
 
 .settings-sidebar-workspace-head {
@@ -185,9 +201,11 @@
   min-width: 0;
   min-height: 0;
   position: relative;
-  background:
-    radial-gradient(700px 340px at 70% -10%, color-mix(in srgb, var(--fc-accent) 5%, transparent), transparent 70%),
-    var(--fc-window-solid);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--fc-window) 42%, transparent),
+    transparent 220px
+  );
 }
 
 .settings-main-scroll {
@@ -262,15 +280,35 @@
   margin-left: auto;
 }
 
+/* Glass cards: one translucent sky-tinted sheet, thin rim, lit top edge. */
+.settings-row,
+.settings-plugin-list,
+.settings-shortcut-list,
+.settings-fixed-list,
+.settings-workspace-card,
+.settings-workspace-stats,
+.settings-update-row,
+.settings-about-hero,
+.settings-kv--card,
+.settings-theme-option,
+.settings-info-banner,
+.settings-warning,
+.settings-error-banner,
+.settings-recorder-box {
+  background: linear-gradient(180deg, var(--fc-surface-2), var(--fc-surface-1));
+  border: 1px solid var(--fc-border-subtle);
+  box-shadow: var(--fc-highlight-line);
+  backdrop-filter: var(--fc-glass-filter-soft);
+  -webkit-backdrop-filter: var(--fc-glass-filter-soft);
+}
+
 .settings-row {
   display: flex;
   align-items: center;
   gap: 24px;
   min-height: 54px;
   padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-1);
+  border-radius: 12px;
 }
 
 .settings-row + .settings-row {
@@ -336,15 +374,20 @@
   height: 32px;
   padding: 0 12px;
   border-radius: 8px;
-  background: var(--fc-accent);
+  background: linear-gradient(180deg, var(--fc-accent-fill), color-mix(in srgb, var(--fc-accent-fill) 82%, #0b2a8a));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    var(--fc-shadow-accent);
   color: var(--fc-on-accent);
   font-size: 12px;
   font-weight: 600;
-  transition: background var(--fc-dur-instant) ease;
+  transition:
+    background var(--fc-dur-instant) ease,
+    box-shadow var(--fc-dur-instant) ease;
 }
 
 .settings-primary-button:hover {
-  background: color-mix(in srgb, var(--fc-accent) 88%, white);
+  background: linear-gradient(180deg, var(--fc-accent-fill-hover), color-mix(in srgb, var(--fc-accent-fill-hover) 84%, #071f6b));
 }
 
 .settings-ghost-button {
@@ -353,19 +396,22 @@
   gap: 6px;
   height: 28px;
   padding: 0 9px;
-  border-radius: 7px;
+  border-radius: 8px;
   border: 1px solid var(--fc-border-subtle);
-  background: transparent;
+  background: linear-gradient(180deg, var(--fc-surface-2), var(--fc-surface-1));
+  box-shadow: var(--fc-highlight-line);
   color: var(--fc-text-secondary);
   font-size: 11.5px;
   font-weight: 500;
   transition:
     background var(--fc-dur-instant) ease,
+    border-color var(--fc-dur-instant) ease,
     color var(--fc-dur-instant) ease;
 }
 
 .settings-ghost-button:hover {
-  background: var(--fc-surface-2);
+  background: linear-gradient(180deg, var(--fc-surface-selected), var(--fc-surface-2));
+  border-color: var(--fc-border-strong);
   color: var(--fc-text-primary);
 }
 
@@ -419,9 +465,19 @@
   padding: 0 28px 0 10px;
   border-radius: 8px;
   border: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-2);
+  background: linear-gradient(180deg, var(--fc-surface-2), var(--fc-surface-1));
+  box-shadow: var(--fc-highlight-line);
   color: var(--fc-text-primary);
   font-size: 12px;
+}
+
+.settings-select:focus,
+.settings-select:focus-visible {
+  border-color: var(--fc-accent-line);
+  box-shadow:
+    0 0 0 2px var(--fc-focus-ring),
+    0 0 0 4px var(--fc-accent-soft);
+  outline: none;
 }
 
 .settings-select:disabled {
@@ -444,9 +500,7 @@
   align-items: flex-start;
   gap: 9px;
   padding: 10px 12px;
-  border-radius: 9px;
-  border: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-1);
+  border-radius: 11px;
   color: var(--fc-text-secondary);
   font-size: 11.5px;
   line-height: 1.55;
@@ -534,22 +588,25 @@
   flex-direction: column;
   gap: 8px;
   padding: 8px;
-  border-radius: 10px;
-  border: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-1);
+  border-radius: 12px;
   color: var(--fc-text-secondary);
   transition:
     border-color var(--fc-dur-instant) ease,
-    background var(--fc-dur-instant) ease;
+    background var(--fc-dur-instant) ease,
+    box-shadow var(--fc-dur-instant) ease;
 }
 
 .settings-theme-option:hover {
-  background: var(--fc-surface-2);
+  border-color: var(--fc-border-strong);
 }
 
 .settings-theme-option.is-active {
   border-color: var(--fc-accent-line);
-  background: var(--fc-accent-soft);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--fc-accent) 14%, transparent), var(--fc-accent-soft));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--fc-accent) 22%, transparent),
+    0 10px 24px -18px color-mix(in srgb, var(--fc-accent-fill) 70%, transparent);
   color: var(--fc-text-primary);
 }
 
@@ -559,24 +616,28 @@
   gap: 4px;
   height: 52px;
   padding: 9px;
-  border-radius: 7px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
   overflow: hidden;
 }
 
 .settings-theme-preview--dark {
-  background: linear-gradient(150deg, #202027, #131316);
+  background:
+    radial-gradient(120% 140% at 10% -10%, rgba(74, 141, 255, 0.35), transparent 60%),
+    linear-gradient(150deg, #16233d, #0a1222);
 }
 
 .settings-theme-preview--light {
-  background: linear-gradient(150deg, #ffffff, #e9e9ee);
-  border-color: rgba(0, 0, 0, 0.08);
+  background:
+    radial-gradient(120% 140% at 10% -10%, rgba(96, 156, 255, 0.32), transparent 60%),
+    linear-gradient(150deg, #ffffff, #e6f0ff);
+  border-color: rgba(28, 63, 120, 0.12);
 }
 
 .settings-theme-preview--system {
   position: relative;
-  background: linear-gradient(90deg, #f4f4f7 0 50%, #1c1c21 50% 100%);
-  border-color: rgba(0, 0, 0, 0.08);
+  background: linear-gradient(90deg, #eaf2ff 0 50%, #13203a 50% 100%);
+  border-color: rgba(28, 63, 120, 0.12);
 }
 
 .settings-theme-preview--system::after {
@@ -640,10 +701,8 @@
 /* Plugins */
 
 .settings-plugin-list {
-  border-radius: 10px;
-  border: 1px solid var(--fc-border-subtle);
+  border-radius: 12px;
   overflow: hidden;
-  background: var(--fc-surface-1);
 }
 
 .settings-plugin-row {
@@ -783,10 +842,12 @@
   z-index: 21;
   width: 168px;
   padding: 4px;
-  border-radius: 9px;
+  border-radius: 11px;
   border: 1px solid var(--fc-border-strong);
-  background: color-mix(in srgb, var(--fc-window-solid) 97%, transparent);
-  box-shadow: var(--fc-shadow-popover);
+  background: var(--fc-glass-opaque);
+  backdrop-filter: var(--fc-glass-filter-soft);
+  -webkit-backdrop-filter: var(--fc-glass-filter-soft);
+  box-shadow: var(--fc-shadow-popover), var(--fc-highlight-line);
   animation: settings-menu-in 120ms var(--fc-ease-out) both;
 }
 
@@ -873,14 +934,20 @@
   padding: 0 10px;
   border-radius: 8px;
   border: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-2);
+  background: linear-gradient(180deg, var(--fc-surface-2), var(--fc-surface-1));
+  box-shadow: var(--fc-highlight-line);
   color: var(--fc-text-primary);
   font-size: 12px;
   font-family: var(--fc-font-mono);
 }
 
-.settings-input:focus {
+.settings-input:focus,
+.settings-input:focus-visible {
   border-color: var(--fc-accent-line);
+  box-shadow:
+    0 0 0 2px var(--fc-focus-ring),
+    0 0 0 4px var(--fc-accent-soft);
+  outline: none;
 }
 
 .settings-form-error {
@@ -945,9 +1012,7 @@
 
 .settings-kv--card {
   padding: 9px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-1);
+  border-radius: 10px;
 }
 
 .settings-kv--card + .settings-kv--card {
@@ -972,8 +1037,9 @@
 .settings-modal-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.38);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--fc-window-solid) 58%, transparent);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
   animation: fc-fade-in 140ms ease both;
 }
 
@@ -988,10 +1054,12 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 14px;
-  border: 1px solid var(--fc-border-strong);
-  background: var(--fc-window-solid);
-  box-shadow: var(--fc-shadow-popover);
+  border-radius: 16px;
+  border: 1px solid var(--fc-glass-border);
+  background: var(--fc-glass-sheen), var(--fc-glass-opaque);
+  backdrop-filter: var(--fc-glass-filter);
+  -webkit-backdrop-filter: var(--fc-glass-filter);
+  box-shadow: var(--fc-shadow-popover), var(--fc-highlight-line);
   animation: settings-modal-in 220ms var(--fc-ease-out) both;
 }
 
@@ -1042,7 +1110,7 @@
   gap: 8px;
   padding: 12px 18px;
   border-top: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-1);
+  background: linear-gradient(180deg, transparent, var(--fc-surface-1));
 }
 
 /* Workspace */
@@ -1052,11 +1120,10 @@
   flex-direction: column;
   gap: 16px;
   padding: 18px;
-  border-radius: 12px;
-  border: 1px solid var(--fc-border-subtle);
+  border-radius: 14px;
   background:
-    linear-gradient(140deg, color-mix(in srgb, var(--fc-accent) 4%, transparent), transparent 50%),
-    var(--fc-surface-1);
+    radial-gradient(420px 240px at 0% 0%, color-mix(in srgb, var(--fc-accent) 10%, transparent), transparent 68%),
+    linear-gradient(180deg, var(--fc-surface-2), var(--fc-surface-1));
 }
 
 .settings-workspace-head {
@@ -1098,9 +1165,8 @@
   grid-template-columns: 0.8fr 1.4fr 1fr 1fr;
   gap: 14px;
   padding: 14px;
-  border-radius: 9px;
-  border: 1px solid var(--fc-border-subtle);
-  background: color-mix(in srgb, var(--fc-window-solid) 45%, transparent);
+  border-radius: 11px;
+  background: var(--fc-surface-1);
 }
 
 .settings-stat {
@@ -1173,10 +1239,8 @@
 /* Shortcuts */
 
 .settings-shortcut-list {
-  border-radius: 10px;
-  border: 1px solid var(--fc-border-subtle);
+  border-radius: 12px;
   overflow: hidden;
-  background: var(--fc-surface-1);
 }
 
 .settings-shortcut-row {
@@ -1203,10 +1267,8 @@
 }
 
 .settings-fixed-list {
-  border-radius: 10px;
-  border: 1px solid var(--fc-border-subtle);
+  border-radius: 12px;
   overflow: hidden;
-  background: var(--fc-surface-1);
 }
 
 .settings-fixed-row {
@@ -1238,9 +1300,9 @@
   display: grid;
   place-items: center;
   min-height: 96px;
-  border-radius: 10px;
-  border: 1px dashed var(--fc-border-strong);
-  background: var(--fc-surface-1);
+  border-radius: 12px;
+  border-style: dashed;
+  border-color: var(--fc-border-strong);
   color: var(--fc-text-tertiary);
   font-size: 12px;
 }
@@ -1287,11 +1349,10 @@
   align-items: center;
   gap: 18px;
   padding: 22px;
-  border-radius: 14px;
-  border: 1px solid var(--fc-border-subtle);
+  border-radius: 16px;
   background:
-    radial-gradient(500px 240px at 12% 0%, color-mix(in srgb, var(--fc-accent) 9%, transparent), transparent 70%),
-    var(--fc-surface-1);
+    radial-gradient(520px 260px at 10% 0%, color-mix(in srgb, var(--fc-accent) 14%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--fc-surface-2), var(--fc-surface-1));
 }
 
 .settings-about-mark {
@@ -1345,9 +1406,7 @@
   align-items: center;
   gap: 20px;
   padding: 13px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--fc-border-subtle);
-  background: var(--fc-surface-1);
+  border-radius: 12px;
 }
 
 .settings-update-row > div {
