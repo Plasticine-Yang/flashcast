@@ -94,6 +94,8 @@ jobs:
       - name: 发布到 GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 该 job 不 checkout 仓库，显式告诉 gh 目标仓库，否则 gh 会尝试读取 .git。
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -105,3 +107,4 @@ jobs:
               --generate-notes \
               --verify-tag
           fi
+          gh release view "$TAG" --json url --jq '"Release: " + .url'
