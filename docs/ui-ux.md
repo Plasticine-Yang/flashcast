@@ -14,7 +14,7 @@
 | 瞬时 | 按下快捷键到可用不超过 120ms | 窗口先出现再动画，入场动画不阻塞输入 |
 | 单一焦点 | 任何时候只有一个输入框 | 全局搜索、插件搜索都复用同一个输入框 |
 | 键盘优先 | 所有操作可无鼠标完成 | 选中态、焦点环、底部快捷键提示必须可见 |
-| 流体但克制 | 动画表达层级变化，不做无意义装饰 | 只动 opacity / transform / filter，一次最多 2 个关键元素 |
+| 流体但克制 | 动画表达层级变化，不做无意义装饰 | 默认只动 opacity / transform / filter；面板外壳生长是唯一例外（固定内层布局的高度过渡） |
 | 平台原生 | 三端看起来都像"属于这个系统" | 毛玻璃、圆角、阴影、快捷键符号按平台适配 |
 
 视觉基调：`#18181B` 近黑玻璃面板 + 琥珀色闪电强调色；信息层级低对比、内容高对比；无边框装饰、无渐变背景、无 3D 效果。
@@ -48,7 +48,7 @@
 | `--fc-text-primary` | `#F5F5F7` | 标题、输入文字 |
 | `--fc-text-secondary` | `#A1A1A6` | 副标题、URL、说明 |
 | `--fc-text-tertiary` | `#8E8E93` | 分区标题、键帽、时间 |
-| `--fc-accent` | `#FFB224` | 匹配高亮、光标、进度 |
+| `--fc-accent` | `#FFB224` | 匹配高亮、光标 |
 | `--fc-accent-strong` | `#FF9F0A` | 强调渐变终点、图标 |
 | `--fc-accent-soft` | `rgba(255,178,36,0.14)` | 插件图标底、选中微光 |
 | `--fc-on-accent` | `#1A1206` | 琥珀底上的文字 |
@@ -299,9 +299,11 @@
 
 预览面板：
 
-- 宽 300px，右侧内缩 8px，圆角 14，背景 `surface-1` + 1px 描边，覆盖在列表右侧；列表在面板打开时为面板让出 308px 右内边距（320ms 过渡，最多 8 行，成本可接受）。
-- 停留 1.5s 后展开：选中行底部出现 2px 琥珀进度线（线性 1.5s）；切换选中、鼠标移动超过 8px 或滚动时重置计时并立即收起。
-- `ctrl+l` 立即展开预览，`ctrl+h` 收起；预览展开后，`j/k` 仍控制列表选中，预览内容同步更换（不做整块重放动画，仅内容 120ms 交叉淡入）。
+- 宽 300px，右侧内缩 8px，圆角 14，背景 `surface-1` + 1px 描边，覆盖在列表右侧；列表在面板打开时让出 320px 右内边距（320ms 过渡，最多 8 行，成本可接受）。
+- 停留 1s 后展开，不显示进度线、倒计时或读条。
+- 未展开时，选中变化、滚动、鼠标移动超过 8px、搜索输入都会重置 1s 计时；鼠标微动不重置。已展开后，鼠标移动与 `j/k` 切换只更新内容和选中，不收起、不重放入场动画。
+- 收起只由显式动作或状态离开触发：`esc`、`ctrl+h`、进入设置/帮助、离开插件、删除当前项、搜索结果为空。预览保持展开时，搜索过滤若仍有结果则跟随选中项切换内容。
+- `ctrl+l` 立即展开预览并固定，`ctrl+h` 收起；预览展开后，`j/k` 仍控制列表选中，预览内容原位替换（不重放整块动画，也不做会让快速切换闪烁的整层淡入）。
 - 回车：把该条移动到列表最前，随后播放关闭动画隐藏窗口，系统剪贴板更新为该条，不触发粘贴。
 - `option/alt + 回车`：同上，并额外触发一次系统粘贴；界面不额外提示，直接关闭。
 - `ctrl+backspace`：删除当前项；行淡出 120ms，后续行用 FLIP 220ms 上移，列表实时更新计数。
@@ -436,39 +438,50 @@
 
 | Token | 值 | 用途 |
 |---|---|---|
-| `--fc-dur-instant` | 120ms | 悬停、选中、内容交叉 |
+| `--fc-dur-instant` | 120ms | 悬停、选中、列表内容更新 |
 | `--fc-dur-fast` | 180ms | 关闭、Toast 退场 |
 | `--fc-dur-base` | 240ms | 常规过渡、插件退场 |
-| `--fc-dur-slow` | 320ms | 面板入场、预览面板 |
+| `--fc-dur-slow` | 320ms | 列表让位、常规慢过渡 |
 | `--fc-dur-slower` | 440ms | 插件内容入场上限 |
 | `--fc-ease-out` | `cubic-bezier(0.16, 1, 0.3, 1)` | 入场 |
 | `--fc-ease-in` | `cubic-bezier(0.4, 0, 1, 1)` | 退场 |
 | `--fc-spring` | stiffness 320 / damping 30 / mass 0.9 | 需要"流体感"的容器 |
 | 退场系数 | 入场时长的 0.55 倍 | 关闭永远比打开快 |
 
-原则：同一时刻最多两个关键元素在动；只使用 `opacity / transform / filter`；`backdrop-filter` 在动画期间保持恒定，不参与补间。
+面板外壳（470ms 打开 / 170ms 关闭）与预览水珠（420ms 打开 / 180ms 收起）使用专用时长，不复用 `--fc-dur-slow`。
+
+原则：同一时刻最多两个关键元素在动；默认只使用 `opacity / transform / filter`；唯一例外是 7.2 的面板外壳高度生长（内层固定高度，只做裁剪）；`backdrop-filter` 在动画期间保持恒定，不参与补间。
 
 ### 7.2 打开 / 关闭
 
-| 阶段 | 属性 | 时长 | 缓动 | 延迟 |
-|---|---|---|---|---|
-| 遮罩 | opacity 0 → 1 | 180ms | ease-out | 0 |
-| 面板 | opacity 0 → 1 | 160ms | ease-out | 0 |
-| 面板 | scale 0.96 → 1，y -8 → 0 | 300ms | ease-out（轻微过冲 ≤ 1.5%） | 0 |
-| 面板 | filter blur(8px) → 0 | 240ms | ease-out | 0 |
-| 结果行 | opacity 0 → 1，y 6 → 0 | 200ms | ease-out | 60ms + i×18ms（最多 8 行） |
-| 输入焦点 | 光标出现 | — | — | 120ms |
+打开是两段式“输入框先出现，列表再从输入框底部流出来”，不是整块面板做 scale / blur / translate 弹出。实现上 `.fc-panel` 初始只有 62px 高（60px 输入区 + 上下描边），`.fc-panel-inner` 始终按最终高度排版；外壳变高时只裁剪，内层不发生重排。
 
-关闭：总时长 180ms；面板 `opacity → 0`、`scale → 0.98`、`y → -6`，行 80ms 淡出，遮罩 120ms；180ms 后隐藏窗口。关闭动画不得阻塞快捷键再次唤起。
+| 阶段 | 元素 | 变化 | 时长 / 缓动 |
+|---|---|---|---|
+| 0–85ms | 面板外壳 | 高度固定 62px，只做 opacity 0 → 1；输入框始终停在最终位置 | 85ms ease-out |
+| 0–180ms | 遮罩 | opacity 0 → 1 | 180ms `--fc-ease-out` |
+| 85–348ms | 面板外壳 | 高度 62px → 最终高度（480px），列表与 footer 随下边缘逐行露出；348ms 时过冲 +5px | `cubic-bezier(0.32, 0, 0.22, 1)` |
+| 348–470ms | 面板外壳 | 从 +5px 过冲回落到最终高度 | `cubic-bezier(0.4, 0, 0.2, 1)` |
+| 110ms 起 | 结果行 | opacity 0 → 1，y 6 → 0，第 i 行延迟 110ms + i×20ms（最多 8 行） | 240ms ease-out |
+| 关闭 0–122ms | 面板外壳 | 当前高度 → 62px，像液体被吸回输入框 | 170ms ease-in |
+| 关闭 122–170ms | 面板外壳 | opacity → 0；遮罩 120ms 淡出；180ms 后隐藏窗口 | 170ms ease-in |
+
+- 整个外壳不播放 scale / translateY / blur；输入框不随面板移动。
+- 焦点与键入在动画开始前就绪，动画不阻塞输入；输入区约 85ms 可见，满足“打开到可输入 ≤120ms”。
+- 结果行延迟到 110ms 才开始出现，保证第一阶段确实只有输入框，不会提前看到列表。
+- 关闭先收缩再淡出，关闭动画不得阻塞快捷键再次唤起。
 
 ```ts
-// Web 技术栈示例（Web Animations API；需要弹簧时改用 Motion/Framer Motion 的 spring 参数）
+// 外壳：两段式高度生长（内层固定高度，只裁剪）
 panel.animate(
   [
-    { opacity: 0, transform: 'translateY(-8px) scale(0.96)', filter: 'blur(8px)' },
-    { opacity: 1, transform: 'translateY(0) scale(1)', filter: 'blur(0px)' },
+    { opacity: 0, height: '62px', offset: 0 },
+    { opacity: 1, height: '62px', offset: 0.18, easing: 'cubic-bezier(0.32, 0, 0.22, 1)' },
+    { opacity: 1, height: '485px', offset: 0.74, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' },
+    { opacity: 1, height: '479px', offset: 0.9, easing: 'ease-out' },
+    { opacity: 1, height: '480px', offset: 1 },
   ],
-  { duration: 300, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', fill: 'both' },
+  { duration: 470, easing: 'linear', fill: 'both' },
 )
 ```
 
@@ -485,27 +498,37 @@ panel.animate(
 
 退出（总时长 240ms）：插件内容 140ms 淡出并下移 8px；结果列表在 80ms 时以 220ms spring 回归（`opacity + y 6 → 0`），不重新 stagger 全量行，仅整体回归。
 
-不使用高度动画。列表与插件内容的交叉通过绝对定位叠层 + opacity/transform 实现，避免容器高度变化导致的重排。
+插件内容与列表的交叉不使用高度动画；两者通过绝对定位叠层 + opacity/transform 实现，避免容器高度变化导致的重排。启动器外壳的高度生长是唯一例外，见 7.2。
 
 ### 7.4 剪贴板预览面板
 
-| 属性 | 值 |
-|---|---|
-| 入场 | `translateX(28px) → 0`，`opacity 0 → 1`，`scale 0.98 → 1`，`clip-path inset(0 0 0 24px round 14px) → inset(0 round 14px)` |
-| 时长/缓动 | 320ms / `--fc-ease-out` |
-| 列表让位 | 右内边距 0 → 308px，320ms 同缓动 |
-| 停留进度线 | 2px 琥珀，宽度 0 → 100%，1500ms linear |
-| 退出 | 180ms，`translateX(16px)` + opacity 0 |
-| 内容切换 | 120ms 交叉淡入，不重放入场动画 |
-| 触发重置 | 选中变化、滚动、鼠标移动 > 8px、离开窗口 |
+预览的出场必须从选中行“流出来”：先是一枚贴着预览左缘的小水珠，再向上下左右展开成 300px 面板；不能从右上角整块滑入，也不能突然淡入。
+
+| 阶段 | 属性 | 时长 / 缓动 |
+|---|---|---|
+| 停留 | 选中稳定 1000ms 后出现；不显示进度线或倒计时 | — |
+| 水珠 | 在选中行中心对应的预览左缘生成约 12×8px、圆角 6px 的水珠；`opacity 0 → 1`，`translateX 22 → 16px` | 0–67ms linear |
+| 展开 | `clip-path` 从水珠的 `inset(top 右侧剩余 bottom 0 round 6px)` 展开到 `inset(0 round 14px)`；`translateX 16 → 0` | 67–420ms `cubic-bezier(0.16, 1, 0.3, 1)` |
+| 列表让位 | 右内边距 0 → 320px | 320ms `--fc-ease-out` |
+| 内容切换 | 原位替换，不重放水珠展开，也不做整层淡入（避免快速 `j/k` 时内容闪空） | 即时 |
+| 收起 | `opacity → 0`，`translateX(16px)`，`clip-path` 收回 | 180ms ease-in |
+
+- 水珠的纵向位置在打开瞬间从选中行与预览的实际 rect 计算；选中行靠近顶部/底部时水珠向内收，不超出面板。
+- 未展开时：选中变化、滚动、鼠标移动 > 8px、搜索输入重置 1s 计时；鼠标微动不重置。
+- 已展开时：鼠标移动和 `j/k` 切换只更新内容与选中，不收起、不重放入场；只有 `esc`、`ctrl+h`、进入设置/帮助、离开插件、删除当前项、搜索无结果时才收起。
+- `ctrl+l` 立即展开并固定；`ctrl+h` 收起并抑制停留预览，直到下一次真实导航（选中变化或鼠标移动 > 8px）重新开始计时。
+- 鼠标离开列表或窗口不收起，避免指针擦过边界时反复关闭/展开。
+- 预览展开不改变窗口宽度；列表通过右内边距让位，预览本身是绝对定位浮层。
 
 ```ts
+// 打开：从选中行中心的水珠展开（clip-path + translate 同时进行）
 preview.animate(
   [
-    { opacity: 0, transform: 'translateX(28px) scale(0.98)', clipPath: 'inset(0 0 0 24px round 14px)' },
-    { opacity: 1, transform: 'translateX(0) scale(1)', clipPath: 'inset(0 round 14px)' },
+    { opacity: 0, transform: 'translateX(22px)', clipPath: beadPath, offset: 0 },
+    { opacity: 1, transform: 'translateX(16px)', clipPath: beadPath, offset: 0.16 },
+    { opacity: 1, transform: 'translateX(0)', clipPath: 'inset(0 round 14px)', offset: 1 },
   ],
-  { duration: 320, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', fill: 'both' },
+  { duration: 420, easing: 'linear', fill: 'both' },
 )
 ```
 
@@ -518,10 +541,11 @@ preview.animate(
 
 ### 7.6 降级与性能
 
-- `prefers-reduced-motion: reduce`：所有动画降为 120ms 纯 opacity；取消 scale、blur、stagger、进度线动画（进度线直接显示或省略）；预览立即出现（保留 1.5s 停留判定，不播放动画）。
+- `prefers-reduced-motion: reduce`：所有动画降为 120ms 纯 opacity；取消 scale、blur、stagger、外壳高度生长与水珠展开；预览在最终位置以 120ms 淡入（保留 1s 停留判定），关闭同样只做 120ms opacity。
+- 面板高度生长期间只改变外壳高度与裁剪，内层固定为最终内容高度（480px 外壳 / 478px 内容区），不触发列表重排。
 - Linux 无合成器模糊：不做 blur 补间，仅 opacity/transform。
 - 列表超过 50 行必须虚拟化；1000+ 条书签的匹配放到 Worker，输入防抖 60ms。
-- 动画期间对参与元素设置 `will-change: transform, opacity`，`animationend` 后移除。
+- `will-change` 只设置在外壳、预览这类参与动画的容器上，不给每一行常驻提升合成层。
 - 目标：2019 款笔记本集显上稳定 60fps；打开到可输入 ≤ 120ms；上下文切换 ≤ 440ms。
 
 ---
@@ -582,7 +606,7 @@ preview.animate(
 | 打开 / 关闭 / 进出插件的流体动画 | 7.2、7.3 |
 | chrome-bookmarks 设置与列表 | 5.5 |
 | clipboard 快捷键、容量设置、类型展示 | 5.4、6.2、6.4 |
-| 停留 1.5s 预览、回车置顶关闭、option+回车粘贴 | 5.4、7.4 |
+| 停留 1s 预览、回车置顶关闭、option+回车粘贴 | 5.4、7.4 |
 
 ---
 

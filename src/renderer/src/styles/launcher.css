@@ -15,18 +15,22 @@
 }
 
 .fc-panel-anchor {
+  --fc-panel-height: min(480px, calc(100vh - 48px));
   position: absolute;
   top: min(18vh, 160px);
   left: 50%;
   width: min(720px, calc(100vw - 40px));
-  height: min(480px, calc(100vh - 48px));
+  height: var(--fc-panel-height);
   transform: translateX(-50%);
 }
 
 .fc-panel {
   position: relative;
   width: 100%;
-  height: 100%;
+  /* Idle surface is only the search bar. The entrance WAAPI grows this element
+     to 100%; the inner layout never reflows because it keeps the final height. */
+  height: 62px;
+  opacity: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -36,8 +40,19 @@
   background: var(--fc-window);
   backdrop-filter: blur(40px) saturate(1.12);
   -webkit-backdrop-filter: blur(40px) saturate(1.12);
-  will-change: transform, opacity, filter;
-  transform-origin: 50% 12%;
+  will-change: height, opacity;
+}
+
+.fc-panel-inner {
+  position: relative;
+  width: 100%;
+  /* Panel height includes its 1px top/bottom border; the inner layout must fit
+     the border box exactly, otherwise the footer loses its last 2px. */
+  height: calc(var(--fc-panel-height) - 2px);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 :root[data-platform='linux'] .fc-panel {
@@ -427,8 +442,8 @@
 }
 
 .fc-enter .fc-row {
-  animation: fc-row-in 200ms var(--fc-ease-out) both;
-  animation-delay: calc(60ms + min(var(--row-index, 0), 7) * 18ms);
+  animation: fc-row-in 240ms var(--fc-ease-out) both;
+  animation-delay: calc(110ms + min(var(--row-index, 0), 7) * 20ms);
 }
 
 @keyframes fc-row-in {
@@ -754,9 +769,5 @@
   .fc-plugin-badge,
   .fc-plugin-view {
     animation: none;
-  }
-
-  .fc-hold-progress {
-    animation: none !important;
   }
 }

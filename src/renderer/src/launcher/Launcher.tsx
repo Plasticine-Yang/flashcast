@@ -39,12 +39,16 @@ import {
 } from './helpers'
 
 const GLOBAL_PLACEHOLDER = '搜索应用、插件或命令'
+// Keep in sync with the idle `.fc-panel` height in launcher.css (60px input + borders).
+const PANEL_COLLAPSED_HEIGHT = 62
 const ANIMATION = {
-  openPanel: 300,
+  openPanel: 470,
   openScrim: 180,
-  closePanel: 180,
+  closePanel: 170,
   closeScrim: 120,
-  previewHold: 1500
+  closeHide: 180,
+  previewHold: 1000,
+  previewClose: 360
 }
 
 interface PageError {
@@ -79,8 +83,6 @@ export function Launcher(): React.JSX.Element {
   const [previewMounted, setPreviewMounted] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewPinned, setPreviewPinned] = useState(false)
-  const [holdVisible, setHoldVisible] = useState(false)
-  const [holdNonce, setHoldNonce] = useState(0)
   const { toast, showToast, dismissToast } = useToast()
 
   const inputRef = useRef<HTMLInputElement>(null)
@@ -88,6 +90,7 @@ export function Launcher(): React.JSX.Element {
   const scrimRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
   const closingRef = useRef(false)
+  const closeTokenRef = useRef(0)
   const activePluginIdRef = useRef<string | null>(null)
   const bootstrapRef = useRef<BootstrapData | null>(null)
   const previewTimerRef = useRef<number | null>(null)
@@ -100,8 +103,8 @@ export function Launcher(): React.JSX.Element {
   const autoScenarioRef = useRef(false)
   const autoSettingsRef = useRef(false)
   const lastEntranceRef = useRef(0)
-  const popupTimerRef = useRef<number | null>(null)
   const lastMouseRef = useRef<{ x: number; y: number } | null>(null)
+  const lastSelectedIdRef = useRef<string | null>(null)
 
   activePluginIdRef.current = activePluginId
   bootstrapRef.current = bootstrap
@@ -205,15 +208,12 @@ export function Launcher(): React.JSX.Element {
     previewTimerRef.current = null
     if (previewUnmountRef.current) window.clearTimeout(previewUnmountRef.current)
     previewUnmountRef.current = null
-    if (popupTimerRef.current) window.clearTimeout(popupTimerRef.current)
-    popupTimerRef.current = null
   }
 
   const closePreviewVisual = (): void => {
     setPreviewOpen(false)
-    setHoldVisible(false)
     if (previewUnmountRef.current) window.clearTimeout(previewUnmountRef.current)
-    previewUnmountRef.current = window.setTimeout(() => setPreviewMounted(false), 340)
+    previewUnmountRef.current = window.setTimeout(() => setPreviewMounted(false), ANIMATION.previewClose)
   }
 
   const closePreview = (suppress = true): void => {
@@ -226,14 +226,29 @@ export function Launcher(): React.JSX.Element {
 
   const armPreviewTimer = (): void => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current)
-    setHoldNonce((value) => value + 1)
-    setHoldVisible(true)
     previewTimerRef.current = window.setTimeout(() => {
+      previewTimerRef.current = null
+      if (previewUnmountRef.current) {
+        window.clearTimeout(previewUnmountRef.current)
+        previewUnmountRef.current = null
+      }
+      // Mount and open in the same commit; ClipboardView measures the selected
+      // row before paint and plays the liquid reveal from that origin.
       setPreviewMounted(true)
+      setPreviewOpen(true)
       setPreviewPinned(false)
-      setHoldVisible(false)
-      popupTimerRef.current = window.setTimeout(() => setPreviewOpen(true), 20)
     }, ANIMATION.previewHold)
+  }
+
+  // Any real navigation (pointer or keyboard) re-enables the dwell preview
+  // after an explicit close. Merely moving the pointer while the preview is
+  // already open must never tear it down: doing so was the source of the
+  // flicker loop.
+  const noteUserNavigation = (): void => {
+    previewSuppressedRef.current = false
+    if (isClipboard && !settingsOpen && !helpOpen && !previewOpen && !previewPinned) {
+      armPreviewTimer()
+    }
   }
 
   const handleClipboardActivity = (event?: SyntheticEvent): void => {
@@ -245,13 +260,14 @@ export function Launcher(): React.JSX.Element {
       if (last && Math.hypot(native.clientX - last.x, native.clientY - last.y) < 8) return
       lastMouseRef.current = { x: native.clientX, y: native.clientY }
     }
+    if (previewOpen) return
     previewSuppressedRef.current = false
-    closePreviewVisual()
     armPreviewTimer()
   }
 
   const moveSelection = (delta: number): void => {
     if (currentCount === 0) return
+    noteUserNavigation()
     setSelection((value) => {
       const safe = Math.min(value, currentCount - 1)
       return Math.min(currentCount - 1, Math.max(0, safe + delta))
@@ -259,7 +275,10 @@ export function Launcher(): React.JSX.Element {
   }
 
   const setCurrentSelection = (index: number): void => {
-    if (index >= 0 && index < currentCount) setSelection(index)
+    if (index >= 0 && index < currentCount) {
+      noteUserNavigation()
+      setSelection(index)
+    }
   }
 
   /* ------------------------------- loading ------------------------------- */
@@ -299,7 +318,8 @@ export function Launcher(): React.JSX.Element {
     setPreviewMounted(false)
     setPreviewOpen(false)
     setPreviewPinned(false)
-    setHoldVisible(false)
+    lastSelectedIdRef.current = null
+    lastMouseRef.current = null
     setHelpOpen(false)
     setClearArmed(false)
     if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
@@ -524,10 +544,19 @@ export function Launcher(): React.JSX.Element {
 
   const closeHelp = (): void => {
     setHelpOpen(false)
+    previewSuppressedRef.current = false
     focusInput()
   }
 
   /* ------------------------------- window ------------------------------- */
+
+  const setIdlePanelSurface = (): void => {
+    const panel = panelRef.current
+    if (!panel) return
+    for (const animation of panel.getAnimations()) animation.cancel()
+    panel.style.height = `${PANEL_COLLAPSED_HEIGHT}px`
+    panel.style.opacity = '0'
+  }
 
   const playEntrance = (): void => {
     const panel = panelRef.current
@@ -537,32 +566,78 @@ export function Launcher(): React.JSX.Element {
     if (now - lastEntranceRef.current < 180) return
     lastEntranceRef.current = now
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    if (reduced) {
-      panel.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 120, fill: 'both' })
-      scrim.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 120, fill: 'both' })
-      return
-    }
+
+    for (const animation of panel.getAnimations()) animation.cancel()
+    panel.style.opacity = '0'
+    panel.style.height = reduced ? '100%' : `${PANEL_COLLAPSED_HEIGHT}px`
     scrim.animate([{ opacity: 0 }, { opacity: 1 }], {
-      duration: ANIMATION.openScrim,
+      duration: reduced ? 120 : ANIMATION.openScrim,
       easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
       fill: 'both'
     })
-    panel.animate(
+
+    if (reduced) {
+      const entrance = panel.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: 120,
+        easing: 'ease-out',
+        fill: 'both'
+      })
+      entrance.onfinish = () => {
+        panel.style.height = '100%'
+        panel.style.opacity = '1'
+        entrance.cancel()
+      }
+      setShowNonce((value) => value + 1)
+      return
+    }
+
+    const target = panel.parentElement?.clientHeight ?? 480
+    const overshoot = target > 200 ? 5 : 2
+
+    // Phase 1 (0–18%): only the 60px search bar exists, in place.
+    // Phase 2 (18–100%): the shell grows downward like liquid leaving the
+    // input; the inner layout is already final height, so no content reflows.
+    // The panel settles with a ≤5px overshoot before resting at 100%.
+    const entrance = panel.animate(
       [
-        { opacity: 0, transform: 'translateY(-8px) scale(0.96)', filter: 'blur(8px)' },
-        { opacity: 1, transform: 'translateY(0) scale(1)', filter: 'blur(0px)' }
+        { opacity: 0, height: `${PANEL_COLLAPSED_HEIGHT}px`, offset: 0 },
+        {
+          opacity: 1,
+          height: `${PANEL_COLLAPSED_HEIGHT}px`,
+          offset: 0.18,
+          easing: 'cubic-bezier(0.32, 0, 0.22, 1)'
+        },
+        {
+          opacity: 1,
+          height: `${target + overshoot}px`,
+          offset: 0.74,
+          easing: 'cubic-bezier(0.4, 0, 0.2, 1)'
+        },
+        {
+          opacity: 1,
+          height: `${target - 1}px`,
+          offset: 0.9,
+          easing: 'ease-out'
+        },
+        { opacity: 1, height: `${target}px`, offset: 1 }
       ],
       {
         duration: ANIMATION.openPanel,
-        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+        easing: 'linear',
         fill: 'both'
       }
     )
+    entrance.onfinish = () => {
+      panel.style.height = '100%'
+      panel.style.opacity = '1'
+      entrance.cancel()
+    }
     setShowNonce((value) => value + 1)
   }
 
   const resetForShow = (): void => {
     closingRef.current = false
+    closeTokenRef.current += 1
     setClosing(false)
     pageRequestRef.current += 1
     settingsRequestRef.current += 1
@@ -575,8 +650,11 @@ export function Launcher(): React.JSX.Element {
     setPreviewMounted(false)
     setPreviewOpen(false)
     setPreviewPinned(false)
-    setHoldVisible(false)
     previewSuppressedRef.current = false
+    lastSelectedIdRef.current = null
+    lastMouseRef.current = null
+    lastEntranceRef.current = 0
+    setIdlePanelSurface()
     setSettingsOpen(false)
     setSettingsPage(null)
     setSettingsError(null)
@@ -588,7 +666,6 @@ export function Launcher(): React.JSX.Element {
     setExternalItems(null)
     setQuery('')
     setSelection(0)
-    setShowNonce((value) => value + 1)
     window.setTimeout(() => {
       playEntrance()
       focusInput()
@@ -598,23 +675,48 @@ export function Launcher(): React.JSX.Element {
   const closeLauncher = async (paste = false): Promise<void> => {
     if (closingRef.current) return
     closingRef.current = true
+    const closeToken = ++closeTokenRef.current
     setClosing(true)
     const panel = panelRef.current
     const scrim = scrimRef.current
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     if (panel && scrim) {
+      const computed = window.getComputedStyle(panel)
+      const startHeight = computed.height
+      const startOpacity = computed.opacity
+      for (const animation of panel.getAnimations()) animation.cancel()
       if (reduced) {
-        panel.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 80, fill: 'both' })
-        scrim.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 80, fill: 'both' })
+        panel.animate([{ opacity: Number(startOpacity) }, { opacity: 0 }], {
+          duration: 120,
+          fill: 'both'
+        })
+        scrim.animate([{ opacity: 1 }, { opacity: 0 }], {
+          duration: 120,
+          fill: 'both'
+        })
       } else {
+        // Retract the body into the search bar, then fade the bar out. Reverse
+        // of the entrance so closing still reads as the same body of liquid.
         panel.animate(
           [
-            { opacity: 1, transform: 'translateY(0) scale(1)' },
-            { opacity: 0, transform: 'translateY(-6px) scale(0.98)' }
+            { opacity: startOpacity, height: startHeight, offset: 0 },
+            {
+              opacity: startOpacity,
+              height: startHeight,
+              offset: 0.16,
+              easing: 'cubic-bezier(0.4, 0, 1, 1)'
+            },
+            {
+              opacity: startOpacity,
+              height: `${PANEL_COLLAPSED_HEIGHT}px`,
+              offset: 0.72,
+              easing: 'cubic-bezier(0.4, 0, 1, 1)'
+            },
+            { opacity: 0, height: `${PANEL_COLLAPSED_HEIGHT}px`, offset: 1 }
           ],
           {
             duration: ANIMATION.closePanel,
-            easing: 'cubic-bezier(0.4, 0, 1, 1)',
+            easing: 'linear',
             fill: 'both'
           }
         )
@@ -625,10 +727,12 @@ export function Launcher(): React.JSX.Element {
       }
     }
     window.setTimeout(() => {
+      if (closeToken !== closeTokenRef.current) return
+      setIdlePanelSurface()
       api.hideLauncher({ paste })
       closingRef.current = false
       setClosing(false)
-    }, reduced ? 90 : 170)
+    }, reduced ? 120 : ANIMATION.closeHide)
   }
 
   const closeLauncherRef = useRef(closeLauncher)
@@ -802,25 +906,18 @@ export function Launcher(): React.JSX.Element {
     }
   }, [])
 
-  // Timer-driven hover preview. Selection changes, filtering, and leaving the
-  // plugin reset the 1.5s dwell timer; a pinned preview survives selection moves.
+  // Dwell preview: arm a 1s timer on stable selection / query. Once the panel
+  // is open, selection changes only swap the preview content (120ms crossfade);
+  // they must not close and re-open it, otherwise every pointer or j/k move
+  // makes the panel blink.
   useEffect(() => {
     if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current)
     previewTimerRef.current = null
     if (!isClipboard || settingsOpen || helpOpen || !selectedClipboard) {
-      setHoldVisible(false)
       if (previewOpen) closePreviewVisual()
       return
     }
-    if (previewPinned) {
-      setHoldVisible(false)
-      return
-    }
-    closePreviewVisual()
-    if (previewSuppressedRef.current) {
-      setHoldVisible(false)
-      return
-    }
+    if (previewPinned || previewSuppressedRef.current || previewOpen) return
     armPreviewTimer()
     return () => {
       if (previewTimerRef.current) window.clearTimeout(previewTimerRef.current)
@@ -919,7 +1016,7 @@ export function Launcher(): React.JSX.Element {
 
     if (key === 'Escape') {
       if (isPluginView) {
-        if (previewOpen || previewMounted) {
+        if (previewOpen) {
           event.preventDefault()
           closePreview(true)
           return
@@ -962,9 +1059,8 @@ export function Launcher(): React.JSX.Element {
           previewSuppressedRef.current = false
           setPreviewPinned(true)
           setPreviewMounted(true)
-          setHoldVisible(false)
-          popupTimerRef.current = window.setTimeout(() => setPreviewOpen(true), 20)
-        } else {
+          setPreviewOpen(true)
+        } else if (previewOpen || previewMounted) {
           closePreview(true)
         }
       } else if (!isPluginView && key === 'l' && inEditable) {
@@ -1162,8 +1258,6 @@ export function Launcher(): React.JSX.Element {
           selectedIndex={currentIndex}
           deletingId={deletingId}
           preview={preview}
-          holdVisible={holdVisible && !previewOpen && !previewPinned}
-          holdKey={holdNonce}
           onHover={setCurrentSelection}
           onActivate={(index) => {
             const row = clipboardRows[index]
@@ -1246,102 +1340,104 @@ export function Launcher(): React.JSX.Element {
           aria-modal="true"
           aria-label="Flashcast"
         >
-          <SearchBar
-            inputRef={inputRef}
-            value={query}
-            placeholder={searchPlaceholder}
-            activePlugin={activePlugin}
-            settingsActive={settingsOpen}
-            searchable={searchable}
-            readOnly={readOnly}
-            onChange={(value) => {
-              setQuery(value)
-              setSelection(0)
-              previewSuppressedRef.current = false
-            }}
-            onClear={() => {
-              setQuery('')
-              setSelection(0)
-              focusInput()
-            }}
-            onPluginClick={togglePluginSettings}
-            onCompositionStart={() => {
-              composingRef.current = true
-            }}
-            onCompositionEnd={() => {
-              composingRef.current = false
-            }}
-            activeDescendant={
-              !settingsOpen && currentCount > 0 ? `fc-result-${currentIndex}` : undefined
-            }
-          />
+          <div className="fc-panel-inner">
+            <SearchBar
+              inputRef={inputRef}
+              value={query}
+              placeholder={searchPlaceholder}
+              activePlugin={activePlugin}
+              settingsActive={settingsOpen}
+              searchable={searchable}
+              readOnly={readOnly}
+              onChange={(value) => {
+                setQuery(value)
+                setSelection(0)
+                previewSuppressedRef.current = false
+              }}
+              onClear={() => {
+                setQuery('')
+                setSelection(0)
+                focusInput()
+              }}
+              onPluginClick={togglePluginSettings}
+              onCompositionStart={() => {
+                composingRef.current = true
+              }}
+              onCompositionEnd={() => {
+                composingRef.current = false
+              }}
+              activeDescendant={
+                !settingsOpen && currentCount > 0 ? `fc-result-${currentIndex}` : undefined
+              }
+            />
 
-          <div className="fc-views">
-            <div className={`fc-global-view${isPluginView && !pluginLeaving ? ' is-obscured' : ''}`}>
-              {bootError ? (
-                <div className="fc-error-card" role="alert">
-                  <div className="fc-error-heading">Flashcast 无法初始化</div>
-                  <div className="fc-error-description">{bootError}</div>
-                  <div className="fc-error-actions">
-                    <button type="button" className="fc-btn" onClick={() => window.location.reload()}>
-                      重试
-                    </button>
+            <div className="fc-views">
+              <div className={`fc-global-view${isPluginView && !pluginLeaving ? ' is-obscured' : ''}`}>
+                {bootError ? (
+                  <div className="fc-error-card" role="alert">
+                    <div className="fc-error-heading">Flashcast 无法初始化</div>
+                    <div className="fc-error-description">{bootError}</div>
+                    <div className="fc-error-actions">
+                      <button type="button" className="fc-btn" onClick={() => window.location.reload()}>
+                        重试
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <GlobalSearchView
-                  sections={globalSections}
-                  items={globalItems}
-                  selectedIndex={currentIndex}
-                  appsLoading={apps === null}
-                  query={query}
-                  showNonce={showNonce}
-                  onHover={setCurrentSelection}
-                  onActivate={(index) => {
-                    setSelection(index)
-                    const item = globalItems[index]
-                    if (!item) return
-                    if (item.kind === 'plugin') openPlugin(item.refId)
-                    else if (item.kind === 'app') {
-                      void api.launchApp(item.refId).then(async (result) => {
-                        if (!result.ok) showToast({ message: result.error ?? '启动应用失败', tone: 'danger' })
-                        else await closeLauncher(false)
-                      })
-                    } else {
-                      void api.runCommand(item.refId as 'settings' | 'refresh-apps' | 'quit').then(async (result) => {
-                        if (!result.ok) showToast({ message: result.error ?? '命令执行失败', tone: 'danger' })
-                        else if (result.toast) showToast(result.toast)
-                      })
-                    }
-                  }}
-                />
-              )}
-            </div>
-            {isPluginView ? (
-              <div className={`fc-plugin-view${pluginLeaving ? ' is-leaving' : ''}`} key={`${activePluginId}-${settingsOpen ? 'settings' : 'main'}`}>
-                {renderPluginContent()}
+                ) : (
+                  <GlobalSearchView
+                    sections={globalSections}
+                    items={globalItems}
+                    selectedIndex={currentIndex}
+                    appsLoading={apps === null}
+                    query={query}
+                    showNonce={showNonce}
+                    onHover={setCurrentSelection}
+                    onActivate={(index) => {
+                      setSelection(index)
+                      const item = globalItems[index]
+                      if (!item) return
+                      if (item.kind === 'plugin') openPlugin(item.refId)
+                      else if (item.kind === 'app') {
+                        void api.launchApp(item.refId).then(async (result) => {
+                          if (!result.ok) showToast({ message: result.error ?? '启动应用失败', tone: 'danger' })
+                          else await closeLauncher(false)
+                        })
+                      } else {
+                        void api.runCommand(item.refId as 'settings' | 'refresh-apps' | 'quit').then(async (result) => {
+                          if (!result.ok) showToast({ message: result.error ?? '命令执行失败', tone: 'danger' })
+                          else if (result.toast) showToast(result.toast)
+                        })
+                      }
+                    }}
+                  />
+                )}
               </div>
-            ) : null}
+              {isPluginView ? (
+                <div className={`fc-plugin-view${pluginLeaving ? ' is-leaving' : ''}`} key={`${activePluginId}-${settingsOpen ? 'settings' : 'main'}`}>
+                  {renderPluginContent()}
+                </div>
+              ) : null}
+            </div>
+
+            <Footer
+              hints={footerHints}
+              clearCount={clearArmed ? clipboardItems.length : null}
+              clearKeys={keycapParts(clearAllAccelerator(platform), platform)}
+              onHelp={openHelp}
+            />
+
+            <HelpOverlay
+              open={helpOpen}
+              onClose={closeHelp}
+              platform={platform}
+              launcherAccelerator={bootstrap?.prefs.hotkeys.launcher ?? 'Alt+Space'}
+              clipboardAccelerator={bootstrap?.prefs.hotkeys.openClipboard ?? 'Control+Alt+C'}
+              activePluginId={activePluginId}
+              settingsActive={settingsOpen}
+            />
+
+            <Toast toast={toast} />
           </div>
-
-          <Footer
-            hints={footerHints}
-            clearCount={clearArmed ? clipboardItems.length : null}
-            clearKeys={keycapParts(clearAllAccelerator(platform), platform)}
-            onHelp={openHelp}
-          />
-
-          <HelpOverlay
-            open={helpOpen}
-            onClose={closeHelp}
-            platform={platform}
-            launcherAccelerator={bootstrap?.prefs.hotkeys.launcher ?? 'Alt+Space'}
-            clipboardAccelerator={bootstrap?.prefs.hotkeys.openClipboard ?? 'Control+Alt+C'}
-            activePluginId={activePluginId}
-            settingsActive={settingsOpen}
-          />
-
-          <Toast toast={toast} />
         </section>
       </div>
     </div>

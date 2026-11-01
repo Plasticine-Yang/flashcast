@@ -55,6 +55,8 @@ src/shared/
 4. 窗口失焦 100ms 后请求关闭动画；关闭动画由渲染进程用 WAAPI 播放（180ms），完成后调用 `launcher:hide`，主进程 `hide()`。主进程还有 420ms 兜底定时器。
 5. 打开设置窗口时启动器失焦自动收起；设置窗口独立 920×640。
 
+启动器入场不再缩放/模糊整块面板：`.fc-panel` 初始 62px 高、只显示输入区，`.fc-panel-inner` 固定按最终内容高度（478px）排版；`playEntrance()` 用 WAAPI 先停住 85ms 让输入框出现，再以 S 曲线把外壳高度长到 480px（+5px 过冲回落），内容由裁剪逐层露出。关闭时外壳先收回 62px 再淡出，180ms 后隐藏。输入焦点在动画前就绪，不阻塞键入。
+
 ### 3.2 搜索与模糊匹配
 
 `src/shared/fuzzy.ts` 将 query 按空白分词，每个 token 必须在目标字段中命中：
@@ -73,7 +75,7 @@ src/shared/
 - 进入：全局视图 `opacity 0 / scale .99 / blur 4px`（140ms），插件视图 `opacity/y/blur`（380ms，延迟 60ms），插件图标 spring 出现，placeholder 120ms 交叉淡入。
 - 退出：插件视图 140ms 淡出 + 下移；全局视图 220ms 弹性回归；240ms 后卸载插件视图。
 - 设置页与插件主页面通过 `key` 变化重播轻微入场动画。
-- `prefers-reduced-motion` 下取消 scale/blur/stagger 与停留进度线。
+- `prefers-reduced-motion` 下取消 scale/blur/stagger、外壳高度生长与水珠展开；预览改为 120ms 纯 opacity。
 
 ### 3.4 剪切板
 
@@ -81,7 +83,8 @@ src/shared/
 - 内容以 SHA-256 fingerprint 去重并置顶；容量超过插件配置（默认 10）时删除最旧项及其媒体文件。
 - 图片保存原图与缩略图；视频优先用 `ffmpeg` 截首帧，缺失时复制内置设计封面；音乐保留文件名与大小（预览用音符图标）。
 - 媒体文件位于 `<workspace>/state/clipboard/media`，渲染层通过注册的自定义协议 `flashcast-media://media/<file>` 加载；协议校验文件名与目录，仅暴露媒体目录。
-- 预览：选中变化/滚动/鼠标移动 >8px 时重置 1.5s 定时器；停留 1.5s 展开右侧 300px 面板，选中行显示 2px 进度线；`ctrl+l` 立即固定展开，`ctrl+h` 收起；面板打开时列表让出 320px 内边距。
+- 预览：选中稳定 1s 后展开右侧 300px 面板；未展开时选中变化/滚动/搜索输入/鼠标移动 >8px 会重置计时，已展开后移动鼠标或 `j/k` 只原位更新内容，不收起、不重放动画，也不重启动画层（避免快速切换闪烁）；`ctrl+l` 立即固定展开，`ctrl+h` 收起；面板打开时列表让出 320px 内边距。
+- 预览出场由 `ClipboardView` 在打开瞬间测量选中行与预览的 rect，生成贴着预览左缘、对齐选中行的 12×8px 水珠，再用 WAAPI 展开 `clip-path`（圆角 6 → 14）、`translateX(16 → 0)` 与 opacity，总长 420ms；收起为 180ms。旧版的 2px 停留进度线已移除。
 - 回车：写回系统剪贴板 → 置顶 → 关闭动画 → 隐藏窗口，不粘贴。
 - `Alt/Option+Enter`：同上，并在窗口隐藏后由主进程调用平台粘贴助手。
 - `Ctrl+Backspace`：行先 120ms 淡出，随后删除；剩余行通过 `useFlipAnimation` 做 220ms FLIP。
@@ -145,7 +148,8 @@ src/shared/
   - `Enter` 激活剪切板项后窗口 `IsUnMapped`，系统剪贴板变为该文件路径，历史顺序置顶；
   - `Ctrl+Backspace` 删除选中项；`Super+Alt+Backspace` 两次触发清空确认与清空；
   - 打开外部插件、外部插件设置、安装本地插件、主题切换、快捷键更新与恢复默认均成功。
-- 真实 Electron 截图验证深色/浅色主题、剪切板四类内容与 1.5s 预览、书签 favicon/文件夹 chip、设置窗口。
+- 真实 Electron 截图验证深色/浅色主题、剪切板四类内容与 1s 预览、书签 favicon/文件夹 chip、设置窗口。
+- 在 Chrome 预览环境用 CDP 验证入场水珠/高度曲线、1s 停留，以及鼠标跨行与 `j/k` 切换时预览保持展开且内容原位更新（不再闪烁）。
 - `pnpm preview:ui` 支持在无 Electron 环境下检查启动器、各插件页、设置页和模态框。
 
 ## 7. 需求覆盖对照
@@ -162,7 +166,7 @@ src/shared/
 | 进入插件复用输入框、Esc 退出 | `Launcher` 视图状态与 `SearchBar` |
 | 打开 / 关闭 / 进出插件流体动画 | WAAPI + CSS keyframes，`launcher.css` / `plugin.css` |
 | 剪切板快捷键、容量、类型展示 | `ClipboardService`、`plugins/clipboard/config.json` |
-| 剪切板停留 1.5s 预览、回车/Alt+回车 | `ClipboardView`、`native-paste.ts` |
+| 剪切板停留 1s 预览、回车/Alt+回车 | `ClipboardView`、`native-paste.ts` |
 | Chrome 书签设置与列表 | `chrome-bookmarks.ts`、`BookmarksView` |
 | 设置窗口五页、快捷键冲突、差异、许可 | `src/renderer/src/settings/*` |
 | 空/加载/错误/Toast 状态 | 各视图与 `components/ui.tsx` |

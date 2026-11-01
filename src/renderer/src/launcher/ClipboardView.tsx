@@ -1,5 +1,5 @@
 import { Clipboard as ClipboardIcon, Image as ImageIcon, Music2, Play, SearchX, Settings, X } from 'lucide-react'
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { ClipboardItem } from '@shared/types'
 import { kindLabel, relativeTime } from '@shared/time'
 import { Highlight, IconButton, Keycap } from '../components/ui'
@@ -21,8 +21,6 @@ export function ClipboardView({
   selectedIndex,
   deletingId,
   preview,
-  holdVisible,
-  holdKey,
   onHover,
   onActivate,
   onSettings,
@@ -36,8 +34,6 @@ export function ClipboardView({
   selectedIndex: number
   deletingId: string | null
   preview: PreviewState
-  holdVisible: boolean
-  holdKey: number
   onHover: (index: number) => void
   onActivate: (index: number) => void
   onSettings: () => void
@@ -45,11 +41,117 @@ export function ClipboardView({
   onActivity: (event?: React.SyntheticEvent) => void
 }): React.JSX.Element {
   const { containerRef: scrollRef } = useFlipAnimation(rows, (row) => row.item.id)
+  const previewRef = useRef<HTMLElement>(null)
+  const previewContentRef = useRef<HTMLDivElement>(null)
+  const previewWasOpenRef = useRef(false)
 
   useEffect(() => {
     const node = scrollRef.current?.querySelector<HTMLElement>(`[data-index="${selectedIndex}"]`)
     if (node) node.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [selectedIndex])
+
+  // Content is updated in place (no remount / opacity restart) so fast j/k
+  // does not blink; only reset its scroll offset when the item changes.
+  useLayoutEffect(() => {
+    if (previewContentRef.current) previewContentRef.current.scrollTop = 0
+  }, [preview.item?.id, preview.open])
+
+  // The preview unfolds from a tiny bead aligned with the selected row, then
+  // expands into the 300px panel like liquid. Keeping this in WAAPI lets us
+  // measure the row at open time; the old translate+clip transition always
+  // started from the panel's top-right and read as a generic slide-in.
+  useLayoutEffect(() => {
+    if (!preview.mounted) {
+      previewWasOpenRef.current = false
+      return
+    }
+    const node = previewRef.current
+    if (!node) return
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    if (preview.open) {
+      if (previewWasOpenRef.current) return
+      previewWasOpenRef.current = true
+      for (const animation of node.getAnimations()) animation.cancel()
+      if (reduced) {
+        node.style.transform = 'translateX(0px)'
+        node.style.clipPath = 'inset(0px round 14px)'
+        const fade = node.animate([{ opacity: 0 }, { opacity: 1 }], {
+          duration: 120,
+          easing: 'ease-out',
+          fill: 'both'
+        })
+        fade.onfinish = () => {
+          node.style.opacity = '1'
+          fade.cancel()
+        }
+        return
+      }
+
+      const row = scrollRef.current?.querySelector<HTMLElement>(
+        `[data-index="${selectedIndex}"]`
+      )
+      const body = node.offsetParent as HTMLElement | null
+      const rowRect = row?.getBoundingClientRect()
+      const bodyRect = body?.getBoundingClientRect()
+      const height = node.offsetHeight
+      const width = node.offsetWidth
+      let center = height / 2
+      if (rowRect && bodyRect) {
+        center = rowRect.top + rowRect.height / 2 - bodyRect.top - node.offsetTop
+      }
+      const beadHalf = 4
+      const top = Math.min(Math.max(center - beadHalf, 0), Math.max(0, height - beadHalf * 2))
+      const bottom = Math.max(0, height - top - beadHalf * 2)
+      const right = Math.max(0, width - 12)
+      const bead = `inset(${top}px ${right}px ${bottom}px 0px round 6px)`
+
+      const openAnimation = node.animate(
+        [
+          { opacity: 0, transform: 'translateX(22px)', clipPath: bead, offset: 0 },
+          {
+            opacity: 1,
+            transform: 'translateX(16px)',
+            clipPath: bead,
+            offset: 0.16,
+            easing: 'cubic-bezier(0.16, 1, 0.3, 1)'
+          },
+          { opacity: 1, transform: 'translateX(0px)', clipPath: 'inset(0px round 14px)', offset: 1 }
+        ],
+        { duration: 420, easing: 'linear', fill: 'both' }
+      )
+      openAnimation.onfinish = () => {
+        node.style.opacity = '1'
+        node.style.transform = 'translateX(0px)'
+        node.style.clipPath = 'inset(0px round 14px)'
+        openAnimation.cancel()
+      }
+      return
+    }
+
+    if (!previewWasOpenRef.current) return
+    previewWasOpenRef.current = false
+    const computed = window.getComputedStyle(node)
+    const startOpacity = computed.opacity
+    const startTransform = computed.transform
+    const startClip = computed.clipPath
+    for (const animation of node.getAnimations()) animation.cancel()
+    node.animate(
+      [
+        { opacity: startOpacity, transform: startTransform, clipPath: startClip },
+        {
+          opacity: 0,
+          transform: 'translateX(16px)',
+          clipPath: 'inset(0px 0px 0px 24px round 14px)'
+        }
+      ],
+      {
+        duration: reduced ? 120 : 180,
+        easing: 'cubic-bezier(0.4, 0, 1, 1)',
+        fill: 'both'
+      }
+    )
+  }, [preview.open, preview.mounted, selectedIndex, scrollRef])
 
   return (
     <div className="fc-plugin">
@@ -137,9 +239,6 @@ export function ClipboardView({
                       <span>{row.meta}</span>
                       <Keycap>↵</Keycap>
                     </span>
-                    {selected && holdVisible ? (
-                      <span className="fc-hold-progress" key={`${item.id}-${holdKey}`} aria-hidden="true" />
-                    ) : null}
                   </div>
                 )
               })}
@@ -149,6 +248,7 @@ export function ClipboardView({
         {preview.mounted && preview.item ? (
           <aside
             className="fc-preview"
+            ref={previewRef}
             data-open={preview.open}
             aria-label="剪切板预览"
             aria-hidden={!preview.open}
@@ -161,7 +261,7 @@ export function ClipboardView({
               </IconButton>
             </div>
             <div className="fc-preview-divider" />
-            <div className="fc-preview-content" key={preview.item.id}>
+            <div className="fc-preview-content" ref={previewContentRef}>
               <PreviewBody item={preview.item} />
             </div>
           </aside>

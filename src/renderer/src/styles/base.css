@@ -484,10 +484,6 @@ h4 {
     transition-duration: 120ms !important;
     scroll-behavior: auto !important;
   }
-
-  .fc-hold-progress {
-    display: none !important;
-  }
 }
 
 @media (prefers-contrast: more) {

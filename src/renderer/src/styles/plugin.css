@@ -214,30 +214,6 @@
   font-size: 11px;
 }
 
-.fc-hold-progress {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 2px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--fc-accent);
-  transform-origin: left center;
-  animation: fc-hold 1500ms linear both;
-  pointer-events: none;
-}
-
-@keyframes fc-hold {
-  from {
-    transform: scaleX(0);
-    opacity: 0.9;
-  }
-  to {
-    transform: scaleX(1);
-    opacity: 0;
-  }
-}
-
 /* Preview panel */
 
 .fc-preview {
@@ -257,19 +233,16 @@
   -webkit-backdrop-filter: blur(28px);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
   opacity: 0;
-  transform: translateX(28px) scale(0.98);
-  clip-path: inset(0 0 0 24px round 14px);
-  transition:
-    opacity var(--fc-dur-slow) var(--fc-ease-out),
-    transform var(--fc-dur-slow) var(--fc-ease-out),
-    clip-path var(--fc-dur-slow) var(--fc-ease-out);
+  transform: translateX(22px);
+  clip-path: inset(0 0 0 100% round 6px);
   pointer-events: none;
+  will-change: transform, opacity, clip-path;
 }
 
+/* The open / close animation is driven by WAAPI in ClipboardView so the bead
+   can start at the selected row's measured Y position. CSS only owns the
+   resting/hidden defaults and hit-testing. */
 .fc-preview[data-open='true'] {
-  opacity: 1;
-  transform: translateX(0) scale(1);
-  clip-path: inset(0 round 14px);
   pointer-events: auto;
 }
 
