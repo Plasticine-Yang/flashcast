@@ -53,7 +53,8 @@ const api: FlashcastApi = {
   refreshApps: () => invoke<AppEntry[]>(IPC.refreshApps),
 
   getPluginPage: (pluginId) => invoke<PluginPage>(IPC.getPluginPage, pluginId),
-  getPluginSettings: (pluginId) => invoke<PluginSettingsPage>(IPC.getPluginSettings, pluginId),
+  getPluginSettings: (pluginId, options) =>
+    invoke<PluginSettingsPage>(IPC.getPluginSettings, pluginId, options),
   savePluginSettings: (pluginId, patch) =>
     invoke<{ page: PluginSettingsPage; savedAt: number }>(IPC.savePluginSettings, pluginId, patch),
   searchExternal: (pluginId, query) =>
@@ -67,6 +68,10 @@ const api: FlashcastApi = {
   clearClipboard: () => invoke<ActionResult>(IPC.clearClipboard),
 
   openChromeBookmark: (bookmark) => invoke<ActionResult>(IPC.openChromeBookmark, bookmark),
+  openEditorWorkspace: (workspaceId, options) =>
+    invoke<ActionResult>(IPC.openEditorWorkspace, workspaceId, options),
+  revealEditorWorkspace: (workspaceId) =>
+    invoke<ActionResult>(IPC.revealEditorWorkspace, workspaceId),
   getFavicons: (domains) => invoke<Record<string, string>>(IPC.getFavicons, domains),
   openSettings: () => invoke<void>(IPC.openSettings),
   hideLauncher: (options) => ipcRenderer.send(IPC.hideLauncher, options),

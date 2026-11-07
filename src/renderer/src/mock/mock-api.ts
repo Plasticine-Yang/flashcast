@@ -1,3 +1,4 @@
+import { normalizeTrigger, validateTriggers, type TriggerDraft } from '@shared/editor-triggers'
 import type {
   AppEntry,
   AppPrefs,
@@ -6,14 +7,19 @@ import type {
   ChromeBookmarksPluginPage,
   ClipboardPluginPage,
   EventName,
+  EditorVariant,
+  EditorWorkspace,
   ExternalPluginItem,
   FlashcastApi,
   FlashcastEvents,
+  GenericPluginSettingsPage,
   PluginInspection,
   PluginPage,
   PluginSettingsPage,
   PluginSummary,
   UpdateState,
+  VscodeLikeWorkspacePluginPage,
+  VscodeLikeWorkspaceSettingsPage,
   WorkspaceSummary
 } from '@shared/types'
 import {
@@ -25,6 +31,9 @@ import {
   mockClipboardConfig,
   mockClipboardItems,
   mockClipboardSettings,
+  mockEditorSettings,
+  mockEditorVariants,
+  mockEditorWorkspaces,
   mockFavicons,
   mockPlugins,
   mockShortcuts,
@@ -49,6 +58,8 @@ export function createMockApi(): FlashcastApi {
   let workspace: WorkspaceSummary = { ...mockWorkspace }
   let clipboardMax = mockClipboardConfig.maxItems
   let chromeProfile = 'Default'
+  let editorVariants = mockEditorSettings.variants.map((variant) => ({ ...variant }))
+  let editorOptions = { ...mockEditorSettings.options }
 
   /* ------------------------------- updates ------------------------------- */
 
@@ -232,13 +243,59 @@ export function createMockApi(): FlashcastApi {
     error: null
   })
 
+  const enabledEditorIds = (): Set<string> =>
+    new Set(editorVariants.filter((variant) => variant.enabled).map((variant) => variant.id))
+
+  const vscodePage = (): VscodeLikeWorkspacePluginPage => {
+    const enabled = enabledEditorIds()
+    const variants: EditorVariant[] = editorVariants
+      .filter((variant) => variant.enabled)
+      .map((variant) => ({
+        id: variant.id,
+        name: variant.name,
+        version: variant.version,
+        dataDir: variant.dataDir,
+        installed: true,
+        error: null
+      }))
+    return {
+      kind: 'vscode-like-workspace',
+      pluginId: 'vscode-like-workspace',
+      title: 'VSCode-like Workspace',
+      placeholder: '搜索工作区…',
+      searchable: true,
+      variants,
+      workspaces: mockEditorWorkspaces.filter((workspace) => enabled.has(workspace.variantId)),
+      errors: [],
+      scannedAt: Date.now()
+    }
+  }
+
+  const editorTriggers = (): PluginSummary['triggers'] =>
+    editorVariants
+      .filter((variant) => variant.enabled && variant.trigger.trim())
+      .map((variant) => ({
+        keyword: variant.trigger.trim().toLowerCase(),
+        label: `${variant.name} 工作区`,
+        args: { editor: variant.id }
+      }))
+
+  const editorSettingsPage = (): VscodeLikeWorkspaceSettingsPage => ({
+    ...mockEditorSettings,
+    variants: editorVariants.map((variant) => ({ ...variant })),
+    options: { ...editorOptions },
+    triggerErrors: {},
+    savedAt: Date.now()
+  })
+
   const settingsPage = (pluginId: string): PluginSettingsPage => {
+    if (pluginId === 'vscode-like-workspace') return editorSettingsPage()
     if (pluginId === 'chrome-bookmarks') {
       return {
         ...mockChromeSettings,
         fields: mockChromeSettings.fields.map((field) =>
           field.key === 'profile' && field.type === 'select' ? { ...field, value: chromeProfile } : field
-        ) as PluginSettingsPage['fields'],
+        ) as GenericPluginSettingsPage['fields'],
         savedAt: Date.now()
       }
     }
@@ -246,7 +303,7 @@ export function createMockApi(): FlashcastApi {
       ...mockClipboardSettings,
       fields: mockClipboardSettings.fields.map((field) =>
         field.key === 'maxItems' && field.type === 'number' ? { ...field, value: clipboardMax } : field
-      ) as PluginSettingsPage['fields'],
+      ) as GenericPluginSettingsPage['fields'],
       savedAt: Date.now()
     }
   }
@@ -266,6 +323,7 @@ export function createMockApi(): FlashcastApi {
     getPluginPage: async (pluginId): Promise<PluginPage> => {
       if (pluginId === 'clipboard') return clipboardPage()
       if (pluginId === 'chrome-bookmarks') return chromePage()
+      if (pluginId === 'vscode-like-workspace') return vscodePage()
       return {
         kind: 'external',
         pluginId,
@@ -276,8 +334,68 @@ export function createMockApi(): FlashcastApi {
         error: '示例插件未提供页面'
       }
     },
-    getPluginSettings: async (pluginId) => settingsPage(pluginId),
+    getPluginSettings: async (pluginId, _options) => settingsPage(pluginId),
     savePluginSettings: async (pluginId, patch) => {
+      if (pluginId === 'vscode-like-workspace') {
+        const rawVariants =
+          patch.variants && typeof patch.variants === 'object' && !Array.isArray(patch.variants)
+            ? (patch.variants as Record<string, { enabled?: boolean; trigger?: string }>)
+            : {}
+        const current: Record<string, TriggerDraft> = {}
+        const drafts: Record<string, TriggerDraft> = {}
+        for (const variant of editorVariants) {
+          current[variant.id] = { enabled: variant.enabled, trigger: variant.trigger }
+          const raw = rawVariants[variant.id]
+          drafts[variant.id] = {
+            enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : variant.enabled,
+            trigger: typeof raw?.trigger === 'string' ? raw.trigger : variant.trigger
+          }
+        }
+        const others = new Set<string>()
+        for (const plugin of plugins) {
+          if (plugin.id === 'vscode-like-workspace') continue
+          for (const trigger of plugin.triggers ?? []) others.add(trigger.keyword.toLowerCase())
+        }
+        const { accepted, errors } = validateTriggers(
+          editorVariants.map((variant) => variant.id),
+          drafts,
+          current,
+          others
+        )
+        if (typeof patch.includeRemote === 'boolean') editorOptions.includeRemote = patch.includeRemote
+        if (typeof patch.hideMissing === 'boolean') editorOptions.hideMissing = patch.hideMissing
+        if (typeof patch.maxItems === 'number' && Number.isFinite(patch.maxItems)) {
+          editorOptions.maxItems = Math.min(5000, Math.max(100, Math.round(patch.maxItems)))
+        }
+        if (Object.keys(errors).length > 0) {
+          return {
+            page: {
+              ...editorSettingsPage(),
+              variants: editorVariants.map((variant) => {
+                const draft = accepted[variant.id] ?? current[variant.id]
+                return {
+                  ...variant,
+                  enabled: draft.enabled,
+                  trigger: normalizeTrigger(drafts[variant.id]?.trigger ?? variant.trigger)
+                }
+              }),
+              triggerErrors: errors
+            },
+            savedAt: 0
+          }
+        }
+        editorVariants = editorVariants.map((variant) => {
+          const draft = accepted[variant.id]
+          return draft ? { ...variant, enabled: draft.enabled, trigger: draft.trigger } : variant
+        })
+        plugins = plugins.map((plugin) =>
+          plugin.id === 'vscode-like-workspace'
+            ? { ...plugin, triggers: editorTriggers() }
+            : plugin
+        )
+        emit('plugins:changed', plugins)
+        return { page: editorSettingsPage(), savedAt: Date.now() }
+      }
       if (pluginId === 'clipboard') {
         const value = Number(patch.maxItems)
         if (Number.isFinite(value)) clipboardMax = Math.min(50, Math.max(1, Math.round(value)))
@@ -312,6 +430,8 @@ export function createMockApi(): FlashcastApi {
     },
 
     openChromeBookmark: async () => ({ ok: true, close: true }),
+    openEditorWorkspace: async () => ({ ok: true, close: true }),
+    revealEditorWorkspace: async () => ({ ok: true }),
     getFavicons: async (domains) => mockFavicons(domains),
     openSettings: noop,
     hideLauncher: () => {

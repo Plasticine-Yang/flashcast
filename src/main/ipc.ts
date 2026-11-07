@@ -40,9 +40,13 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
   ipcMain.handle(IPC.getPluginPage, async (_event, pluginId: unknown) =>
     application.getPluginPage(requireString(pluginId, '插件 id'))
   )
-  ipcMain.handle(IPC.getPluginSettings, async (_event, pluginId: unknown) =>
-    application.getPluginSettings(requireString(pluginId, '插件 id'))
-  )
+  ipcMain.handle(IPC.getPluginSettings, async (_event, pluginId: unknown, options: unknown) => {
+    const record = options && typeof options === 'object' ? (options as Record<string, unknown>) : {}
+    return application.getPluginSettings(
+      requireString(pluginId, '插件 id'),
+      record.refresh === true
+    )
+  })
   ipcMain.handle(
     IPC.savePluginSettings,
     async (_event, pluginId: unknown, patch: unknown) =>
@@ -89,6 +93,16 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
       domains.filter((domain): domain is string => typeof domain === 'string')
     )
   })
+
+  ipcMain.handle(IPC.openEditorWorkspace, async (_event, workspaceId: unknown, options: unknown) => {
+    const record = options && typeof options === 'object' ? (options as Record<string, unknown>) : {}
+    return application.openEditorWorkspace(requireString(workspaceId, '工作区 id'), {
+      newWindow: record.newWindow === true
+    })
+  })
+  ipcMain.handle(IPC.revealEditorWorkspace, async (_event, workspaceId: unknown) =>
+    application.revealEditorWorkspace(requireString(workspaceId, '工作区 id'))
+  )
 
   ipcMain.handle(IPC.openSettings, async () => {
     application.openSettings()

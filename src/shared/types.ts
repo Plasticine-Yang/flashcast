@@ -52,12 +52,23 @@ export interface WorkspaceSummary {
   lastError: string | null
 }
 
+export interface PluginTrigger {
+  /** Single token typed before a space to enter the plugin directly. */
+  keyword: string
+  /** Scoped result title, e.g. `Trae CN 工作区`. */
+  label: string
+  /** Opaque arguments passed to the plugin page when entered from this trigger. */
+  args?: Record<string, string>
+}
+
 export interface PluginManifest {
   id: string
   name: string
   description: string
   version: string
   keywords: string[]
+  /** Optional scoped entry points; the editor plugin fills these from config. */
+  triggers?: PluginTrigger[]
   /** Data URL for external plugins. Built-ins use iconKey. */
   icon?: string
   iconKey?: string
@@ -194,7 +205,86 @@ export interface ExternalPluginPage {
   emptyDescription?: string
 }
 
-export type PluginPage = ClipboardPluginPage | ChromeBookmarksPluginPage | ExternalPluginPage
+/* ------------------------------------------------------------------ */
+/* VS Code-like editors                                                */
+/* ------------------------------------------------------------------ */
+
+export interface EditorVariant {
+  id: string
+  name: string
+  version: string
+  dataDir: string
+  installed: boolean
+  error: string | null
+}
+
+export interface EditorWorkspaceRemote {
+  authority: string
+  host: string
+  label: string
+}
+
+export interface EditorWorkspace {
+  id: string
+  variantId: string
+  name: string
+  path: string
+  /** Home-abbreviated local path, or `host:path` for remote workspaces. */
+  displayPath: string
+  uri: string
+  kind: 'folder' | 'workspace'
+  remote: EditorWorkspaceRemote | null
+  isOpen: boolean
+  lastActiveAt: number
+  exists: boolean
+}
+
+export interface VscodeLikeWorkspacePluginPage {
+  kind: 'vscode-like-workspace'
+  pluginId: string
+  title: string
+  placeholder: string
+  searchable: true
+  variants: EditorVariant[]
+  workspaces: EditorWorkspace[]
+  errors: Array<{ variantId: string; message: string }>
+  scannedAt: number
+}
+
+export interface EditorVariantSettings {
+  id: string
+  name: string
+  version: string
+  dataDir: string
+  trigger: string
+  enabled: boolean
+}
+
+export interface VscodeLikeWorkspaceOptions {
+  includeRemote: boolean
+  hideMissing: boolean
+  maxItems: number
+}
+
+export interface VscodeLikeWorkspaceSettingsPage {
+  kind: 'vscode-like-workspace-settings'
+  pluginId: string
+  title: string
+  placeholder: string
+  searchable: false
+  variants: EditorVariantSettings[]
+  options: VscodeLikeWorkspaceOptions
+  triggerErrors: Record<string, string>
+  error: string | null
+  notice: string | null
+  savedAt?: number
+}
+
+export type PluginPage =
+  | ClipboardPluginPage
+  | ChromeBookmarksPluginPage
+  | VscodeLikeWorkspacePluginPage
+  | ExternalPluginPage
 
 export type SettingsField =
   | {
@@ -238,7 +328,7 @@ export type SettingsField =
       disabled?: boolean
     }
 
-export interface PluginSettingsPage {
+export interface GenericPluginSettingsPage {
   kind: 'settings'
   pluginId: string
   title: string
@@ -250,6 +340,8 @@ export interface PluginSettingsPage {
   footerHints?: Hint[]
   savedAt?: number
 }
+
+export type PluginSettingsPage = GenericPluginSettingsPage | VscodeLikeWorkspaceSettingsPage
 
 export interface Hint {
   keys: string[]
@@ -371,7 +463,10 @@ export interface FlashcastApi {
   refreshApps(): Promise<AppEntry[]>
 
   getPluginPage(pluginId: string): Promise<PluginPage>
-  getPluginSettings(pluginId: string): Promise<PluginSettingsPage>
+  getPluginSettings(
+    pluginId: string,
+    options?: { refresh?: boolean }
+  ): Promise<PluginSettingsPage>
   savePluginSettings(
     pluginId: string,
     patch: Record<string, unknown>
@@ -391,6 +486,11 @@ export interface FlashcastApi {
   clearClipboard(): Promise<ActionResult>
 
   openChromeBookmark(bookmark: { id: string; url: string; title: string }): Promise<ActionResult>
+  openEditorWorkspace(
+    workspaceId: string,
+    options: { newWindow: boolean }
+  ): Promise<ActionResult>
+  revealEditorWorkspace(workspaceId: string): Promise<ActionResult>
   getFavicons(domains: string[]): Promise<Record<string, string>>
   openSettings(): Promise<void>
   hideLauncher(options?: { paste?: boolean }): void
@@ -432,7 +532,11 @@ export interface FlashcastApi {
 export const CLIPBOARD_MEDIA_SCHEME = 'flashcast-media'
 export const DESKTOP_WALLPAPER_SCHEME = 'flashcast-wallpaper'
 export const CLIPBOARD_MEDIA_PREFIX = 'media/'
-export const BUILTIN_PLUGIN_IDS = ['clipboard', 'chrome-bookmarks'] as const
+export const BUILTIN_PLUGIN_IDS = [
+  'clipboard',
+  'chrome-bookmarks',
+  'vscode-like-workspace'
+] as const
 export type BuiltinPluginId = (typeof BUILTIN_PLUGIN_IDS)[number]
 
 export const SERVICE_NAME = 'Flashcast'

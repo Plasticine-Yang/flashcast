@@ -46,7 +46,13 @@ import {
   type WorkspaceLayout
 } from './paths'
 import { COMMANDS, PluginService } from './plugin-service'
-import { CHROME_DEFAULTS, CLIPBOARD_DEFAULTS } from './builtins/manifests'
+import {
+  CHROME_DEFAULTS,
+  CLIPBOARD_DEFAULTS,
+  VSCODE_LIKE_DEFAULTS,
+  VSCODE_LIKE_WORKSPACE_MANIFEST
+} from './builtins/manifests'
+import { VscodeLikeWorkspaceService } from './vscode-like-workspace/service'
 import { ShortcutManager } from './shortcut-manager'
 import { UpdateService } from './update-service'
 import { readDesktopWallpaper } from './wallpaper'
@@ -74,6 +80,7 @@ export class FlashcastApplication {
   private clipboard!: ClipboardService
   private external!: ExternalPluginManager
   private plugins!: PluginService
+  private editors!: VscodeLikeWorkspaceService
   private favicons!: FaviconService
   private apps!: AppDiscovery
   private shortcuts!: ShortcutManager
@@ -99,11 +106,13 @@ export class FlashcastApplication {
     await this.clipboard.init()
 
     this.favicons = new FaviconService(layout.faviconDir)
+    this.editors = new VscodeLikeWorkspaceService(this.config, this.platform)
+    await this.editors.init()
     this.external = new ExternalPluginManager(
       this.config,
       layout,
       (plugins) => {
-        this.broadcast(IPC.pluginChanged, plugins)
+        this.broadcast(IPC.pluginChanged, this.plugins ? this.plugins.getSummaries() : plugins)
       },
       (message, tone = 'default') => this.toast(message, tone)
     )
@@ -111,8 +120,15 @@ export class FlashcastApplication {
     // Materialise the default configs that belong to the versioned workspace.
     await this.config.getPluginConfig('clipboard', CLIPBOARD_DEFAULTS)
     await this.config.getPluginConfig('chrome-bookmarks', CHROME_DEFAULTS)
+    await this.config.getPluginConfig(VSCODE_LIKE_WORKSPACE_MANIFEST.id, VSCODE_LIKE_DEFAULTS)
     await this.workspace.finalizeInitialCommit()
-    this.plugins = new PluginService(this.config, this.clipboard, this.external, this.platform)
+    this.plugins = new PluginService(
+      this.config,
+      this.clipboard,
+      this.external,
+      this.editors,
+      this.platform
+    )
     this.apps = new AppDiscovery(this.platform)
 
     this.setupTheme()
@@ -306,8 +322,11 @@ export class FlashcastApplication {
     return this.plugins.getPage(pluginId)
   }
 
-  async getPluginSettings(pluginId: string): Promise<PluginSettingsPage> {
-    return this.plugins.getSettings(pluginId)
+  async getPluginSettings(
+    pluginId: string,
+    refresh = false
+  ): Promise<PluginSettingsPage> {
+    return this.plugins.getSettings(pluginId, { refresh })
   }
 
   async savePluginSettings(
@@ -343,6 +362,21 @@ export class FlashcastApplication {
 
   async clearClipboard(): Promise<ActionResult> {
     const result = await this.plugins.clearClipboard()
+    if (result.toast) this.broadcast(IPC.toast, result.toast)
+    return result
+  }
+
+  async openEditorWorkspace(
+    workspaceId: string,
+    options: { newWindow: boolean }
+  ): Promise<ActionResult> {
+    const result = await this.plugins.openEditorWorkspace(workspaceId, options)
+    if (result.toast) this.broadcast(IPC.toast, result.toast)
+    return result
+  }
+
+  async revealEditorWorkspace(workspaceId: string): Promise<ActionResult> {
+    const result = await this.plugins.revealEditorWorkspace(workspaceId)
     if (result.toast) this.broadcast(IPC.toast, result.toast)
     return result
   }
@@ -398,6 +432,8 @@ export class FlashcastApplication {
     await this.clipboard.setWorkspace(layout)
     await this.external.setLayout(layout)
     await this.external.reload()
+    this.editors.invalidate()
+    await this.editors.init()
     this.favicons.setRoot(layout.faviconDir)
     nativeTheme.themeSource = this.config.getPrefs().theme
     this.shortcuts.apply(this.config.getPrefs().hotkeys, { transactional: false })
@@ -436,7 +472,7 @@ export class FlashcastApplication {
 
   async installPlugin(token: string): Promise<{ plugin: PluginSummary; plugins: PluginSummary[] }> {
     const plugin = await this.external.install(token)
-    return { plugin, plugins: this.external.getSummaries() }
+    return { plugin, plugins: this.plugins.getSummaries() }
   }
 
   async updatePlugin(pluginId: string): Promise<ActionResult> {

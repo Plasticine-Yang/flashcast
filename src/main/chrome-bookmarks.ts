@@ -10,7 +10,7 @@ import type {
   ChromeProfile,
   PlatformId
 } from '@shared/types'
-import { domainOf } from '@shared/fuzzy'
+import { domainOf } from '@shared/url'
 import { log } from './logger'
 
 interface ChromeRoot {

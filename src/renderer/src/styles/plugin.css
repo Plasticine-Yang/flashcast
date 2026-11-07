@@ -800,3 +800,179 @@
   left: 0;
   right: 0;
 }
+
+/* --------------------------------------------------------------------------
+   VSCode-like Workspace
+   -------------------------------------------------------------------------- */
+
+.fc-workspace-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.fc-workspace-body > .fc-plugin-scroll,
+.fc-workspace-body > .fc-virtual {
+  flex: 1;
+  min-height: 0;
+}
+
+.fc-workspace-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  flex: none;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--fc-warning) 28%, transparent);
+  border-radius: 9px;
+  background: var(--fc-warning-soft);
+  color: var(--fc-warning);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.fc-workspace-notice svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.fc-workspace-row {
+  height: 48px;
+}
+
+.fc-workspace-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+}
+
+.fc-status-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 1px solid var(--fc-border-subtle);
+  background: var(--fc-surface-1);
+  color: var(--fc-text-tertiary);
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.fc-status-chip--success {
+  border-color: color-mix(in srgb, var(--fc-success) 32%, transparent);
+  background: var(--fc-success-soft);
+  color: var(--fc-success);
+}
+
+.fc-status-chip--warning {
+  border-color: color-mix(in srgb, var(--fc-warning) 32%, transparent);
+  background: var(--fc-warning-soft);
+  color: var(--fc-warning);
+}
+
+.fc-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.fc-settings-section-title {
+  margin: 20px 0 10px;
+  color: var(--fc-text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.fc-editor-settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+}
+
+.fc-editor-setting {
+  padding: 12px 14px;
+  border: 1px solid var(--fc-border-subtle);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--fc-surface-2), var(--fc-surface-1));
+  box-shadow: var(--fc-highlight-line);
+}
+
+.fc-editor-setting-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fc-editor-setting-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 8px;
+  color: var(--fc-accent);
+  background: var(--fc-accent-soft);
+}
+
+.fc-editor-setting-title {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.fc-editor-setting-name {
+  color: var(--fc-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fc-editor-setting-version {
+  color: var(--fc-text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fc-editor-setting-head .fc-switch {
+  margin-left: auto;
+}
+
+.fc-editor-setting-path {
+  margin: 9px 0 10px;
+  overflow: hidden;
+  color: var(--fc-text-tertiary);
+  font-family: var(--fc-font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fc-editor-trigger-row {
+  display: flex;
+}
+
+.fc-workspace-number {
+  width: 120px;
+}
+
+.fc-field-description kbd {
+  padding: 0 4px;
+  border: 1px solid var(--fc-border-subtle);
+  border-radius: 4px;
+  background: var(--fc-surface-2);
+  font-family: var(--fc-font-mono);
+  font-size: 11px;
+}
+
+.fc-spin {
+  animation: fc-spin 0.9s linear infinite;
+}

@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowLeft, Check, ChevronDown, Minus, Plus } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { PluginSettingsPage, SettingsField } from '@shared/types'
+import type { GenericPluginSettingsPage, SettingsField } from '@shared/types'
 import { api } from '../bridge'
 
 type Values = Record<string, string | number | boolean | null>
@@ -11,9 +11,9 @@ export function PluginSettingsView({
   onSaved,
   onError
 }: {
-  page: PluginSettingsPage
+  page: GenericPluginSettingsPage
   onBack: () => void
-  onSaved: (page: PluginSettingsPage) => void
+  onSaved: (page: GenericPluginSettingsPage) => void
   onError: (message: string) => void
 }): React.JSX.Element {
   const [values, setValues] = useState<Values>(() => initialValues(page))
@@ -60,7 +60,7 @@ export function PluginSettingsView({
       setSaving(false)
       setSaved(true)
       setSaveError(null)
-      onSaved(result.page)
+      if (result.page.kind === 'settings') onSaved(result.page)
       if (timers.current.saved) window.clearTimeout(timers.current.saved)
       timers.current.saved = window.setTimeout(() => setSaved(false), 1600)
     } catch (error) {
@@ -298,7 +298,7 @@ function FieldControl({
   )
 }
 
-function initialValues(page: PluginSettingsPage): Values {
+function initialValues(page: GenericPluginSettingsPage): Values {
   const values: Values = {}
   for (const field of page.fields) {
     values[field.key] = field.value

@@ -1,3 +1,5 @@
+import { hasCJK, pinyinIndexOf, pinyinMatchToken } from './pinyin'
+
 export interface FuzzyMatch {
   score: number
   /** Indices into the original (non-normalised) target string. */
@@ -91,11 +93,19 @@ function greedySubsequence(target: string, token: string): SingleMatch | null {
   return { score, indices, start: indices[0] ?? 0 }
 }
 
+/** Literal matches at or above this score are trusted over pinyin. */
+const LITERAL_CONFIDENT_SCORE = 300
+
 /**
  * Matches one whitespace-separated token against one field.
+ *
  * Latin matching is a case-insensitive subsequence match with bonuses for
  * word boundaries, contiguous runs and prefixes. CJK text naturally resolves
  * through the same substring path, so an intact phrase scores highest.
+ *
+ * Latin tokens additionally get a pinyin pass (`kuake` → 夸克浏览器) when the
+ * target contains CJK and the literal hit is absent or weak. Pinyin scores are
+ * capped below confident literal matches so exact Latin names still win.
  */
 export function matchToken(target: string, token: string): FuzzyMatch | null {
   if (!target || !token) return null
@@ -112,9 +122,23 @@ export function matchToken(target: string, token: string): FuzzyMatch | null {
   const match =
     bestSubstringMatch(normalisedTarget, normalisedToken) ??
     greedySubsequence(normalisedTarget, normalisedToken)
+  const literal: FuzzyMatch | null = match
+    ? { score: match.score, indices: match.indices }
+    : null
 
-  if (!match) return null
-  return { score: match.score, indices: match.indices }
+  if (literal && literal.score >= LITERAL_CONFIDENT_SCORE) return literal
+
+  if (token.length >= 2 && !hasCJK(token) && hasCJK(target)) {
+    const index = pinyinIndexOf(target)
+    if (index) {
+      const pinyinMatch = pinyinMatchToken(index, token)
+      if (pinyinMatch && (!literal || pinyinMatch.score > literal.score)) {
+        return pinyinMatch
+      }
+    }
+  }
+
+  return literal
 }
 
 /** Matches the complete query against a single field. */
@@ -199,11 +223,4 @@ export function highlightSegments(text: string, indices: number[] | undefined): 
   return segments
 }
 
-/** Extracts the domain used for favicon lookups without throwing on bad URLs. */
-export function domainOf(url: string): string {
-  try {
-    return new URL(url).hostname
-  } catch {
-    return ''
-  }
-}
+export { domainOf } from './url'

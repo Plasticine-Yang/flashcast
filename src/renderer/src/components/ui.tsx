@@ -5,7 +5,10 @@ import {
   Bookmark,
   Check,
   Clipboard,
+  Code2,
+  FileCode2,
   FileText,
+  FolderGit2,
   Globe,
   Image as ImageIcon,
   Info,
@@ -101,7 +104,10 @@ const ICONS: Record<string, LucideIcon> = {
   text: FileText,
   image: ImageIcon,
   video: Play,
-  music: Music2
+  music: Music2,
+  code: Code2,
+  'file-code': FileCode2,
+  folder: FolderGit2
 }
 
 export function Glyph({

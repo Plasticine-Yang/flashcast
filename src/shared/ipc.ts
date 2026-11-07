@@ -20,6 +20,9 @@ export const IPC = {
   openChromeBookmark: 'chrome:open-bookmark',
   getFavicons: 'chrome:favicons',
 
+  openEditorWorkspace: 'editor:open-workspace',
+  revealEditorWorkspace: 'editor:reveal-workspace',
+
   openSettings: 'launcher:open-settings',
   hideLauncher: 'launcher:hide',
   shown: 'launcher:shown',

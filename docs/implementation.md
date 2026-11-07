@@ -35,6 +35,12 @@ src/main/
   external-plugins.ts      插件安装/更新/卸载、模块加载、上下文、设置 schema
   plugin-service.ts        内置插件页面与设置、命令列表
   builtins/manifests.ts    内置插件 manifest 与默认配置
+  vscode-like-workspace/   VS Code 系编辑器检测、工作区索引、按变体启动
+    detect.ts              从 product.json 识别安装与 userData
+    indexer.ts             state.vscdb / storage.json / workspaceStorage 合并
+    uri.ts                 file: / vscode-remote: URI 解析与路径展示
+    open.ts                用变体自己的 CLI 打开，绕过协议处理器
+    service.ts             索引缓存、触发词、设置页与保存
 src/preload/index.ts       contextBridge 白名单 API
 src/renderer/src/
   launcher/                Launcher、搜索、键盘路由、剪切板、书签、外部插件、设置页
@@ -44,6 +50,8 @@ src/renderer/src/
 src/shared/
   types.ts                 IPC / 数据契约
   fuzzy.ts                 子序列 + 词首/连续加分、多字段匹配、高亮切片
+  pinyin.ts                拼音视图、音节级 DP 匹配、汉字下标回映
+  editor-triggers.ts       触发词正则、保留字与冲突校验（主进程与 mock 共用）
   shortcuts.ts             accelerator 解析、平台符号、清除快捷键
   update.ts                更新状态标签、字节/百分比格式化、Release 说明降级为纯文本
   time.ts                  相对时间与类型标签
@@ -69,7 +77,21 @@ src/shared/
 - 否则做贪心子序列匹配，连续、词首、开头命中加分；
 - 多字段（名称、关键字、URL、文件夹）逐 token 选择得分最高字段，并返回每个字段的高亮 index；
 - 中文走子串路径，因此 `书签` 会高亮 `浏览器书签` 中的连续片段；
+- 字面命中不够强（< 300）且 token 是纯 ASCII、目标是中文时，再走拼音匹配；
 - 结果统一返回 `{score, indices}`，渲染层用 `highlightSegments` 生成 `<mark class="fc-match">`。
+
+### 3.2.1 拼音匹配
+
+`src/shared/pinyin.ts` 把字段转成「音节视图」：每个汉字一个音节，每个音节记着它对应的原始字符下标；非中文只保留单个字母/数字。`pinyin-pro` 负责上下文多音字（重庆 → chongqing、银行 → yinhang），`ü` 统一折叠成 `v`。
+
+匹配是一个按音节推进的 DP：每个音节可以跳过，也可以用自己的一段前缀去消费剩余 query（`kua`、`ku`、`k`）。完整音节、音节边界起步、连续音节覆盖加分，跳过音节扣分，因此一条模型同时覆盖全拼、混拼和首字母：
+
+```text
+kuake    → 夸克      kualiulan → 夸 + 浏览
+kualanqi → 夸 + 览器  kllq      → 夸克浏览器（首字母）
+```
+
+拼音得分封顶 360，低于「可信的字面命中」（300 以上直接返回字面结果），所以英文名精确匹配不会被拼音抢走。高亮用音节记录的下标回映到汉字，`kuake` 会整字标红「夸克」。字段长度超过 200 字符（长剪贴板、长 URL）不做拼音视图；转换结果按字符串 LRU 缓存，1000 个 6 字标题约 6ms。
 
 插件、应用、命令都在 renderer 内基于同一算法排序；书签和剪切板在各自页面内过滤。书签超过 60 行时切到固定行高虚拟列表。
 
@@ -112,6 +134,27 @@ macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占
 - 选择目录时 `rev-parse --show-toplevel` 解析到仓库根；动态切换会重载 config、插件、剪切板历史、favicon 缓存与快捷键，不需要重启。
 - 自动提交只 `git add` Flashcast 管理路径，提交信息 `config: update Flashcast workspace`；有 upstream 才推送。
 - 工作区状态每 20s 轮询并在配置变更后刷新；设置页展示分支、最近提交、dirty/conflict/ahead/behind，差异弹窗读取 `git status --short` 与 `git diff --stat`。
+
+### 3.6.1 VS Code 系工作区
+
+`vscode-like-workspace` 是一个内置插件，覆盖 VS Code、Trae、Cursor、Windsurf、VSCodium 等同源产品。识别依据只有一个：应用目录里的 `product.json`（`applicationName` / `nameShort` / `version`），因为各产品的应用名、数据目录名、协议名都不一样；userData 从候选路径里挑第一个真正含 `User/` 的目录（Trae CN 的 `dataFolderName` 是 `.trae-cn`，实际目录却是 `Trae CN`，按字段拼路径会找错）。
+
+索引三处数据并按「本地路径 / 远程 authority + 路径」去重合并：
+
+| 来源 | 用途 |
+|---|---|
+| `User/globalStorage/state.vscdb` → `ItemTable.history.recentlyOpenedPathsList` | 有序最近列表，决定排序 |
+| `User/globalStorage/storage.json` → `windowsState.openedWindows` | 「打开中」状态 |
+| `User/workspaceStorage/<hash>/workspace.json` | 打开过但不在最近列表里的工作区 |
+| `profileAssociations.workspaces` | 补漏（多 Profile 场景） |
+
+SQLite 走 Electron 45 内置的 `node:sqlite`（只读打开）；被占用时依次退到 `state.vscdb.backup`、临时目录副本（含 `-wal` / `-shm`），仍失败则该变体单独报错，不影响其他编辑器。`fileUri` 不是工作区，直接丢弃；`vscode-remote://` 保留并显示 `host:path`。
+
+打开不走 `vscode://` / `trae://`：协议处理器只会指向最后注册的产品。改为 spawn 该变体自己的 CLI（macOS/Linux 用 `resources/app/bin/<applicationName>`，Windows 用 `<exe> out/cli.js` + `ELECTRON_RUN_AS_NODE=1`），远程工作区用 `--folder-uri` / `--file-uri`，`Alt/Option+Enter` 加 `--new-window`。
+
+触发词完全由插件设置页配置，默认全空：`plugins/vscode-like-workspace/config.json` 里每个变体一条 `{ enabled, trigger }`。保存时校验格式、保留字、插件内重复和跨插件冲突（`src/shared/editor-triggers.ts`，mock 复用同一套规则），被拒的条目保留原值。注册成功后 `PluginSummary.triggers` 带出 `{ keyword, label, args }`，全局搜索据此生成「Trae CN 工作区」这样的 scoped 结果；在输入框里键入 `trae ` 会直接进入该编辑器范围。
+
+页面有两级：没有 scope 时进入编辑器选择页（按最近活动排序），选中后只显示该编辑器的工作区；`Esc` 从列表退回选择页，再退一次回全局搜索。跨编辑器不合并，同一路径在 VS Code 和 Trae 下各占一行。
 
 ### 3.7 外部插件
 

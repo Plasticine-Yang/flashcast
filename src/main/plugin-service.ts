@@ -14,24 +14,38 @@ import type { ConfigStore } from './config-store'
 import type { ClipboardService } from './clipboard-service'
 import type { ExternalPluginManager } from './external-plugins'
 import type { PlatformId } from '@shared/types'
-import { CHROME_BOOKMARKS_MANIFEST, CHROME_DEFAULTS, CLIPBOARD_DEFAULTS, CLIPBOARD_MANIFEST } from './builtins/manifests'
+import {
+  CHROME_BOOKMARKS_MANIFEST,
+  CHROME_DEFAULTS,
+  CLIPBOARD_DEFAULTS,
+  CLIPBOARD_MANIFEST,
+  VSCODE_LIKE_WORKSPACE_MANIFEST
+} from './builtins/manifests'
 import { discoverChromeProfiles, findBookmarksFile, readChromeBookmarks } from './chrome-bookmarks'
+import type { VscodeLikeWorkspaceService } from './vscode-like-workspace/service'
 
 export class PluginService {
   constructor(
     private readonly config: ConfigStore,
     private readonly clipboard: ClipboardService,
     private readonly external: ExternalPluginManager,
+    private readonly editors: VscodeLikeWorkspaceService,
     private readonly platform: PlatformId
   ) {}
 
   getSummaries(): PluginSummary[] {
-    return this.external.getSummaries()
+    const triggers = this.editors.getTriggersSync()
+    return this.external.getSummaries().map((summary) =>
+      summary.id === VSCODE_LIKE_WORKSPACE_MANIFEST.id && summary.enabled
+        ? { ...summary, triggers }
+        : summary
+    )
   }
 
   async getPage(pluginId: string): Promise<PluginPage> {
     if (pluginId === CLIPBOARD_MANIFEST.id) return this.clipboardPage()
     if (pluginId === CHROME_BOOKMARKS_MANIFEST.id) return this.chromePage()
+    if (pluginId === VSCODE_LIKE_WORKSPACE_MANIFEST.id) return this.editors.getPage()
     return this.external.getPage(pluginId, '')
   }
 
@@ -74,9 +88,15 @@ export class PluginService {
     }
   }
 
-  async getSettings(pluginId: string): Promise<PluginSettingsPage> {
+  async getSettings(
+    pluginId: string,
+    options?: { refresh?: boolean }
+  ): Promise<PluginSettingsPage> {
     if (pluginId === CLIPBOARD_MANIFEST.id) return this.clipboardSettings()
     if (pluginId === CHROME_BOOKMARKS_MANIFEST.id) return this.chromeSettings()
+    if (pluginId === VSCODE_LIKE_WORKSPACE_MANIFEST.id) {
+      return this.editors.getSettings(options?.refresh === true)
+    }
     return this.external.getSettings(pluginId)
   }
 
@@ -196,7 +216,33 @@ export class PluginService {
       return { page: { ...(await this.chromeSettings()), savedAt: Date.now() }, savedAt: Date.now() }
     }
 
+    if (pluginId === VSCODE_LIKE_WORKSPACE_MANIFEST.id) {
+      const otherTriggers = new Set<string>()
+      for (const summary of this.getSummaries()) {
+        if (summary.id === pluginId) continue
+        for (const trigger of summary.triggers ?? []) {
+          otherTriggers.add(trigger.keyword.toLowerCase())
+        }
+      }
+      return this.editors.saveSettings(patch, otherTriggers)
+    }
+
     return this.external.saveSettings(pluginId, patch)
+  }
+
+  async openEditorWorkspace(
+    workspaceId: string,
+    options: { newWindow: boolean }
+  ): Promise<ActionResult> {
+    return this.editors.open(workspaceId, options)
+  }
+
+  async revealEditorWorkspace(workspaceId: string): Promise<ActionResult> {
+    return this.editors.reveal(workspaceId)
+  }
+
+  async invalidateEditors(): Promise<void> {
+    this.editors.invalidate()
   }
 
   async activateClipboard(id: string, paste: boolean): Promise<ActionResult> {

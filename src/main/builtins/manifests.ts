@@ -1,7 +1,23 @@
-import type { PluginManifest } from '@shared/types'
+import type { PluginManifest, VscodeLikeWorkspaceOptions } from '@shared/types'
+
+export interface VscodeLikeVariantConfig {
+  enabled: boolean
+  trigger: string
+}
+
+export interface VscodeLikeConfig extends VscodeLikeWorkspaceOptions {
+  variants: Record<string, VscodeLikeVariantConfig>
+  [key: string]: unknown
+}
 
 export const CLIPBOARD_DEFAULTS = { maxItems: 10 }
 export const CHROME_DEFAULTS: { profile: string | null } = { profile: null }
+export const VSCODE_LIKE_DEFAULTS: VscodeLikeConfig = {
+  variants: {},
+  includeRemote: true,
+  hideMissing: false,
+  maxItems: 1000
+}
 
 export const CLIPBOARD_MANIFEST: PluginManifest = {
   id: 'clipboard',
@@ -33,4 +49,24 @@ export const CHROME_BOOKMARKS_MANIFEST: PluginManifest = {
   layout: 'compact'
 }
 
-export const BUILTIN_MANIFESTS = [CLIPBOARD_MANIFEST, CHROME_BOOKMARKS_MANIFEST]
+export const VSCODE_LIKE_WORKSPACE_MANIFEST: PluginManifest = {
+  id: 'vscode-like-workspace',
+  name: 'VSCode-like Workspace',
+  description: '搜索 VS Code、Trae、Cursor 等打开过的工作区',
+  version: '1.0.0',
+  keywords: ['编辑器', '工作区', 'workspace', '项目', 'editor', 'vscode-like'],
+  iconKey: 'code',
+  searchable: true,
+  primaryAction: '打开工作区',
+  builtin: true,
+  hasSettings: true,
+  permissions: [],
+  layout: 'compact',
+  triggers: []
+}
+
+export const BUILTIN_MANIFESTS = [
+  CLIPBOARD_MANIFEST,
+  CHROME_BOOKMARKS_MANIFEST,
+  VSCODE_LIKE_WORKSPACE_MANIFEST
+]

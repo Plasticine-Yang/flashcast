@@ -5,10 +5,15 @@ import type {
   ChromeBookmark,
   ClipboardItem,
   CommandEntry,
+  EditorVariant,
+  EditorWorkspace,
   PluginSummary
 } from '@shared/types'
 
 export type GlobalKind = 'plugin' | 'app' | 'command'
+
+/** Outranks any literal application match so triggers stay at the top. */
+const EXACT_TRIGGER_SCORE = 2400
 
 export interface GlobalResult {
   id: string
@@ -21,6 +26,9 @@ export interface GlobalResult {
   titleIndices: number[]
   subtitleIndices: number[]
   score: number
+  /** Set for scoped plugin entries (e.g. editor → trigger). */
+  scope?: Record<string, string>
+  scopeLabel?: string
 }
 
 export interface GlobalSection {
@@ -39,26 +47,56 @@ export function buildGlobalSections(
   const enabledPlugins = plugins.filter((plugin) => plugin.enabled)
 
   const pluginItems = enabledPlugins
-    .map((plugin): GlobalResult | null => {
+    .flatMap((plugin): GlobalResult[] => {
+      const scoped: GlobalResult[] = []
+      if (trimmed) {
+        for (const trigger of plugin.triggers ?? []) {
+          if (!trigger.keyword) continue
+          const subtitle = `输入 ${trigger.keyword} 进入 · ${plugin.description}`
+          const match = matchFields(trimmed, [trigger.label, trigger.keyword])
+          if (!match) continue
+          // An exact trigger must beat the application with the same name
+          // (`trae` → Trae CN workspaces, not the Trae CN app).
+          const exact = trimmed.toLowerCase() === trigger.keyword.toLowerCase()
+          const prefixLength = '输入 '.length
+          scoped.push({
+            id: `plugin:${plugin.id}:${trigger.keyword}`,
+            kind: 'plugin',
+            refId: plugin.id,
+            title: trigger.label,
+            subtitle,
+            icon: plugin.icon,
+            iconKey: plugin.iconKey ?? 'puzzle',
+            titleIndices: match.indices[0] ?? [],
+            subtitleIndices: (match.indices[1] ?? []).map((index) => index + prefixLength),
+            score: exact ? EXACT_TRIGGER_SCORE : match.score,
+            scope: trigger.args,
+            scopeLabel: trigger.label
+          })
+        }
+      }
+      if (scoped.length > 0) return scoped
+
       const subtitle = plugin.keywords.slice(0, 5).join(' · ') || plugin.description
       const match = trimmed
         ? matchFields(trimmed, [plugin.name, subtitle, plugin.description])
         : { score: 0, indices: [[], [], []] }
-      if (!match) return null
-      return {
-        id: `plugin:${plugin.id}`,
-        kind: 'plugin',
-        refId: plugin.id,
-        title: plugin.name,
-        subtitle,
-        icon: plugin.icon,
-        iconKey: plugin.iconKey ?? 'puzzle',
-        titleIndices: match.indices[0] ?? [],
-        subtitleIndices: match.indices[1] ?? [],
-        score: match.score
-      }
+      if (!match) return []
+      return [
+        {
+          id: `plugin:${plugin.id}`,
+          kind: 'plugin',
+          refId: plugin.id,
+          title: plugin.name,
+          subtitle,
+          icon: plugin.icon,
+          iconKey: plugin.iconKey ?? 'puzzle',
+          titleIndices: match.indices[0] ?? [],
+          subtitleIndices: match.indices[1] ?? [],
+          score: match.score
+        }
+      ]
     })
-    .filter((item): item is GlobalResult => item !== null)
 
   const appItems = (apps ?? [])
     .map((app): GlobalResult | null => {
@@ -213,6 +251,110 @@ export function buildBookmarkRows(bookmarks: ChromeBookmark[], query: string): B
 
   if (trimmed) rows.sort((a, b) => b.score - a.score)
   return rows
+}
+
+export interface WorkspaceRowModel {
+  workspace: EditorWorkspace
+  titleIndices: number[]
+  subtitleIndices: number[]
+  score: number
+}
+
+/** Rows for one editor's workspace list; the page is always scoped. */
+export function buildWorkspaceRows(
+  workspaces: EditorWorkspace[],
+  query: string,
+  variantId: string | null
+): WorkspaceRowModel[] {
+  const trimmed = query.trim()
+  const rows: WorkspaceRowModel[] = []
+
+  for (const workspace of workspaces) {
+    if (variantId && workspace.variantId !== variantId) continue
+    let titleIndices: number[] = []
+    let subtitleIndices: number[] = []
+    let score = 0
+    if (trimmed) {
+      const match = matchFields(trimmed, [
+        workspace.name,
+        workspace.displayPath,
+        workspace.path,
+        workspace.remote?.label ?? ''
+      ])
+      if (!match) continue
+      titleIndices = match.indices[0] ?? []
+      subtitleIndices = match.indices[1] ?? []
+      score = match.score
+    }
+    rows.push({ workspace, titleIndices, subtitleIndices, score })
+  }
+
+  if (trimmed) rows.sort((a, b) => b.score - a.score)
+  return rows
+}
+
+export interface EditorRowModel {
+  variant: EditorVariant
+  count: number
+  lastActiveAt: number
+  titleIndices: number[]
+  subtitleIndices: number[]
+  score: number
+}
+
+/** Rows for the editor picker shown when the plugin is entered without a trigger. */
+export function buildEditorRows(
+  variants: EditorVariant[],
+  workspaces: EditorWorkspace[],
+  query: string
+): EditorRowModel[] {
+  const trimmed = query.trim()
+  const stats = new Map<string, { count: number; lastActiveAt: number }>()
+  for (const workspace of workspaces) {
+    const entry = stats.get(workspace.variantId) ?? { count: 0, lastActiveAt: 0 }
+    entry.count += 1
+    entry.lastActiveAt = Math.max(entry.lastActiveAt, workspace.lastActiveAt)
+    stats.set(workspace.variantId, entry)
+  }
+
+  const rows: EditorRowModel[] = []
+  for (const variant of variants) {
+    const stat = stats.get(variant.id) ?? { count: 0, lastActiveAt: 0 }
+    const subtitle =
+      stat.lastActiveAt > 0
+        ? `v${variant.version || '—'} · ${stat.count} 个工作区 · ${relativeTime(stat.lastActiveAt)}`
+        : `v${variant.version || '—'} · ${stat.count} 个工作区`
+    let titleIndices: number[] = []
+    let subtitleIndices: number[] = []
+    let score = 0
+    if (trimmed) {
+      const match = matchFields(trimmed, [variant.name, subtitle])
+      if (!match) continue
+      titleIndices = match.indices[0] ?? []
+      subtitleIndices = match.indices[1] ?? []
+      score = match.score
+    }
+    rows.push({
+      variant,
+      count: stat.count,
+      lastActiveAt: stat.lastActiveAt,
+      titleIndices,
+      subtitleIndices,
+      score
+    })
+  }
+
+  if (trimmed) {
+    rows.sort((a, b) => b.score - a.score || b.lastActiveAt - a.lastActiveAt)
+  } else {
+    rows.sort((a, b) => b.lastActiveAt - a.lastActiveAt || a.variant.name.localeCompare(b.variant.name, 'zh-CN'))
+  }
+  return rows
+}
+
+export function editorSubtitle(row: EditorRowModel): string {
+  const base = `v${row.variant.version || '—'} · ${row.count} 个工作区`
+  return row.lastActiveAt > 0 ? `${base} · ${relativeTime(row.lastActiveAt)}` : base
 }
 
 export interface ExternalRowModel {

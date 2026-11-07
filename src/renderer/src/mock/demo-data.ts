@@ -7,7 +7,11 @@ import type {
   ClipboardItem,
   ClipboardPluginConfig,
   CommandEntry,
+  EditorVariant,
+  EditorWorkspace,
+  GenericPluginSettingsPage,
   PluginSettingsPage,
+  VscodeLikeWorkspaceSettingsPage,
   PluginSummary,
   ShortcutInfo,
   WorkspaceSummary
@@ -160,6 +164,27 @@ export const mockPlugins: PluginSummary[] = [
     enabled: true,
     status: 'ok',
     source: 'builtin'
+  },
+  {
+    id: 'vscode-like-workspace',
+    name: 'VSCode-like Workspace',
+    description: '搜索 VS Code、Trae、Cursor 等打开过的工作区',
+    version: '1.0.0',
+    keywords: ['编辑器', '工作区', 'workspace', '项目', 'editor', 'vscode-like'],
+    iconKey: 'code',
+    searchable: true,
+    primaryAction: '打开工作区',
+    builtin: true,
+    hasSettings: true,
+    permissions: [],
+    layout: 'compact',
+    enabled: true,
+    status: 'ok',
+    source: 'builtin',
+    triggers: [
+      { keyword: 'vsc', label: 'Visual Studio Code 工作区', args: { editor: 'code' } },
+      { keyword: 'trae', label: 'Trae CN 工作区', args: { editor: 'trae-cn' } }
+    ]
   },
   {
     id: 'chrome-bookmarks',
@@ -402,7 +427,7 @@ export const mockWorkspace: WorkspaceSummary = {
 export const mockClipboardConfig: ClipboardPluginConfig = { maxItems: 10 }
 export const mockChromeConfig: ChromePluginConfig = { profile: 'Default' }
 
-export const mockClipboardSettings: PluginSettingsPage = {
+export const mockClipboardSettings: GenericPluginSettingsPage = {
   kind: 'settings',
   pluginId: 'clipboard',
   title: '剪切板设置',
@@ -426,7 +451,7 @@ export const mockClipboardSettings: PluginSettingsPage = {
   savedAt: 0
 }
 
-export const mockChromeSettings: PluginSettingsPage = {
+export const mockChromeSettings: GenericPluginSettingsPage = {
   kind: 'settings',
   pluginId: 'chrome-bookmarks',
   title: 'Chrome 书签设置',
@@ -569,3 +594,165 @@ export const mockWallpaperLight = wallpaperDataUrl(`
   <ellipse cx="620" cy="400" rx="300" ry="240" fill="url(#rose)"/>
   <ellipse cx="700" cy="925" rx="420" ry="360" fill="url(#warm)"/>
 </svg>`)
+
+/* --------------------------- VS Code-like editors -------------------------- */
+
+export const mockEditorVariants: EditorVariant[] = [
+  {
+    id: 'code',
+    name: 'Visual Studio Code',
+    version: '1.105.0',
+    dataDir: '/Users/you/Library/Application Support/Code',
+    installed: true,
+    error: null
+  },
+  {
+    id: 'trae-cn',
+    name: 'Trae CN',
+    version: '1.107.1',
+    dataDir: '/Users/you/Library/Application Support/Trae CN',
+    installed: true,
+    error: null
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    version: '0.49.6',
+    dataDir: '/Users/you/Library/Application Support/Cursor',
+    installed: true,
+    error: null
+  }
+]
+
+export const mockEditorWorkspaces: EditorWorkspace[] = [
+  {
+    id: 'ws-trae-corehr',
+    variantId: 'trae-cn',
+    name: 'corehr-fe',
+    path: '/Users/you/code/bytedance-projects/corehr-fe',
+    displayPath: '~/code/bytedance-projects/corehr-fe',
+    uri: 'file:///Users/you/code/bytedance-projects/corehr-fe',
+    kind: 'folder',
+    remote: null,
+    isOpen: true,
+    lastActiveAt: now - 2 * 60 * 1000,
+    exists: true
+  },
+  {
+    id: 'ws-trae-bpm',
+    variantId: 'trae-cn',
+    name: 'bpm-fe',
+    path: '/Users/you/code/bytedance-projects/bpm-fe',
+    displayPath: '~/code/bytedance-projects/bpm-fe',
+    uri: 'file:///Users/you/code/bytedance-projects/bpm-fe',
+    kind: 'folder',
+    remote: null,
+    isOpen: true,
+    lastActiveAt: now - 26 * 60 * 1000,
+    exists: true
+  },
+  {
+    id: 'ws-trae-remote',
+    variantId: 'trae-cn',
+    name: 'cloudide-workspace',
+    path: '/cloudide/workspace',
+    displayPath: 'devbox:/cloudide/workspace',
+    uri: 'vscode-remote://ssh-remote%2Bdevbox/cloudide/workspace',
+    kind: 'folder',
+    remote: { authority: 'ssh-remote+devbox', host: 'devbox', label: 'ssh-remote · devbox' },
+    isOpen: false,
+    lastActiveAt: now - 2 * 24 * 60 * 60 * 1000,
+    exists: true
+  },
+  {
+    id: 'ws-code-kuake',
+    variantId: 'code',
+    name: '夸克浏览器',
+    path: '/Users/you/code/side-projects/kuake-browser',
+    displayPath: '~/code/side-projects/kuake-browser',
+    uri: 'file:///Users/you/code/side-projects/kuake-browser',
+    kind: 'folder',
+    remote: null,
+    isOpen: false,
+    lastActiveAt: now - 4 * 60 * 60 * 1000,
+    exists: true
+  },
+  {
+    id: 'ws-code-plasticine',
+    variantId: 'code',
+    name: 'plasticine',
+    path: '/Users/you/code/plasticine/plasticine.code-workspace',
+    displayPath: '~/code/plasticine/plasticine.code-workspace',
+    uri: 'file:///Users/you/code/plasticine/plasticine.code-workspace',
+    kind: 'workspace',
+    remote: null,
+    isOpen: false,
+    lastActiveAt: now - 3 * 24 * 60 * 60 * 1000,
+    exists: true
+  },
+  {
+    id: 'ws-code-missing',
+    variantId: 'code',
+    name: 'legacy-admin',
+    path: '/Users/you/code/archive/legacy-admin',
+    displayPath: '~/code/archive/legacy-admin',
+    uri: 'file:///Users/you/code/archive/legacy-admin',
+    kind: 'folder',
+    remote: null,
+    isOpen: false,
+    lastActiveAt: now - 40 * 24 * 60 * 60 * 1000,
+    exists: false
+  },
+  {
+    id: 'ws-cursor-design',
+    variantId: 'cursor',
+    name: 'design-system',
+    path: '/Users/you/code/design-system',
+    displayPath: '~/code/design-system',
+    uri: 'file:///Users/you/code/design-system',
+    kind: 'folder',
+    remote: null,
+    isOpen: false,
+    lastActiveAt: now - 6 * 24 * 60 * 60 * 1000,
+    exists: true
+  }
+]
+
+export const mockEditorSettings: VscodeLikeWorkspaceSettingsPage = {
+  kind: 'vscode-like-workspace-settings',
+  pluginId: 'vscode-like-workspace',
+  title: 'VSCode-like Workspace 设置',
+  placeholder: 'VSCode-like Workspace 设置…',
+  searchable: false,
+  variants: [
+    {
+      id: 'code',
+      name: 'Visual Studio Code',
+      version: '1.105.0',
+      dataDir: '/Users/you/Library/Application Support/Code',
+      trigger: 'vsc',
+      enabled: true
+    },
+    {
+      id: 'trae-cn',
+      name: 'Trae CN',
+      version: '1.107.1',
+      dataDir: '/Users/you/Library/Application Support/Trae CN',
+      trigger: 'trae',
+      enabled: true
+    },
+    {
+      id: 'cursor',
+      name: 'Cursor',
+      version: '0.49.6',
+      dataDir: '/Users/you/Library/Application Support/Cursor',
+      trigger: '',
+      enabled: true
+    }
+  ],
+  options: { includeRemote: true, hideMissing: false, maxItems: 1000 },
+  triggerErrors: {},
+  error: null,
+  notice: null,
+  savedAt: now
+}

@@ -3,13 +3,16 @@ import {
   DESKTOP_WALLPAPER_SCHEME,
   type AppEntry,
   type BootstrapData,
+  type EditorWorkspace,
   type ChromeBookmarksPluginPage,
   type ClipboardItem,
   type ExternalPluginItem,
   type ExternalPluginPage,
   type PluginPage,
   type PluginSettingsPage,
-  type PluginSummary
+  type PluginSummary,
+  type PluginTrigger,
+  type VscodeLikeWorkspacePluginPage
 } from '@shared/types'
 import {
   clearAllAccelerator,
@@ -28,16 +31,22 @@ import { GlobalSearchView } from './GlobalSearchView'
 import { HelpOverlay } from './HelpOverlay'
 import { PluginSettingsView } from './PluginSettingsView'
 import { SearchBar } from './SearchBar'
+import { VscodeLikeWorkspaceSettingsView } from './VscodeLikeWorkspaceSettingsView'
+import { VscodeLikeWorkspaceView } from './VscodeLikeWorkspaceView'
 import {
   buildBookmarkRows,
   buildClipboardRows,
+  buildEditorRows,
   buildExternalRows,
   buildGlobalSections,
+  buildWorkspaceRows,
   flattenSections,
   type BookmarkRowModel,
   type ClipboardRowModel,
+  type EditorRowModel,
   type ExternalRowModel,
-  type GlobalResult
+  type GlobalResult,
+  type WorkspaceRowModel
 } from './helpers'
 
 const GLOBAL_PLACEHOLDER = '搜索应用、插件或命令'
@@ -62,6 +71,8 @@ export function Launcher(): React.JSX.Element {
   const [query, setQuery] = useState(initialQuery)
   const [selection, setSelection] = useState(0)
   const [activePluginId, setActivePluginId] = useState<string | null>(null)
+  const [selectedEditorId, setSelectedEditorId] = useState<string | null>(null)
+  const [activeScope, setActiveScope] = useState<{ editor: string; label?: string } | null>(null)
   const [pluginPage, setPluginPage] = useState<PluginPage | null>(null)
   const [pluginError, setPluginError] = useState<PageError | null>(null)
   const [pageLoading, setPageLoading] = useState(false)
@@ -110,8 +121,9 @@ export function Launcher(): React.JSX.Element {
 
   const isClipboard = activePluginId === 'clipboard'
   const isBookmarks = activePluginId === 'chrome-bookmarks'
+  const isVscodeLike = activePluginId === 'vscode-like-workspace'
   const isExternal =
-    activePluginId !== null && !isClipboard && !isBookmarks
+    activePluginId !== null && !isClipboard && !isBookmarks && !isVscodeLike
 
   const isPluginView = activePluginId !== null
   const globalSections = useMemo(
@@ -144,6 +156,33 @@ export function Launcher(): React.JSX.Element {
     [isExternal, externalItems, externalPage, query]
   )
 
+  const vscodePage: VscodeLikeWorkspacePluginPage | null =
+    pluginPage?.kind === 'vscode-like-workspace' ? pluginPage : null
+  const scopeEditorId = activeScope?.editor ?? selectedEditorId
+  const scopeValid = scopeEditorId
+    ? vscodePage
+      ? vscodePage.variants.some((variant) => variant.id === scopeEditorId)
+      : true
+    : false
+  const vscodeMode: 'picker' | 'list' = scopeEditorId && scopeValid ? 'list' : 'picker'
+  const activeEditorId = vscodeMode === 'list' ? scopeEditorId : null
+  const activeEditor =
+    vscodePage?.variants.find((variant) => variant.id === activeEditorId) ?? null
+  const workspaceRows = useMemo(
+    () =>
+      isVscodeLike && vscodePage && vscodeMode === 'list'
+        ? buildWorkspaceRows(vscodePage.workspaces, query, activeEditorId)
+        : [],
+    [isVscodeLike, vscodePage, vscodeMode, query, activeEditorId]
+  )
+  const editorRows = useMemo(
+    () =>
+      isVscodeLike && vscodePage && vscodeMode === 'picker'
+        ? buildEditorRows(vscodePage.variants, vscodePage.workspaces, query)
+        : [],
+    [isVscodeLike, vscodePage, vscodeMode, query]
+  )
+
   const currentCount = settingsOpen
     ? 0
     : !isPluginView
@@ -152,17 +191,29 @@ export function Launcher(): React.JSX.Element {
         ? clipboardRows.length
         : isBookmarks
           ? bookmarkRows.length
-          : externalRows.length
+          : isVscodeLike
+            ? vscodeMode === 'picker'
+              ? editorRows.length
+              : workspaceRows.length
+            : externalRows.length
 
   const currentIndex = Math.min(selection, Math.max(0, currentCount - 1))
   const selectedGlobal: GlobalResult | null = !isPluginView ? globalItems[currentIndex] ?? null : null
   const selectedClipboard: ClipboardRowModel | null = isClipboard ? clipboardRows[currentIndex] ?? null : null
   const selectedBookmark: BookmarkRowModel | null = isBookmarks ? bookmarkRows[currentIndex] ?? null : null
+  const selectedEditor: EditorRowModel | null =
+    isVscodeLike && vscodeMode === 'picker' ? editorRows[currentIndex] ?? null : null
+  const selectedWorkspace: WorkspaceRowModel | null =
+    isVscodeLike && vscodeMode === 'list' ? workspaceRows[currentIndex] ?? null : null
   const selectedExternal: ExternalRowModel | null = isExternal ? externalRows[currentIndex] ?? null : null
 
   const searchPlaceholder = (() => {
     if (closing) return GLOBAL_PLACEHOLDER
     if (settingsOpen) return settingsPage?.placeholder ?? '插件设置…'
+    if (isVscodeLike && !pluginLeaving) {
+      if (vscodeMode === 'picker') return '选择编辑器…'
+      return activeEditor ? `在 ${activeEditor.name} 中搜索工作区…` : '搜索工作区…'
+    }
     if (isPluginView && !pluginLeaving) {
       return pluginPage?.placeholder ?? (activePlugin ? `在${activePlugin.name}中搜索…` : '搜索…')
     }
@@ -238,7 +289,14 @@ export function Launcher(): React.JSX.Element {
     }
   }
 
-  const openPlugin = (pluginId: string, options?: { direct?: boolean }): void => {
+  const openPlugin = (
+    pluginId: string,
+    options?: {
+      direct?: boolean
+      scope?: { editor: string; label?: string } | null
+      initialQuery?: string
+    }
+  ): void => {
     const data = bootstrapRef.current
     const plugin = data?.plugins.find((entry) => entry.id === pluginId)
     if (!data || !plugin || !plugin.enabled) {
@@ -255,7 +313,9 @@ export function Launcher(): React.JSX.Element {
     setSettingsOpen(false)
     setSettingsPage(null)
     setPluginLeaving(false)
-    setQuery('')
+    setQuery(options?.initialQuery ?? '')
+    setActiveScope(options?.scope ?? null)
+    setSelectedEditorId(options?.scope?.editor ?? null)
     setSelection(0)
     setActivePluginId(pluginId)
     activePluginIdRef.current = pluginId
@@ -269,6 +329,37 @@ export function Launcher(): React.JSX.Element {
   const openPluginRef = useRef(openPlugin)
   openPluginRef.current = openPlugin
 
+  const triggerIndex = useMemo(() => {
+    const index = new Map<string, { pluginId: string; trigger: PluginTrigger }>()
+    for (const plugin of bootstrap?.plugins ?? []) {
+      if (!plugin.enabled) continue
+      for (const trigger of plugin.triggers ?? []) {
+        const keyword = trigger.keyword.toLowerCase()
+        if (keyword && !index.has(keyword)) index.set(keyword, { pluginId: plugin.id, trigger })
+      }
+    }
+    return index
+  }, [bootstrap?.plugins])
+
+  const handleQueryChange = (value: string): void => {
+    if (!isPluginView && !settingsOpen && !composingRef.current) {
+      const match = /^(\S+)\s+([\s\S]*)$/.exec(value)
+      if (match) {
+        const entry = triggerIndex.get(match[1].toLowerCase())
+        if (entry) {
+          const editor = entry.trigger.args?.editor
+          openPluginRef.current(entry.pluginId, {
+            scope: editor ? { editor, label: entry.trigger.label } : null,
+            initialQuery: match[2]
+          })
+          return
+        }
+      }
+    }
+    setQuery(value)
+    setSelection(0)
+  }
+
   const exitPlugin = (): void => {
     if (!activePluginId || pluginLeaving) return
     pageRequestRef.current += 1
@@ -281,6 +372,8 @@ export function Launcher(): React.JSX.Element {
     setClearArmed(false)
     if (clearTimerRef.current) window.clearTimeout(clearTimerRef.current)
     setQuery('')
+    setActiveScope(null)
+    setSelectedEditorId(null)
     setPluginLeaving(true)
     const leavingId = activePluginId
     window.setTimeout(() => {
@@ -292,6 +385,8 @@ export function Launcher(): React.JSX.Element {
       setExternalItems(null)
       setPluginLeaving(false)
       setSelection(0)
+      setActiveScope(null)
+      setSelectedEditorId(null)
       focusInput()
     }, 240)
   }
@@ -367,6 +462,28 @@ export function Launcher(): React.JSX.Element {
     await closeLauncher(false)
   }
 
+  const runWorkspaceActivation = async (
+    workspace: EditorWorkspace,
+    newWindow: boolean
+  ): Promise<void> => {
+    const result = await api.openEditorWorkspace(workspace.id, { newWindow })
+    if (!result.ok) {
+      showToast({ message: result.error ?? '无法打开工作区', tone: 'danger' })
+      return
+    }
+    if (result.toast) showToast(result.toast)
+    await closeLauncher(false)
+  }
+
+  const runWorkspaceReveal = async (workspace: EditorWorkspace): Promise<void> => {
+    const result = await api.revealEditorWorkspace(workspace.id)
+    if (!result.ok) {
+      showToast({ message: result.error ?? '无法定位工作区', tone: 'danger' })
+      return
+    }
+    if (result.toast) showToast(result.toast)
+  }
+
   const runExternalActivation = async (row: ExternalRowModel, alt: boolean): Promise<void> => {
     if (!activePluginId) return
     const result = await api.activateExternal(activePluginId, row.id, { alt })
@@ -384,7 +501,10 @@ export function Launcher(): React.JSX.Element {
       const item = selectedGlobal
       if (!item) return
       if (item.kind === 'plugin') {
-        openPlugin(item.refId)
+        const editor = item.scope?.editor
+        openPlugin(item.refId, {
+          scope: editor ? { editor, label: item.scopeLabel } : null
+        })
         return
       }
       if (item.kind === 'app') {
@@ -405,6 +525,21 @@ export function Launcher(): React.JSX.Element {
       return
     }
 
+    if (isVscodeLike) {
+      if (vscodeMode === 'picker') {
+        if (selectedEditor) {
+          setSelectedEditorId(selectedEditor.variant.id)
+          setQuery('')
+          setSelection(0)
+          focusInput()
+        }
+        return
+      }
+      if (selectedWorkspace) {
+        void runWorkspaceActivation(selectedWorkspace.workspace, alt)
+      }
+      return
+    }
     if (isClipboard) {
       if (selectedClipboard) void runClipboardActivation(selectedClipboard.item.id, alt)
       return
@@ -946,6 +1081,13 @@ export function Launcher(): React.JSX.Element {
           return
         }
         event.preventDefault()
+        if (isVscodeLike && vscodeMode === 'list' && !activeScope) {
+          setSelectedEditorId(null)
+          setQuery('')
+          setSelection(0)
+          focusInput()
+          return
+        }
         // The clipboard hotkey is a direct shortcut into the plugin, so esc
         // should close the launcher instead of peeling back to the global
         // search page first. Entering from the global page still returns there.
@@ -987,6 +1129,14 @@ export function Launcher(): React.JSX.Element {
       event.preventDefault()
       toggleClear()
       return
+    }
+
+    if (key === 'Enter' && primaryModifier && !event.altKey && !event.shiftKey) {
+      if (isVscodeLike && vscodeMode === 'list' && selectedWorkspace) {
+        event.preventDefault()
+        void runWorkspaceReveal(selectedWorkspace.workspace)
+        return
+      }
     }
 
     if (key === 'Enter') {
@@ -1032,6 +1182,20 @@ export function Launcher(): React.JSX.Element {
       ]
     }
     if (isPluginView && !pluginLeaving) {
+      if (isVscodeLike) {
+        if (vscodeMode === 'picker') {
+          return [
+            { keys: ['↵'], label: '选择编辑器' },
+            { keys: ['esc'], label: '退出' }
+          ]
+        }
+        return [
+          { keys: ['↵'], label: '打开' },
+          { keys: [platform === 'darwin' ? '⌥' : 'Alt', '↵'], label: '新窗口' },
+          { keys: [primaryActionModifier(platform), '↵'], label: '显示位置' },
+          { keys: ['esc'], label: activeScope ? '退出' : '返回编辑器' }
+        ]
+      }
       if (isClipboard) {
         return [
           { keys: ['↵'], label: '置顶并关闭' },
@@ -1105,6 +1269,17 @@ export function Launcher(): React.JSX.Element {
         )
       }
       if (!settingsPage) return <div />
+      if (settingsPage.kind === 'vscode-like-workspace-settings') {
+        return (
+          <VscodeLikeWorkspaceSettingsView
+            key={settingsPage.pluginId}
+            page={settingsPage}
+            onBack={backToPlugin}
+            onSaved={(page) => setSettingsPage(page)}
+            onError={(message) => showToast({ message, tone: 'danger' })}
+          />
+        )
+      }
       return (
         <PluginSettingsView
           key={settingsPage.pluginId}
@@ -1189,6 +1364,44 @@ export function Launcher(): React.JSX.Element {
       )
     }
 
+    if (isVscodeLike) {
+      return (
+        <VscodeLikeWorkspaceView
+          page={vscodePage}
+          mode={vscodeMode}
+          editorRows={editorRows}
+          workspaceRows={workspaceRows}
+          activeVariant={activeEditor}
+          query={query}
+          selectedIndex={currentIndex}
+          loading={pageLoading}
+          canGoBack={vscodeMode === 'list' && !activeScope}
+          onHover={setCurrentSelection}
+          onActivate={(index) => {
+            if (vscodeMode === 'picker') {
+              const row = editorRows[index]
+              if (!row) return
+              setSelectedEditorId(row.variant.id)
+              setQuery('')
+              setSelection(0)
+              focusInput()
+              return
+            }
+            const row = workspaceRows[index]
+            if (row) void runWorkspaceActivation(row.workspace, false)
+          }}
+          onBack={() => {
+            setSelectedEditorId(null)
+            setQuery('')
+            setSelection(0)
+            focusInput()
+          }}
+          onSettings={() => void openPluginSettings()}
+          onRetry={retryPlugin}
+        />
+      )
+    }
+
     if (externalPage) {
       return (
         <ExternalPluginView
@@ -1261,10 +1474,7 @@ export function Launcher(): React.JSX.Element {
               readOnly={readOnly}
               update={updateState}
               settingsShortcut={settingsShortcut}
-              onChange={(value) => {
-                setQuery(value)
-                setSelection(0)
-              }}
+              onChange={handleQueryChange}
               onClear={() => {
                 setQuery('')
                 setSelection(0)
@@ -1309,7 +1519,12 @@ export function Launcher(): React.JSX.Element {
                       setSelection(index)
                       const item = globalItems[index]
                       if (!item) return
-                      if (item.kind === 'plugin') openPlugin(item.refId)
+                      if (item.kind === 'plugin') {
+                        const editor = item.scope?.editor
+                        openPlugin(item.refId, {
+                          scope: editor ? { editor, label: item.scopeLabel } : null
+                        })
+                      }
                       else if (item.kind === 'app') {
                         void api.launchApp(item.refId).then(async (result) => {
                           if (!result.ok) showToast({ message: result.error ?? '启动应用失败', tone: 'danger' })
