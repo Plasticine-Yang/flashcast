@@ -62,6 +62,7 @@ jobs:
         run: pnpm exec electron-builder ${{ matrix.args }} --publish never
         env:
           # 仓库没有 macOS / Windows 开发者证书，显式跳过签名发现，避免打包失败。
+          # macOS 产物随后由 afterPack 钩子补 ad-hoc 签名（否则 arm64 上启动即退出）。
           CSC_IDENTITY_AUTO_DISCOVERY: false
       - uses: actions/upload-artifact@v7
         with:

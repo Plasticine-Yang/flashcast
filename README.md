@@ -129,7 +129,7 @@ pnpm release:major   # 0.1.0 → 1.0.0
 node scripts/release.mjs 1.4.0   # 指定版本
 ```
 
-脚本要求工作区干净且位于 `main` 分支。tag 必须与 `package.json` 版本一致，否则 release 流水线在第一步就会失败。产物未做代码签名：macOS 首次打开需右键「打开」，Windows SmartScreen 会提示「仍要运行」。PR / 合入 `main` 会触发 `.github/workflows/ci.yml` 跑类型检查、测试与构建。
+脚本要求工作区干净且位于 `main` 分支。tag 必须与 `package.json` 版本一致，否则 release 流水线在第一步就会失败。仓库没有 Apple / Windows 开发者证书：macOS 产物由 `scripts/after-pack.mjs` 补 ad-hoc 签名（缺签名时 arm64 上无法启动），但不做公证，首次打开仍需右键「打开」；Windows SmartScreen 会提示「仍要运行」。PR / 合入 `main` 会触发 `.github/workflows/ci.yml` 跑类型检查、测试与构建。
 
 ## 快捷键
 
@@ -273,7 +273,7 @@ module.exports = {
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。
 - **视频封面**：若系统安装 `ffmpeg`，截取首帧作为封面；否则使用内置设计封面。视频不播放。
 - **应用发现**：Linux 读取 `.desktop`；macOS 扫描 `/Applications` 等；Windows 扫描开始菜单快捷方式。部分 UWP/特殊打包应用可能不出现。
-- **自动更新**：只支持 GitHub Release 中列出的产物。macOS 用 zip 原地替换 `.app`（替换前备份、启动失败自动回滚），Windows 静默运行 NSIS 安装器，Linux AppImage 原地替换并重启；`.dmg` / `.deb` 因为需要系统安装器，下载后交给系统打开。产物未签名，首次打开仍需 Gatekeeper / SmartScreen 确认；开发构建不提供就地安装。
+- **自动更新**：只支持 GitHub Release 中列出的产物。macOS 用 zip 原地替换 `.app`（替换前备份、启动失败自动回滚），Windows 静默运行 NSIS 安装器，Linux AppImage 原地替换并重启；`.dmg` / `.deb` 因为需要系统安装器，下载后交给系统打开。产物只带 ad-hoc 签名、未做公证，首次启动仍需 Gatekeeper / SmartScreen 确认；开发构建不提供就地安装。
 - **菜单栏图标**：macOS 使用 18pt 模板图（`@2x` 36px），与系统状态栏图标等高；Linux/Windows 继续使用 64px 彩色托盘图。
 - **结果分组**：所有分组结果均可滚动访问，不做隐藏式分页，以保证键盘可达性。
 - **开发预览**：`pnpm preview:ui` 使用 mock bridge；它不会访问真实剪贴板/Chrome/Git。

@@ -18,6 +18,9 @@ extraResources:
       - video-cover.png
 asarUnpack:
   - resources/**
+# 仓库没有 Apple 证书，产物默认不带有效签名；arm64 上未签名的 bundle 会被 amfid 拒绝、
+# 启动即退出，所以打包后统一补 ad-hoc 签名（已有有效签名则跳过）。
+afterPack: scripts/after-pack.mjs
 mac:
   category: public.app-category.productivity
   icon: build/icon.png
