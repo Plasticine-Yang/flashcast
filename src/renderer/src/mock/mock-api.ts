@@ -33,7 +33,7 @@ import {
   mockClipboardSettings,
   mockEditorSettings,
   mockEditorVariants,
-  mockEditorWorkspaces,
+  mockEditorWorkspaces as demoEditorWorkspaces,
   mockFavicons,
   mockPlugins,
   mockShortcuts,
@@ -60,6 +60,7 @@ export function createMockApi(): FlashcastApi {
   let chromeProfile = 'Default'
   let editorVariants = mockEditorSettings.variants.map((variant) => ({ ...variant }))
   let editorOptions = { ...mockEditorSettings.options }
+  let mockEditorWorkspaces = demoEditorWorkspaces.map((workspace) => ({ ...workspace }))
 
   /* ------------------------------- updates ------------------------------- */
 
@@ -280,11 +281,30 @@ export function createMockApi(): FlashcastApi {
         args: { editor: variant.id }
       }))
 
+  const editorWorkspaces = (variantId: string): EditorWorkspace[] =>
+    mockEditorWorkspaces.filter((workspace) => workspace.variantId === variantId)
+
+  const editorStats = (): VscodeLikeWorkspaceSettingsPage['workspaceStats'] =>
+    Object.fromEntries(
+      editorVariants.map((variant) => {
+        const list = editorWorkspaces(variant.id)
+        return [
+          variant.id,
+          {
+            total: list.length,
+            missing: list.filter((workspace) => !workspace.exists).length,
+            running: variant.id === 'trae-cn'
+          }
+        ]
+      })
+    )
+
   const editorSettingsPage = (): VscodeLikeWorkspaceSettingsPage => ({
     ...mockEditorSettings,
     variants: editorVariants.map((variant) => ({ ...variant })),
     options: { ...editorOptions },
     triggerErrors: {},
+    workspaceStats: editorStats(),
     savedAt: Date.now()
   })
 
@@ -432,6 +452,45 @@ export function createMockApi(): FlashcastApi {
     openChromeBookmark: async () => ({ ok: true, close: true }),
     openEditorWorkspace: async () => ({ ok: true, close: true }),
     revealEditorWorkspace: async () => ({ ok: true }),
+    getEditorWorkspaces: async () =>
+      editorVariants.map((variant) => ({
+        variantId: variant.id,
+        name: variant.name,
+        running: variant.id === 'trae-cn',
+        workspaces: editorWorkspaces(variant.id).map((workspace) => ({ ...workspace })),
+        error: null
+      })),
+    deleteEditorWorkspaces: async (variantId, ids) => {
+      const wanted = new Set(ids)
+      const removed = mockEditorWorkspaces.filter(
+        (workspace) => workspace.variantId === variantId && wanted.has(workspace.id)
+      )
+      if (removed.length === 0) {
+        return { ok: false, deleted: 0, running: false, backupDir: null, error: '没有可删除的工作区' }
+      }
+      if (variantId === 'trae-cn') {
+        return {
+          ok: false,
+          deleted: 0,
+          running: true,
+          backupDir: null,
+          error: 'Trae CN 正在运行，请先退出再删除'
+        }
+      }
+      mockEditorWorkspaces = mockEditorWorkspaces.filter(
+        (workspace) => !(workspace.variantId === variantId && wanted.has(workspace.id))
+      )
+      return {
+        ok: true,
+        deleted: removed.length,
+        running: false,
+        backupDir: '/Users/you/.flashcast/state/editor-backups/code-1700000000000',
+        toast: {
+          message: `已从 ${variantId} 历史中删除 ${removed.length} 个工作区`,
+          tone: 'success'
+        }
+      }
+    },
     getFavicons: async (domains) => mockFavicons(domains),
     openSettings: noop,
     hideLauncher: () => {

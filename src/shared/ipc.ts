@@ -22,6 +22,8 @@ export const IPC = {
 
   openEditorWorkspace: 'editor:open-workspace',
   revealEditorWorkspace: 'editor:reveal-workspace',
+  editorWorkspaces: 'editor:workspaces',
+  deleteEditorWorkspaces: 'editor:delete-workspaces',
 
   openSettings: 'launcher:open-settings',
   hideLauncher: 'launcher:hide',

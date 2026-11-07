@@ -1274,6 +1274,7 @@ export function Launcher(): React.JSX.Element {
           <VscodeLikeWorkspaceSettingsView
             key={settingsPage.pluginId}
             page={settingsPage}
+            query={query}
             onBack={backToPlugin}
             onSaved={(page) => setSettingsPage(page)}
             onError={(message) => showToast({ message, tone: 'danger' })}

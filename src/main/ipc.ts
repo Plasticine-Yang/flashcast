@@ -103,6 +103,15 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
   ipcMain.handle(IPC.revealEditorWorkspace, async (_event, workspaceId: unknown) =>
     application.revealEditorWorkspace(requireString(workspaceId, '工作区 id'))
   )
+  ipcMain.handle(IPC.editorWorkspaces, async () => application.getEditorWorkspaces())
+  ipcMain.handle(
+    IPC.deleteEditorWorkspaces,
+    async (_event, variantId: unknown, ids: unknown) =>
+      application.deleteEditorWorkspaces(
+        requireString(variantId, '编辑器 id'),
+        Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
+      )
+  )
 
   ipcMain.handle(IPC.openSettings, async () => {
     application.openSettings()

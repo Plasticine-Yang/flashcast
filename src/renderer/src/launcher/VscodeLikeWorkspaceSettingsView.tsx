@@ -1,11 +1,13 @@
-import { AlertTriangle, Check, Code2, RefreshCw, Save } from 'lucide-react'
+import { AlertTriangle, Check, Code2, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type {
+  EditorWorkspaceSnapshot,
   PluginSettingsPage,
   VscodeLikeWorkspaceOptions,
   VscodeLikeWorkspaceSettingsPage
 } from '@shared/types'
 import { api } from '../bridge'
+import { WorkspaceCleanupView, type CleanupTarget } from './WorkspaceCleanupView'
 
 interface VariantDraft {
   enabled: boolean
@@ -23,11 +25,13 @@ function draftsFromPage(page: VscodeLikeWorkspaceSettingsPage): Record<string, V
 
 export function VscodeLikeWorkspaceSettingsView({
   page,
+  query,
   onBack,
   onSaved,
   onError
 }: {
   page: VscodeLikeWorkspaceSettingsPage
+  query: string
   onBack: () => void
   onSaved: (page: PluginSettingsPage) => void
   onError: (message: string) => void
@@ -39,6 +43,76 @@ export function VscodeLikeWorkspaceSettingsView({
   const [rescanning, setRescanning] = useState(false)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [snapshots, setSnapshots] = useState<EditorWorkspaceSnapshot[] | null>(null)
+  const [cleanupId, setCleanupId] = useState<string | null>(null)
+  const [armedMissing, setArmedMissing] = useState<string | null>(null)
+  const [cleanupBusy, setCleanupBusy] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void api
+      .getEditorWorkspaces()
+      .then((result) => {
+        if (!cancelled) setSnapshots(result)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [page.savedAt])
+
+  useEffect(() => {
+    if (!armedMissing) return
+    const timer = window.setTimeout(() => setArmedMissing(null), 4000)
+    return () => window.clearTimeout(timer)
+  }, [armedMissing])
+
+  const refreshAfterDelete = async (): Promise<void> => {
+    const [next, settings] = await Promise.all([
+      api.getEditorWorkspaces(),
+      api.getPluginSettings(page.pluginId)
+    ])
+    setSnapshots(next)
+    if (settings.kind === 'vscode-like-workspace-settings') onSaved(settings)
+  }
+
+  const cleanupTarget: CleanupTarget | null = cleanupId
+    ? (() => {
+        const snapshot = snapshots?.find((entry) => entry.variantId === cleanupId)
+        const variant = page.variants.find((entry) => entry.id === cleanupId)
+        if (!snapshot || !variant) return null
+        return {
+          variantId: cleanupId,
+          name: variant.name,
+          running: snapshot.running,
+          workspaces: snapshot.workspaces
+        }
+      })()
+    : null
+
+  const deleteMissing = async (variantId: string): Promise<void> => {
+    const snapshot = snapshots?.find((entry) => entry.variantId === variantId)
+    const missing = (snapshot?.workspaces ?? []).filter((workspace) => !workspace.exists)
+    if (missing.length === 0) return
+    if (armedMissing !== variantId) {
+      setArmedMissing(variantId)
+      return
+    }
+    setArmedMissing(null)
+    setCleanupBusy(variantId)
+    try {
+      const result = await api.deleteEditorWorkspaces(
+        variantId,
+        missing.map((workspace) => workspace.id)
+      )
+      if (!result.ok) onError(result.error ?? '删除失败')
+      else await refreshAfterDelete()
+    } catch (error) {
+      onError((error as Error).message)
+    } finally {
+      setCleanupBusy(null)
+    }
+  }
 
   useEffect(() => {
     setDrafts(draftsFromPage(page))
@@ -135,6 +209,22 @@ export function VscodeLikeWorkspaceSettingsView({
   }
 
   const hasVariants = page.variants.length > 0
+  const statsFor = (id: string) => page.workspaceStats[id] ?? { total: 0, missing: 0, running: false }
+
+  if (cleanupTarget) {
+    return (
+      <WorkspaceCleanupView
+        target={cleanupTarget}
+        query={query}
+        onBack={() => setCleanupId(null)}
+        onDeleted={async () => {
+          await refreshAfterDelete()
+          setCleanupId(null)
+        }}
+        onError={onError}
+      />
+    )
+  }
 
   return (
     <div className="fc-plugin-settings fc-workspace-settings">
@@ -267,6 +357,66 @@ export function VscodeLikeWorkspaceSettingsView({
             </div>
           </div>
         )}
+
+        {hasVariants ? (
+          <>
+            <div className="fc-settings-section-title">工作区清理</div>
+            <div className="fc-editor-settings-list">
+              {page.variants.map((variant) => {
+                const stats = statsFor(variant.id)
+                const armed = armedMissing === variant.id
+                const busy = cleanupBusy === variant.id
+                return (
+                  <section className="fc-cleanup-setting" key={variant.id}>
+                    <div className="fc-cleanup-setting-main">
+                      <span className="fc-cleanup-setting-name">{variant.name}</span>
+                      <span className="fc-cleanup-setting-meta">
+                        {stats.total} 个工作区
+                        {stats.missing > 0 ? ` · ${stats.missing} 个路径不存在` : ''}
+                      </span>
+                      {stats.running ? (
+                        <span className="fc-cleanup-warning">
+                          <AlertTriangle size={12} strokeWidth={1.75} aria-hidden="true" />
+                          编辑器正在运行，退出后才能删除
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="fc-cleanup-setting-actions">
+                      <button
+                        type="button"
+                        className="fc-btn"
+                        disabled={stats.total === 0}
+                        onClick={() => {
+                          setArmedMissing(null)
+                          setCleanupId(variant.id)
+                        }}
+                      >
+                        选择并删除…
+                      </button>
+                      <button
+                        type="button"
+                        className={`fc-btn${armed ? ' fc-btn--danger' : ' fc-btn--ghost'}`}
+                        disabled={stats.missing === 0 || busy}
+                        onClick={() => void deleteMissing(variant.id)}
+                      >
+                        {busy ? (
+                          <span className="fc-spinner" aria-hidden="true" />
+                        ) : (
+                          <Trash2 size={13} strokeWidth={1.75} aria-hidden="true" />
+                        )}
+                        {armed ? '再按一次确认' : `删除不存在的 (${stats.missing})`}
+                      </button>
+                    </div>
+                  </section>
+                )
+              })}
+            </div>
+            <p className="fc-field-description fc-cleanup-note">
+              只从编辑器历史中移除记录，不会删除磁盘上的项目目录；被移除的编辑器状态会移入工作区的
+              <code>state/editor-backups</code>，可以手动恢复。
+            </p>
+          </>
+        ) : null}
 
         <div className="fc-settings-section-title">通用</div>
         <div className="fc-fields">

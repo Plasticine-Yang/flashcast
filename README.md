@@ -35,7 +35,7 @@
 - **内置插件**：
   - `剪切板`：文本 / 图片 / 视频 / 音乐；右侧预览常驻、切换选中原位更新；回车置顶并关闭；`Alt/Option+Enter` 粘贴；`Ctrl+Backspace` 删除；二次确认清空。通过全局快捷键直接进入时，`Esc` 直接关闭启动器；从主页面进入时先返回主页面。
   - `Chrome 书签`：自动发现 Chrome Profile、读书架、favicon、文件夹 chip、在 Chrome 中打开；同时支持本地 `Bookmarks` 与登录 Google 账户后的 `AccountBookmarks`，即使 Profile 尚未生成书签文件也能识别。
-  - `VSCode-like Workspace`：索引 VS Code、Trae、Cursor、Windsurf、VSCodium 等打开过的工作区；按 `product.json` 识别产品，读取 `state.vscdb` 最近列表、打开窗口与 `workspaceStorage` 合并去重；用该产品自己的 CLI 打开（不经过 `vscode://` 协议），支持远程工作区与「新窗口」打开。触发词在插件设置页按编辑器配置，默认留空。
+  - `VSCode-like Workspace`：索引 VS Code、Trae、Cursor、Windsurf、VSCodium 等打开过的工作区；按 `product.json` 识别产品，读取 `state.vscdb` 最近列表、打开窗口与 `workspaceStorage` 合并去重；用该产品自己的 CLI 打开（不经过 `vscode://` 协议），支持远程工作区与「新窗口」打开。触发词在插件设置页按编辑器配置，默认留空；清理区支持多选删除历史与一键删除路径已失效的记录，只动编辑器历史、不删项目目录，被移除的编辑器状态会移入备份目录。
 - **设置入口**：启动器顶栏右侧的齿轮，或直接按 `⌘,` / `Ctrl+,`；全局搜索里的「打开设置」命令保留。
 - **设置窗口**：通用（主题、开机自启、语言）、插件管理、工作区、快捷键录制、关于与许可。
 - **自动更新**：读取 GitHub Releases 检查新版本；发现新版本后，启动器顶栏或 设置 → 关于 都能一键下载，校验 `SHA256SUMS.txt` 后重启安装。开发构建只检查、不就地安装。
@@ -260,7 +260,7 @@ module.exports = {
 
 - 剪切板历史、图片、插件设置、工作区状态全部保存在本地工作区；没有遥测。
 - 启动器的壁纸磨砂只在本机读取系统壁纸路径（GNOME `gsettings` / Windows 注册表），用于生成模糊背景，不写入磁盘、不上传。
-- `VSCode-like Workspace` 只读本地编辑器数据目录，不联网；启动的是检测到的编辑器可执行文件，参数以数组传递，不经过 shell。
+- `VSCode-like Workspace` 读取本地编辑器数据目录，不联网；启动的是检测到的编辑器可执行文件，参数以数组传递，不经过 shell。清理历史时只在编辑器关闭状态下改写其 `state.vscdb` / `storage.json`，改写前备份到工作区的 `state/editor-backups`。
 - Chrome 书签插件的 favicon 会向 `https://www.google.com/s2/favicons` 请求，结果缓存在 `state/favicons`；离线或企业网络阻断时自动使用本地 `globe` 图标。
 - 插件安装/更新会访问你输入的 Git 地址。
 - 检查更新会访问 `https://api.github.com/repos/Plasticine-Yang/flashcast/releases/latest`（可用 `FLASHCAST_UPDATE_FEED` 或 `FLASHCAST_UPDATE_REPO` 覆盖），下载安装包走该 Release 的资产地址；除此之外应用自身不访问其他网络。

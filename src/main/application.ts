@@ -9,6 +9,8 @@ import type {
   AppPrefs,
   BootstrapData,
   CommandEntry,
+  EditorCleanupResult,
+  EditorWorkspaceSnapshot,
   ExternalPluginItem,
   FlashcastEvents,
   GlobalHotkeys,
@@ -377,6 +379,19 @@ export class FlashcastApplication {
 
   async revealEditorWorkspace(workspaceId: string): Promise<ActionResult> {
     const result = await this.plugins.revealEditorWorkspace(workspaceId)
+    if (result.toast) this.broadcast(IPC.toast, result.toast)
+    return result
+  }
+
+  async getEditorWorkspaces(): Promise<EditorWorkspaceSnapshot[]> {
+    return this.plugins.getEditorWorkspaceSnapshots()
+  }
+
+  async deleteEditorWorkspaces(
+    variantId: string,
+    ids: string[]
+  ): Promise<EditorCleanupResult> {
+    const result = await this.plugins.deleteEditorWorkspaces(variantId, ids)
     if (result.toast) this.broadcast(IPC.toast, result.toast)
     return result
   }

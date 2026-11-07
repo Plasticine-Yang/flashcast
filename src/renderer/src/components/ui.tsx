@@ -110,6 +110,26 @@ const ICONS: Record<string, LucideIcon> = {
   folder: FolderGit2
 }
 
+/**
+ * Scrolls one virtualised row into view without touching ancestor scroll
+ * containers. `scrollIntoView()` bubbles up and shifts the launcher's view
+ * shell, which detaches the search bar from the panel.
+ */
+export function scrollRowIntoView(container: HTMLElement | null, index: number): void {
+  if (!container) return
+  const row = container.querySelector<HTMLElement>(`[data-index="${index}"]`)
+  if (!row) return
+  const rowRect = row.getBoundingClientRect()
+  const boxRect = container.getBoundingClientRect()
+  const delta = rowRect.top - boxRect.top
+  if (delta < 0) {
+    container.scrollTop += delta
+    return
+  }
+  const overflow = delta + rowRect.height - container.clientHeight
+  if (overflow > 0) container.scrollTop += overflow
+}
+
 export function Glyph({
   name,
   src,

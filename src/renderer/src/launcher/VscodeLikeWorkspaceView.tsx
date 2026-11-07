@@ -2,7 +2,7 @@ import { AlertTriangle, Code2, FolderGit2, RefreshCw, SearchX, Settings } from '
 import { useEffect, useRef } from 'react'
 import { relativeTime } from '@shared/time'
 import type { EditorVariant, VscodeLikeWorkspacePluginPage } from '@shared/types'
-import { Glyph, Highlight, Keycap, SkeletonRows, VirtualList } from '../components/ui'
+import { Glyph, Highlight, Keycap, SkeletonRows, VirtualList, scrollRowIntoView } from '../components/ui'
 import { editorSubtitle, type EditorRowModel, type WorkspaceRowModel } from './helpers'
 
 export function VscodeLikeWorkspaceView({
@@ -42,8 +42,7 @@ export function VscodeLikeWorkspaceView({
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    const node = scrollRef.current?.querySelector<HTMLElement>(`[data-index="${selectedIndex}"]`)
-    if (node) node.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    scrollRowIntoView(scrollRef.current, selectedIndex)
   }, [selectedIndex, rowsCount])
 
   const title = mode === 'picker' ? 'VSCode-like Workspace' : activeVariant?.name ?? '工作区'

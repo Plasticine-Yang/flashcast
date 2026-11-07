@@ -241,6 +241,14 @@ export class PluginService {
     return this.editors.reveal(workspaceId)
   }
 
+  async getEditorWorkspaceSnapshots() {
+    return this.editors.getWorkspaceSnapshots()
+  }
+
+  async deleteEditorWorkspaces(variantId: string, ids: string[]) {
+    return this.editors.deleteWorkspaces(variantId, ids)
+  }
+
   async invalidateEditors(): Promise<void> {
     this.editors.invalidate()
   }

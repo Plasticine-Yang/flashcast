@@ -266,6 +266,12 @@ export interface VscodeLikeWorkspaceOptions {
   maxItems: number
 }
 
+export interface EditorWorkspaceStats {
+  total: number
+  missing: number
+  running: boolean
+}
+
 export interface VscodeLikeWorkspaceSettingsPage {
   kind: 'vscode-like-workspace-settings'
   pluginId: string
@@ -275,9 +281,28 @@ export interface VscodeLikeWorkspaceSettingsPage {
   variants: EditorVariantSettings[]
   options: VscodeLikeWorkspaceOptions
   triggerErrors: Record<string, string>
+  workspaceStats: Record<string, EditorWorkspaceStats>
   error: string | null
   notice: string | null
   savedAt?: number
+}
+
+/** Workspace list for one editor, used by the cleanup view. */
+export interface EditorWorkspaceSnapshot {
+  variantId: string
+  name: string
+  running: boolean
+  workspaces: EditorWorkspace[]
+  error: string | null
+}
+
+export interface EditorCleanupResult {
+  ok: boolean
+  deleted: number
+  running: boolean
+  backupDir: string | null
+  error?: string
+  toast?: ToastMessage
 }
 
 export type PluginPage =
@@ -491,6 +516,8 @@ export interface FlashcastApi {
     options: { newWindow: boolean }
   ): Promise<ActionResult>
   revealEditorWorkspace(workspaceId: string): Promise<ActionResult>
+  getEditorWorkspaces(): Promise<EditorWorkspaceSnapshot[]>
+  deleteEditorWorkspaces(variantId: string, ids: string[]): Promise<EditorCleanupResult>
   getFavicons(domains: string[]): Promise<Record<string, string>>
   openSettings(): Promise<void>
   hideLauncher(options?: { paste?: boolean }): void

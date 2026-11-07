@@ -1,9 +1,13 @@
 import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type {
   ActionResult,
+  EditorCleanupResult,
   EditorVariant,
   EditorVariantSettings,
   EditorWorkspace,
+  EditorWorkspaceSnapshot,
+  EditorWorkspaceStats,
   PlatformId,
   PluginTrigger,
   VscodeLikeWorkspaceOptions,
@@ -26,6 +30,7 @@ import {
 import { detectVariants, type DetectOptions, type VariantRecord } from './detect'
 import { indexVariant } from './indexer'
 import { launchWorkspace, revealWorkspace } from './open'
+import { pruneWorkspaces, runningVariants } from './prune'
 
 const PLUGIN_ID = VSCODE_LIKE_WORKSPACE_MANIFEST.id
 const VARIANT_CACHE_MS = 5_000
@@ -72,6 +77,7 @@ export class VscodeLikeWorkspaceService {
   private triggers: PluginTrigger[] = []
   private indexCache = new Map<string, IndexCacheEntry>()
   private workspaceMap = new Map<string, EditorWorkspace>()
+  private workspaceStats: Record<string, EditorWorkspaceStats> = {}
   private variantMap = new Map<string, VariantRecord>()
 
   constructor(
@@ -156,26 +162,34 @@ export class VscodeLikeWorkspaceService {
     return this.variantCache.filter((variant) => this.variantConfig(variant.id).enabled)
   }
 
+  private async index(
+    variant: VariantRecord,
+    overrides: { includeRemote?: boolean; hideMissing?: boolean } = {},
+    force = false
+  ): Promise<IndexCacheEntry> {
+    const entry = this.indexCache.get(variant.id)
+    if (!force && entry && Date.now() - entry.at <= INDEX_CACHE_MS) return entry
+
+    const result = await indexVariant(variant, {
+      platform: this.platform,
+      home: homedir(),
+      includeRemote: overrides.includeRemote ?? this.configCache.includeRemote,
+      hideMissing: overrides.hideMissing ?? this.configCache.hideMissing,
+      maxItems: this.configCache.maxItems
+    })
+    const next: IndexCacheEntry = { at: Date.now(), ...result }
+    this.indexCache.set(variant.id, next)
+    return next
+  }
+
   async getPage(): Promise<VscodeLikeWorkspacePluginPage> {
     await this.refreshVariants(false)
     const variants = this.enabledVariants()
     const workspaces: EditorWorkspace[] = []
     const errors: Array<{ variantId: string; message: string }> = []
-    const now = Date.now()
 
     for (const variant of variants) {
-      let entry = this.indexCache.get(variant.id)
-      if (!entry || now - entry.at > INDEX_CACHE_MS) {
-        const result = await indexVariant(variant, {
-          platform: this.platform,
-          home: homedir(),
-          includeRemote: this.configCache.includeRemote,
-          hideMissing: this.configCache.hideMissing,
-          maxItems: this.configCache.maxItems
-        })
-        entry = { at: Date.now(), ...result }
-        this.indexCache.set(variant.id, entry)
-      }
+      const entry = await this.index(variant)
       if (entry.error) errors.push({ variantId: variant.id, message: entry.error })
       workspaces.push(...entry.workspaces)
     }
@@ -213,7 +227,27 @@ export class VscodeLikeWorkspaceService {
     } else {
       await this.refreshVariants(false)
     }
+    this.workspaceStats = await this.collectStats()
     return this.buildSettingsPage()
+  }
+
+  /**
+   * Counts for the cleanup section. Uses the *unfiltered* view (missing paths
+   * and remote workspaces included) because that is exactly what the user is
+   * about to clean up.
+   */
+  private async collectStats(): Promise<Record<string, EditorWorkspaceStats>> {
+    const stats: Record<string, EditorWorkspaceStats> = {}
+    const running = await runningVariants(this.variantCache)
+    for (const variant of this.variantCache) {
+      const entry = await this.index(variant, { includeRemote: true, hideMissing: false }, true)
+      stats[variant.id] = {
+        total: entry.workspaces.length,
+        missing: entry.workspaces.filter((workspace) => !workspace.exists).length,
+        running: running.has(variant.id)
+      }
+    }
+    return stats
   }
 
   private buildSettingsPage(
@@ -247,6 +281,7 @@ export class VscodeLikeWorkspaceService {
       variants,
       options,
       triggerErrors,
+      workspaceStats: this.workspaceStats,
       error: null,
       notice:
         variants.length === 0
@@ -318,6 +353,97 @@ export class VscodeLikeWorkspaceService {
     this.rebuildTriggers()
 
     return { page: this.buildSettingsPage(), savedAt: Date.now() }
+  }
+
+  /** Full workspace lists for the cleanup view, including disabled editors. */
+  async getWorkspaceSnapshots(): Promise<EditorWorkspaceSnapshot[]> {
+    await this.refreshVariants(false)
+    const running = await runningVariants(this.variantCache)
+    const snapshots: EditorWorkspaceSnapshot[] = []
+
+    for (const variant of this.variantCache) {
+      const entry = await this.index(variant, { includeRemote: true, hideMissing: false }, true)
+      snapshots.push({
+        variantId: variant.id,
+        name: variant.name,
+        running: running.has(variant.id),
+        workspaces: entry.workspaces,
+        error: entry.error
+      })
+    }
+
+    this.workspaceMap = new Map(
+      snapshots.flatMap((snapshot) =>
+        snapshot.workspaces.map((workspace) => [workspace.id, workspace] as const)
+      )
+    )
+    return snapshots
+  }
+
+  /**
+   * Deletes workspaces from one editor's history. Project folders are never
+   * touched; removed editor state is moved into a backup directory.
+   */
+  async deleteWorkspaces(variantId: string, ids: string[]): Promise<EditorCleanupResult> {
+    await this.refreshVariants(false)
+    const variant = this.variantMap.get(variantId) ?? this.variantCache.find((entry) => entry.id === variantId)
+    if (!variant) {
+      return { ok: false, deleted: 0, running: false, backupDir: null, error: '编辑器不可用' }
+    }
+
+    const wanted = new Set(ids)
+    const snapshot = await this.getWorkspaceSnapshots()
+    const group = snapshot.find((entry) => entry.variantId === variantId)
+    const targets = (group?.workspaces ?? []).filter((workspace) => wanted.has(workspace.id))
+
+    if (targets.length === 0) {
+      return { ok: false, deleted: 0, running: false, backupDir: null, error: '没有可删除的工作区' }
+    }
+    if (group?.running) {
+      return {
+        ok: false,
+        deleted: 0,
+        running: true,
+        backupDir: null,
+        error: `${variant.name} 正在运行，请先退出再删除`
+      }
+    }
+
+    const result = await pruneWorkspaces(
+      variant,
+      targets,
+      join(this.config.workspace.stateDir, 'editor-backups'),
+      this.platform
+    )
+
+    this.invalidate()
+    this.workspaceStats = await this.collectStats()
+
+    if (result.running) {
+      return {
+        ok: false,
+        deleted: 0,
+        running: true,
+        backupDir: null,
+        error: `${variant.name} 正在运行，请先退出再删除`
+      }
+    }
+
+    const failed = result.failures[0]?.message
+    return {
+      ok: result.removed > 0,
+      deleted: result.removed,
+      running: false,
+      backupDir: result.backupDir,
+      error: failed,
+      toast:
+        result.removed > 0
+          ? {
+              message: `已从 ${variant.name} 历史中删除 ${targets.length} 个工作区`,
+              tone: 'success'
+            }
+          : undefined
+    }
   }
 
   async open(workspaceId: string, options: { newWindow: boolean }): Promise<ActionResult> {

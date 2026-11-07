@@ -5,6 +5,8 @@ import type {
   ActionResult,
   BootstrapData,
   ChromeProfile,
+  EditorCleanupResult,
+  EditorWorkspaceSnapshot,
   EventName,
   ExternalPluginItem,
   FlashcastApi,
@@ -72,6 +74,10 @@ const api: FlashcastApi = {
     invoke<ActionResult>(IPC.openEditorWorkspace, workspaceId, options),
   revealEditorWorkspace: (workspaceId) =>
     invoke<ActionResult>(IPC.revealEditorWorkspace, workspaceId),
+  getEditorWorkspaces: () =>
+    invoke<EditorWorkspaceSnapshot[]>(IPC.editorWorkspaces),
+  deleteEditorWorkspaces: (variantId, ids) =>
+    invoke<EditorCleanupResult>(IPC.deleteEditorWorkspaces, variantId, ids),
   getFavicons: (domains) => invoke<Record<string, string>>(IPC.getFavicons, domains),
   openSettings: () => invoke<void>(IPC.openSettings),
   hideLauncher: (options) => ipcRenderer.send(IPC.hideLauncher, options),

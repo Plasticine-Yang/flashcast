@@ -156,6 +156,16 @@ SQLite 走 Electron 45 内置的 `node:sqlite`（只读打开）；被占用时�
 
 页面有两级：没有 scope 时进入编辑器选择页（按最近活动排序），选中后只显示该编辑器的工作区；`Esc` 从列表退回选择页，再退一次回全局搜索。跨编辑器不合并，同一路径在 VS Code 和 Trae 下各占一行。
 
+设置页的「工作区清理」按编辑器分组：`选择并删除…` 进入多选视图（空格勾选、双击按钮二次确认），`删除不存在的 (N)` 一键清理路径已删除的记录。删除只作用于编辑器历史，磁盘上的项目目录从不删除：
+
+| 位置 | 处理方式 |
+|---|---|
+| `state.vscdb` 的最近列表 | 改写 JSON，过滤目标条目 |
+| `storage.json` 的 `profileAssociations` / `openedPathsList` / `backupWorkspaces` / 打开窗口 | 同上去掉目标 |
+| `workspaceStorage/<hash>` | 整个目录**移动**到 `<工作区>/state/editor-backups/<编辑器>-<时间戳>/` |
+
+写入前先把 `state.vscdb`（含 `-wal` / `-shm`）和 `storage.json` 复制进同一个备份目录，所以一次误删可以手工还原。编辑器正在运行时会拒绝执行：历史文件由编辑器自己持有，运行期改写会在退出时被覆盖。运行状态用 `ps`（Windows 用 `tasklist`）按应用路径匹配。
+
 ### 3.7 外部插件
 
 - manifest 支持 `plugin.json` 或 `package.json#flashcast`；校验 id、入口路径（禁止逃逸目录）、图标、关键字、设置 schema。

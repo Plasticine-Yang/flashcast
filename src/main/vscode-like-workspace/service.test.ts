@@ -121,6 +121,47 @@ describe('VscodeLikeWorkspaceService', () => {
     ])
   })
 
+  it('deletes selected workspaces and reports the remaining count', async () => {
+    await makeEditor('Code', 'code', '1.100.0')
+    const code = await makeEditor('Trae CN', 'trae-cn', '1.107.1')
+    const keep = join(root, 'projects', 'keep')
+    const drop = join(root, 'projects', 'drop')
+    await mkdir(keep, { recursive: true })
+    await mkdir(drop, { recursive: true })
+    await write(
+      join(code.dataDir, 'User', 'globalStorage', 'storage.json'),
+      JSON.stringify({
+        windowsState: { openedWindows: [] },
+        profileAssociations: {
+          workspaces: { [`file://${keep}`]: 'p', [`file://${drop}`]: 'p' }
+        }
+      })
+    )
+
+    const store = new ConfigStore(workspaceLayout(join(root, 'workspace')), 'darwin')
+    await store.init()
+    const service = new VscodeLikeWorkspaceService(store, 'darwin', {
+      platform: 'darwin',
+      home: root,
+      env: {},
+      roots: [join(root, 'Applications')]
+    })
+    await service.init()
+
+    const snapshots = await service.getWorkspaceSnapshots()
+    const trae = snapshots.find((snapshot) => snapshot.variantId === 'trae-cn')!
+    const target = trae.workspaces.find((workspace) => workspace.path === drop)!
+
+    const result = await service.deleteWorkspaces('trae-cn', [target.id])
+    expect(result.ok).toBe(true)
+    expect(result.deleted).toBeGreaterThan(0)
+    expect(result.backupDir).toContain('editor-backups')
+
+    const after = await service.getWorkspaceSnapshots()
+    const remaining = after.find((snapshot) => snapshot.variantId === 'trae-cn')!.workspaces
+    expect(remaining.map((workspace) => workspace.path)).toEqual([keep])
+  })
+
   it('skips triggers of disabled editors and rejects ones owned by other plugins', async () => {
     await makeEditor('Code', 'code', '1.100.0')
     await makeEditor('Trae CN', 'trae-cn', '1.107.1')
