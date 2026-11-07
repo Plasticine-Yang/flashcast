@@ -1,6 +1,6 @@
-import { Puzzle, SearchX, Settings } from 'lucide-react'
+import { Puzzle, SearchX } from 'lucide-react'
 import type { ExternalPluginPage } from '@shared/types'
-import { ErrorCard, Glyph, Highlight, IconButton, Keycap, SkeletonRows, VirtualList } from '../components/ui'
+import { ErrorCard, Glyph, Highlight, Keycap, SkeletonRows, VirtualList } from '../components/ui'
 import type { ExternalRowModel } from './helpers'
 
 export function ExternalPluginView({
@@ -10,8 +10,7 @@ export function ExternalPluginView({
   selectedIndex,
   loading,
   onHover,
-  onActivate,
-  onSettings
+  onActivate
 }: {
   page: ExternalPluginPage
   rows: ExternalRowModel[]
@@ -20,7 +19,6 @@ export function ExternalPluginView({
   loading: boolean
   onHover: (index: number) => void
   onActivate: (index: number) => void
-  onSettings: () => void
 }): React.JSX.Element {
   const showVirtual = rows.length > 60
   return (
@@ -28,11 +26,6 @@ export function ExternalPluginView({
       <div className="fc-plugin-head">
         <h1 className="fc-plugin-title">{page.title}</h1>
         <span className="fc-plugin-head-meta">{rows.length > 0 ? `${rows.length} 项` : ''}</span>
-        <div className="fc-plugin-head-actions">
-          <IconButton label={`${page.title}设置`} onClick={onSettings}>
-            <Settings size={16} strokeWidth={1.5} aria-hidden="true" />
-          </IconButton>
-        </div>
       </div>
       <div className="fc-plugin-body">
         {loading ? (

@@ -19,6 +19,7 @@ import {
 } from '@shared/shortcuts'
 import { api, isMock, previewWallpaper } from '../bridge'
 import { SkeletonRows, Toast, useToast } from '../components/ui'
+import { applyGlass } from '../glass'
 import { useUpdateState } from '../hooks/useUpdateState'
 import { BookmarksView } from './BookmarksView'
 import { ClipboardView } from './ClipboardView'
@@ -189,6 +190,14 @@ export function Launcher(): React.JSX.Element {
   const wallpaperUrl = isMock
     ? previewWallpaper(wallpaperTheme)
     : `${DESKTOP_WALLPAPER_SCHEME}://current?theme=${wallpaperTheme}`
+
+  // Frost level is a preference; keep it declarative so bootstrap, theme
+  // switches and prefs:changed all land on the same CSS variables.
+  const glassIntensity = bootstrap?.prefs.glassIntensity
+  useEffect(() => {
+    if (glassIntensity === undefined) return
+    applyGlass(glassIntensity, wallpaperTheme)
+  }, [glassIntensity, wallpaperTheme])
 
   /* ------------------------------- helpers ------------------------------- */
 
@@ -1165,7 +1174,6 @@ export function Launcher(): React.JSX.Element {
             const row = clipboardRows[index]
             if (row) void runClipboardActivation(row.item.id, false)
           }}
-          onSettings={() => void openPluginSettings()}
         />
       )
     }
@@ -1202,7 +1210,6 @@ export function Launcher(): React.JSX.Element {
             const row = externalRows[index]
             if (row) void runExternalActivation(row, false)
           }}
-          onSettings={() => void openPluginSettings()}
         />
       )
     }

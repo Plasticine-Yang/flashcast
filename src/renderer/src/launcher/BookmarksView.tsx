@@ -1,8 +1,8 @@
-import { Bookmark, Globe, RefreshCw, SearchX, Settings } from 'lucide-react'
+import { Bookmark, Globe, RefreshCw, SearchX } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChromeBookmarksPluginPage } from '@shared/types'
 import { api } from '../bridge'
-import { Highlight, IconButton, Keycap, SkeletonRows, ErrorCard } from '../components/ui'
+import { Highlight, Keycap, SkeletonRows, ErrorCard } from '../components/ui'
 import { VirtualList } from '../components/ui'
 import type { BookmarkRowModel } from './helpers'
 
@@ -63,11 +63,6 @@ export function BookmarksView({
           {page?.bookmarkSource === 'account' ? ' · 账户书签' : ''}
           {profile ? ` · ${profile.name}` : ''}
         </span>
-        <div className="fc-plugin-head-actions">
-          <IconButton label="Chrome 书签设置" onClick={onSettings}>
-            <Settings size={16} strokeWidth={1.5} aria-hidden="true" />
-          </IconButton>
-        </div>
       </div>
       <div className="fc-plugin-body">
         {loading ? (

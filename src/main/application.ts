@@ -25,6 +25,7 @@ import type {
   WorkspaceSummary
 } from '@shared/types'
 import { CLIPBOARD_MEDIA_SCHEME, DESKTOP_WALLPAPER_SCHEME } from '@shared/types'
+import { normalizeGlassIntensity } from '@shared/glass'
 import { AppDiscovery } from './apps'
 import { discoverChromeProfiles, openInChrome } from './chrome-bookmarks'
 import { ClipboardService } from './clipboard-service'
@@ -360,10 +361,15 @@ export class FlashcastApplication {
     return this.favicons.get(Array.isArray(domains) ? domains.slice(0, 100) : [])
   }
 
-  async updatePrefs(patch: Partial<Pick<AppPrefs, 'theme' | 'launchAtLogin' | 'autoCommit'>>): Promise<BootstrapData> {
+  async updatePrefs(
+    patch: Partial<Pick<AppPrefs, 'theme' | 'launchAtLogin' | 'autoCommit' | 'glassIntensity'>>
+  ): Promise<BootstrapData> {
     const configPatch: Partial<AppPrefs> = {}
     if (patch.theme && ['system', 'dark', 'light'].includes(patch.theme)) configPatch.theme = patch.theme
     if (typeof patch.launchAtLogin === 'boolean') configPatch.launchAtLogin = patch.launchAtLogin
+    if (patch.glassIntensity !== undefined) {
+      configPatch.glassIntensity = normalizeGlassIntensity(patch.glassIntensity)
+    }
     if (Object.keys(configPatch).length > 0) {
       await this.config.updatePrefs(configPatch)
     }

@@ -1,8 +1,8 @@
-import { Clipboard as ClipboardIcon, Image as ImageIcon, Music2, Play, SearchX, Settings } from 'lucide-react'
+import { Clipboard as ClipboardIcon, Image as ImageIcon, Music2, Play, SearchX } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { ClipboardItem } from '@shared/types'
 import { kindLabel, relativeTime } from '@shared/time'
-import { Highlight, IconButton, Keycap } from '../components/ui'
+import { Highlight, Keycap } from '../components/ui'
 import { useFlipAnimation } from '../components/ui'
 import { mediaUrl, type ClipboardRowModel } from './helpers'
 
@@ -16,8 +16,7 @@ export function ClipboardView({
   deletingId,
   previewItem,
   onHover,
-  onActivate,
-  onSettings
+  onActivate
 }: {
   rows: ClipboardRowModel[]
   totalCount: number
@@ -29,7 +28,6 @@ export function ClipboardView({
   previewItem: ClipboardItem | null
   onHover: (index: number) => void
   onActivate: (index: number) => void
-  onSettings: () => void
 }): React.JSX.Element {
   const { containerRef: scrollRef } = useFlipAnimation(rows)
   const previewRef = useRef<HTMLElement>(null)
@@ -137,11 +135,6 @@ export function ClipboardView({
         <span className="fc-plugin-head-meta tnum">
           {totalCount} / {maxItems}
         </span>
-        <div className="fc-plugin-head-actions">
-          <IconButton label="剪切板设置" onClick={onSettings}>
-            <Settings size={16} strokeWidth={1.5} aria-hidden="true" />
-          </IconButton>
-        </div>
       </div>
       <div className="fc-plugin-body fc-clipboard-body">
         <div className={`fc-clipboard-list-wrap${previewItem ? ' is-preview-open' : ''}`}>

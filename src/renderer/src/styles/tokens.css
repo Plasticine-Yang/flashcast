@@ -9,19 +9,25 @@
 :root {
   color-scheme: dark;
 
-  /* Window glass ----------------------------------------------------------- */
-  --fc-window: rgba(10, 18, 34, 0.92);
+  /* Window glass -----------------------------------------------------------
+     Frost strength is user-tunable (设置 → 通用 → 毛玻璃强度, 0–100). The CSS
+     values below are fallbacks matching GLASS_INTENSITY_DEFAULT (80); the
+     renderer overrides --fc-window-alpha / --fc-glass-blur* / --fc-wallpaper-*
+     at runtime from prefs.glassIntensity. */
+  --fc-window-rgb: 10 18 34;
+  --fc-window-alpha: 0.964;
+  --fc-window: rgb(var(--fc-window-rgb) / var(--fc-window-alpha));
   --fc-window-solid: #0a1222;
-  --fc-glass-opaque: rgba(16, 28, 50, 0.96);
+  --fc-glass-opaque: rgba(16, 28, 50, 0.97);
   /* Frosted grain: a very low-opacity monochrome noise that reads as the
      diffusion layer of frosted glass. */
   --fc-frost: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
-  --fc-frost-opacity: 0.045;
+  --fc-frost-opacity: 0.066;
   /* Wallpaper-derived frosted backdrop. The blend keeps the panel's own
      luminance (contrast stays stable) and only takes the wallpaper's hue. */
-  --fc-wallpaper-opacity: 0.5;
-  --fc-wallpaper-blur: 64px;
-  --fc-wallpaper-saturate: 1.15;
+  --fc-wallpaper-opacity: 0.324;
+  --fc-wallpaper-blur: 112px;
+  --fc-wallpaper-saturate: 1.2;
   --fc-glass-sheen:
     radial-gradient(120% 130% at 6% -24%, rgba(74, 141, 255, 0.24), transparent 58%),
     radial-gradient(90% 110% at 104% 112%, rgba(56, 189, 248, 0.14), transparent 62%);
@@ -49,8 +55,10 @@
   --fc-glass-border: rgba(150, 193, 255, 0.22);
   --fc-glass-rim-top: rgba(216, 234, 255, 0.26);
   --fc-glass-rim-bottom: rgba(120, 170, 255, 0.08);
-  --fc-glass-filter: blur(44px) saturate(1.6) brightness(0.72);
-  --fc-glass-filter-soft: blur(28px) saturate(1.5) brightness(0.9);
+  --fc-glass-blur: 83px;
+  --fc-glass-blur-soft: 50px;
+  --fc-glass-filter: blur(var(--fc-glass-blur)) saturate(1.7) brightness(0.66);
+  --fc-glass-filter-soft: blur(var(--fc-glass-blur-soft)) saturate(1.55) brightness(0.84);
   --fc-scrim: rgba(4, 10, 22, 0.58);
   --fc-preview-bg: rgba(11, 20, 38, 0.95);
   --fc-preview-border: rgba(160, 200, 255, 0.26);
@@ -126,11 +134,13 @@
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --fc-window: rgba(236, 245, 255, 0.9);
+  --fc-window-rgb: 236 245 255;
+  --fc-window-alpha: 0.956;
+  --fc-window: rgb(var(--fc-window-rgb) / var(--fc-window-alpha));
   --fc-window-solid: #f2f7ff;
-  --fc-glass-opaque: rgba(250, 252, 255, 0.97);
-  --fc-frost-opacity: 0.035;
-  --fc-wallpaper-opacity: 0.42;
+  --fc-glass-opaque: rgba(250, 252, 255, 0.985);
+  --fc-frost-opacity: 0.046;
+  --fc-wallpaper-opacity: 0.28;
   --fc-glass-sheen:
     radial-gradient(120% 130% at 6% -24%, rgba(255, 255, 255, 0.94), transparent 62%),
     radial-gradient(90% 110% at 104% 112%, rgba(147, 197, 253, 0.46), transparent 62%);
@@ -154,8 +164,8 @@
   --fc-glass-border: rgba(255, 255, 255, 0.9);
   --fc-glass-rim-top: rgba(255, 255, 255, 0.95);
   --fc-glass-rim-bottom: rgba(147, 197, 253, 0.3);
-  --fc-glass-filter: blur(44px) saturate(1.5) brightness(1.06);
-  --fc-glass-filter-soft: blur(28px) saturate(1.35) brightness(1.04);
+  --fc-glass-filter: blur(var(--fc-glass-blur)) saturate(1.55) brightness(1.03);
+  --fc-glass-filter-soft: blur(var(--fc-glass-blur-soft)) saturate(1.4) brightness(1.02);
   --fc-scrim: rgba(226, 238, 255, 0.6);
   --fc-preview-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(228, 240, 255, 0.95));
   --fc-preview-border: rgba(37, 99, 235, 0.18);

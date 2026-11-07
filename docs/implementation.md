@@ -37,6 +37,7 @@ src/main/
   builtins/manifests.ts    内置插件 manifest 与默认配置
 src/preload/index.ts       contextBridge 白名单 API
 src/renderer/src/
+  glass.ts                 把毛玻璃强度写入 <html> 的自定义属性（两个窗口共用）
   launcher/                Launcher、搜索、键盘路由、剪切板、书签、外部插件、设置页
   settings/                独立设置窗口
   styles/                  tokens/base/launcher/plugin/settings
@@ -46,6 +47,7 @@ src/shared/
   fuzzy.ts                 子序列 + 词首/连续加分、多字段匹配、高亮切片
   shortcuts.ts             accelerator 解析、平台符号、清除快捷键
   update.ts                更新状态标签、字节/百分比格式化、Release 说明降级为纯文本
+  glass.ts                 毛玻璃强度 0–100 → alpha / blur / 壁纸层 CSS 变量
   time.ts                  相对时间与类型标签
 ```
 
@@ -148,6 +150,7 @@ macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占
 ## 4. UI 设计令牌与组件
 
 - `styles/tokens.css` 完整实现 UI 规范第 3 节的蓝色毛玻璃深色/浅色令牌（窗口、玻璃描边、内部光源、磨砂颗粒、壁纸层、选中行、极光背景）、字体、间距、圆角、阴影和动效；三端统一使用半透明面板，`prefers-reduced-transparency` / `data-contrast="more"` 下退回接近不透明。
+- 玻璃强度是偏好项（`prefs.glassIntensity`，0–100，默认 80，存工作区 `config.json`）。`shared/glass.ts` 把强度映射为面板 alpha、blur 半径、壁纸层强度与磨砂颗粒，`renderer/glass.ts` 在启动器与设置窗口写入 `<html>` 的 CSS 变量；滑杆拖动时即时生效，停顿 280ms 或松开后由 `updatePrefs` 持久化。桌面不在透明窗口 `backdrop-filter` 的采样范围内，所以“透明度”由 alpha 决定，blur 只影响页面内浮层与壁纸层的观感（见 ui-ux.md「玻璃强度（可调）」）。
 - `main/wallpaper.ts` 通过 `gsettings`（GNOME）或注册表（Windows）定位壁纸，经 `nativeImage` 下采样后由 `flashcast-wallpaper://` 协议提供给启动器；macOS 回退纯玻璃。
 - `styles/base.css` 提供 Keycap、按钮、开关、Chip、Toast、Skeleton、焦点环与 `prefers-reduced-motion` / `prefers-contrast` 适配。
 - `styles/launcher.css` 负责窗口/面板、搜索栏、分组行、stagger 入场、Footer、Help 浮层、Toast。
@@ -166,7 +169,7 @@ macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占
 
 ## 6. 已验证范围
 
-- `pnpm typecheck` 通过；`pnpm test` 67 个用例通过（模糊匹配、快捷键、Chrome 书签扁平化与账户书签选择、`.desktop`/Exec 解析、更新版本比较/选包/校验，以及用假网络栈驱动的检查→下载→校验状态机）。
+- `pnpm typecheck` 通过；`pnpm test` 78 个用例通过（模糊匹配、快捷键、Chrome 书签扁平化与账户书签选择、`.desktop`/Exec 解析、更新版本比较/选包/校验、假网络栈驱动的检查→下载→校验状态机，毛玻璃强度映射/取值范围，以及毛玻璃偏好的读写与越界回退）。
 - 用本机真实 Chrome（153，登录 Google 账户，Profile 内只有 `AccountBookmarks`）验证：能读出 18 条书签及其文件夹路径，`bookmarkSource` 为 `account`。
 - `pnpm build` 通过；`electron-builder --dir --linux` 生成可运行的 unpacked 应用，asar 与 `resources/build` 图标/封面资源路径验证通过。
 - 在 Ubuntu 26.04 / GNOME 50 Wayland 会话启动真实 Electron 应用：渲染正常、无崩溃。此前记录的“全局快捷键注册成功”只反映 `globalShortcut.register()` 的返回值；Wayland 下实际绑定由 portal 完成，需要应用身份能解析到已安装的 `.desktop` 文件（见 3.8）。
@@ -179,6 +182,7 @@ macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占
 - 在 Chrome 预览环境用 CDP 验证入场水珠/高度曲线、无全屏压暗遮罩，以及默认预览、鼠标跨行与 `j/k` 切换时预览保持展开且内容原位更新（不再闪烁）。
 - `pnpm preview:ui` 支持在无 Electron 环境下检查启动器、各插件页、设置页和模态框；`?update=available|downloading|ready|latest|error` 可预览更新的全部状态。
 - 更新检查用真实 v0.2.3 Release 数据核对：资产命名、`SHA256SUMS.txt` 的空格→点差异、`isNewerVersion('0.2.3','0.2.3') === false` 都已在测试中固定。
+- 用 Chrome CDP 在预览环境验证玻璃强度滑杆：初始 80 → alpha 0.964 / blur 83px；拖到 20 → 0.886 / 43px；「恢复默认」回到 80；启动器窗口在 `?glass=20` 与 `?glass=95` 下分别得到 0.886 / 0.984 的面板 alpha。
 
 ## 7. 需求覆盖对照
 
@@ -199,7 +203,9 @@ macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占
 | 设置窗口五页、快捷键冲突、差异、许可 | `src/renderer/src/settings/*` |
 | 空/加载/错误/Toast 状态 | 各视图与 `components/ui.tsx` |
 | 无障碍、减少动效、高对比 | `aria-*`、焦点环、`prefers-reduced-motion` / `prefers-contrast` |
-| 启动器内的设置入口 | `SearchBar` 齿轮按钮、`⌘,` / `Ctrl+,`、帮助浮层 |
+| 启动器内的设置入口 | `SearchBar` 齿轮按钮（仅全局页）、`⌘,` / `Ctrl+,`、帮助浮层 |
+| 插件设置唯一入口 | 顶栏插件图标；插件头部不再有设置按钮 |
+| 可调毛玻璃强度 | `shared/glass.ts`、`renderer/glass.ts`、设置 → 通用滑杆与实时预览 |
 | 检查更新与一键安装 | `update-service.ts`、`UpdateChip`、`settings/UpdateCard.tsx` |
 
 ## 8. 已知取舍
@@ -209,5 +215,6 @@ macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占
 - 外部插件 UI 为宿主渲染的列表 + 设置 schema，不支持插件自带 React bundle；这是为了跨进程安全和安装可审查性。
 - 更新源固定为 GitHub Releases，没有增量差分（每次整包下载）与灰度/回滚开关；`.dmg`/`.deb` 只能下载后交给系统安装器，做不到完全无交互。产物未签名，更新后的首次启动仍受 Gatekeeper / SmartScreen 约束（macOS 安装脚本会清掉下载文件的 quarantine 属性）。
 - 更新状态保存在内存里，应用重启后需要重新检查；这是有意的——避免把"已下载"的路径写进工作区配置并在清理后指向不存在的文件。
+- 玻璃强度只调节“面板有多实/多模糊”，不能真正模糊窗口后面的其他应用：Chromium 透明窗口的 `backdrop-filter` 不采样桌面。要做到系统级背景模糊需要 `NSVisualEffectView` / Mica / KWin 模糊，本期未接入。
 - 书签超过 60 行使用固定行高虚拟列表；模糊匹配仍在渲染线程完成，超大书签库（1000+）后续可迁移到 Worker 并做 60ms 防抖。
 - 外部插件通过宿主渲染的声明式列表与设置 schema 扩展，暂不支持插件自带页面 bundle，也暂不让插件消费 `esc`（`esc` 始终由宿主路由；剪切板预览不再消费它）。

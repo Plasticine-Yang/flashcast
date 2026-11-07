@@ -95,15 +95,20 @@ export function SearchBar({
             <PluginIcon icon={activePlugin.icon} iconKey={activePlugin.iconKey} size={17} />
           </button>
         ) : null}
-        <button
-          type="button"
-          className="fc-settings-button"
-          aria-label="打开设置"
-          title={`打开设置（${settingsShortcut}）`}
-          onClick={onOpenSettings}
-        >
-          <Settings size={16} strokeWidth={1.6} aria-hidden="true" />
-        </button>
+        {/* App settings live on the global page only: inside a plugin the
+            top-right icon is the plugin's own settings, and a second gear next
+            to it reads as the same action. ⌘, still works everywhere. */}
+        {activePlugin ? null : (
+          <button
+            type="button"
+            className="fc-settings-button"
+            aria-label="打开设置"
+            title={`打开设置（${settingsShortcut}）`}
+            onClick={onOpenSettings}
+          >
+            <Settings size={16} strokeWidth={1.6} aria-hidden="true" />
+          </button>
+        )}
       </div>
     </header>
   )

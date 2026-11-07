@@ -15,6 +15,8 @@ export interface AppPrefs {
   launchAtLogin: boolean
   language: 'zh-CN'
   autoCommit: boolean
+  /** 0–100, see shared/glass.ts. Higher = more opaque and blurrier. */
+  glassIntensity: number
   hotkeys: GlobalHotkeys
   enabledPlugins: Record<string, boolean>
 }
@@ -398,7 +400,9 @@ export interface FlashcastApi {
   launchApp(appId: string): Promise<ActionResult>
   runCommand(commandId: CommandEntry['id']): Promise<ActionResult>
 
-  updatePrefs(patch: Partial<Pick<AppPrefs, 'theme' | 'launchAtLogin' | 'autoCommit'>>): Promise<BootstrapData>
+  updatePrefs(
+    patch: Partial<Pick<AppPrefs, 'theme' | 'launchAtLogin' | 'autoCommit' | 'glassIntensity'>>
+  ): Promise<BootstrapData>
   chooseWorkspace(): Promise<{ canceled: boolean; workspace: WorkspaceSummary }>
   openWorkspaceFolder(): Promise<void>
   refreshWorkspace(): Promise<WorkspaceSummary>
