@@ -15,14 +15,13 @@ export class ShortcutManager {
 
   constructor(
     private readonly platform: PlatformId,
-    private readonly handlers: ShortcutHandlers,
-    private readonly dev = false
+    private readonly handlers: ShortcutHandlers
   ) {
-    this.hotkeys = defaultHotkeys(platform, dev)
+    this.hotkeys = this.getDefaults()
   }
 
   getInfo(): ShortcutInfo[] {
-    const defaults = defaultHotkeys(this.platform, this.dev)
+    const defaults = this.getDefaults()
     return [
       {
         id: 'launcher',
@@ -49,6 +48,11 @@ export class ShortcutManager {
 
   getHotkeys(): GlobalHotkeys {
     return { ...this.hotkeys }
+  }
+
+  /** 恢复默认的目标值；开发版与安装版一致，见 `defaultHotkeys`。 */
+  getDefaults(): GlobalHotkeys {
+    return defaultHotkeys(this.platform)
   }
 
   /**

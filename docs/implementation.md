@@ -123,7 +123,7 @@ macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占
 - 全局动作存储为规范 accelerator（`Control+Alt+C`、`Meta+...`），运行时按平台映射为 Electron accelerator（macOS 的 `Meta→Command`，Linux/Windows 的 `Meta→Super`）。
 - 设置页录制使用真实 `keydown`，要求至少一个主修饰键；与另一个全局动作冲突时禁止保存。主进程注册失败会事务式恢复旧组合并返回错误。
 - Wayland 会话不经过 X11 抓键，而是由 `xdg-desktop-portal` 的 `GlobalShortcuts` 接口绑定：Electron 把 `package.json#desktopName`（`com.flashcast.app.desktop`）作为 portal 身份，因此该名字必须与已安装的 `.desktop` 文件一致（生产版由 `linux.syncDesktopName` 保证，开发版由主进程 `app.setDesktopName()` 改成 `com.flashcast.app.dev.desktop`，并由 `scripts/ensure-dev-desktop-entry.mjs` 写入用户目录）。身份不能共用：用户级同名条目会遮住 `/usr/share` 里的生产版。身份无法解析时 portal 会拒绝绑定而 `globalShortcut.register()` 仍返回 `true`，所以 `src/main/linux-portal.ts` 在启动时检查身份解析结果，把问题写入设置页的 `shortcutErrors`（`id: 'system'`）并发送系统通知。
-- 设置页把 `system` 诊断与“本次保存失败”区分开：录制/恢复默认的错误判断会过滤该 id，避免环境问题被当成冲突而拒绝保存。
+- 设置页把 `system` 诊断与“本次保存失败”区分开：录制/恢复默认的错误判断会过滤该 id，避免环境问题被当成冲突而拒绝保存。恢复默认走 `ShortcutManager.getDefaults()`（默认值不区分开发版与安装版，见 `defaultHotkeys`），注册失败时事务式回滚，因此页面提示“恢复默认失败”而不是“已恢复”，并在行内展示默认组合、当前值即默认时显示“默认”标识。
 - `Ctrl+J/K/H/L`、`Esc`、`Enter`、`Ctrl+Backspace`、清空组合键、`?` 都经过渲染器统一的 `keyHandler`；输入法组合输入期间全部忽略。
 
 ### 3.9 发布流水线

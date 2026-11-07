@@ -67,7 +67,7 @@ pnpm start         # 预览构建产物
 
 ### 开发版与生产版并存
 
-开发构建与安装版可以同时装在一台机器上，互不干扰：
+开发构建与安装版可以同时装在一台机器上，数据与桌面身份互不干扰：
 
 | | 生产版（deb / AppImage / dmg） | 开发版（`pnpm dev`） |
 |---|---|---|
@@ -75,10 +75,12 @@ pnpm start         # 预览构建产物
 | 应用名 / userData | `Flashcast` → `~/.config/Flashcast` | `Flashcast (Dev)` → `~/.config/Flashcast (Dev)` |
 | 桌面身份 / `.desktop` | `com.flashcast.app.desktop` | `com.flashcast.app.dev.desktop` |
 | 工作区 | `~/.flashcast` | `~/.flashcast-dev` |
-| 默认快捷键 | `Alt+Space` / `Ctrl+Alt+C` | `Alt+Shift+Space` / `Ctrl+Alt+Shift+C` |
+| 默认快捷键 | `Alt+Space` / `Ctrl+Alt+C` | 同上（不区分版本） |
 | 开机自启动条目 | `autostart/flashcast.desktop` | `autostart/flashcast-dev.desktop` |
 
-分流依据是 `app.isPackaged`：应用名与桌面身份在 `src/main/index.ts`，路径在 `src/main/paths.ts`，快捷键默认值在 `src/shared/shortcuts.ts`。两个进程因此各有独立的单实例锁、桌面项和数据，可以同时运行。开发版仍然需要那个 `.desktop` 文件，但只为解析 Wayland 身份与匹配运行中窗口的图标，所以设为 `NoDisplay=true`，不占应用网格。
+分流依据是 `app.isPackaged`：应用名与桌面身份在 `src/main/index.ts`，路径在 `src/main/paths.ts`。两个进程因此各有独立的单实例锁、桌面项和数据，可以同时运行。开发版仍然需要那个 `.desktop` 文件，但只为解析 Wayland 身份与匹配运行中窗口的图标，所以设为 `NoDisplay=true`，不占应用网格。
+
+> 全局快捷键默认值不区分版本（`src/shared/shortcuts.ts`）：两个进程同时运行时，同一组合只能被先启动的一方注册成功，后启动的一方会在设置页与系统通知里看到冲突提示，把其中一方录制成别的组合即可。
 
 > 桌面身份不能复用：`~/.local/share/applications` 在 XDG 查找顺序里排在 `/usr/share/applications` 之前，同名的用户级条目会遮住 deb 安装的生产版；而 Wayland portal 又要求身份能解析到同名 `.desktop` 文件。两条约束只有“各自用不同身份”能同时满足。
 

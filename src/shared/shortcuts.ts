@@ -17,16 +17,10 @@ export function isMac(platform: PlatformId): boolean {
 }
 
 /**
- * 开发版的默认组合与打包版错开：两个进程可能同时运行，同一个加速键只能被其中
- * 一方注册成功，后启动的一方会静默失败。
+ * 默认全局组合，开发版与安装版共用同一套。两个版本同时运行时只有先启动的
+ * 一方能注册成功，后启动的一方会在设置页与通知里看到冲突提示。
  */
-export function defaultHotkeys(platform: PlatformId, dev = false): GlobalHotkeys {
-  if (dev) {
-    return {
-      launcher: 'Alt+Shift+Space',
-      openClipboard: platform === 'darwin' ? 'Control+Meta+Shift+C' : 'Control+Alt+Shift+C'
-    }
-  }
+export function defaultHotkeys(platform: PlatformId): GlobalHotkeys {
   return {
     launcher: 'Alt+Space',
     openClipboard: platform === 'darwin' ? 'Control+Meta+C' : 'Control+Alt+C'

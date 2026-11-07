@@ -85,7 +85,7 @@ export class FlashcastApplication {
 
   async init(): Promise<void> {
     const initialPath = resolveInitialWorkspace()
-    this.config = new ConfigStore(workspaceLayout(initialPath), this.platform, isDev())
+    this.config = new ConfigStore(workspaceLayout(initialPath), this.platform)
     await this.config.init()
 
     this.workspace = new WorkspaceService(this.config, initialPath)
@@ -118,14 +118,10 @@ export class FlashcastApplication {
     this.windows = new WindowManager(this.platform, {
       onPasteAfterHide: () => pasteIntoActiveApp(this.platform)
     })
-    this.shortcuts = new ShortcutManager(
-      this.platform,
-      {
-        launcher: () => this.windows.toggleLauncher(),
-        openClipboard: () => this.windows.openClipboardPlugin()
-      },
-      isDev()
-    )
+    this.shortcuts = new ShortcutManager(this.platform, {
+      launcher: () => this.windows.toggleLauncher(),
+      openClipboard: () => this.windows.openClipboardPlugin()
+    })
 
     this.wireEvents()
     this.registerMediaProtocol()
@@ -451,11 +447,7 @@ export class FlashcastApplication {
   }
 
   async resetShortcuts(): Promise<{ shortcuts: ShortcutInfo[]; errors: ShortcutError[] }> {
-    const defaults = this.shortcuts.getInfo().map((item) => item.defaultAccelerator)
-    const result = this.shortcuts.apply(
-      { launcher: defaults[0], openClipboard: defaults[1] },
-      { transactional: true }
-    )
+    const result = this.shortcuts.apply(this.shortcuts.getDefaults(), { transactional: true })
     if (result.ok) {
       await this.config.setHotkeys(result.hotkeys)
     }

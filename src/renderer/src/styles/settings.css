@@ -349,6 +349,13 @@
   line-height: 1.5;
 }
 
+/* 快捷键行：默认组合始终可见，避免「恢复默认」看起来跳到了非默认值。 */
+.settings-shortcut-default {
+  color: var(--fc-text-tertiary);
+  opacity: 0.82;
+  white-space: nowrap;
+}
+
 .settings-row-control {
   flex: none;
   display: flex;

@@ -93,9 +93,14 @@ export function ShortcutsPage({
     setResetting(true)
     try {
       const result = await api.resetShortcuts()
-      const failed = registrationErrors(result.errors).length > 0
+      const failures = registrationErrors(result.errors)
       onData({ ...data, shortcuts: result.shortcuts, shortcutErrors: result.errors })
-      onToast(failed ? '已恢复默认，但部分快捷键注册失败' : '已恢复默认快捷键', failed ? 'warning' : 'success')
+      // 注册失败会整体回滚到旧组合，此时不能说「已恢复默认」。
+      if (failures.length > 0) {
+        onToast(`恢复默认失败：${failures[0].message}`, 'danger')
+        return
+      }
+      onToast('已恢复默认快捷键', 'success')
     } catch (error) {
       onToast((error as Error).message, 'danger')
     } finally {
@@ -142,19 +147,28 @@ export function ShortcutsPage({
           <div className="settings-shortcut-list">
             {data.shortcuts.map((shortcut) => {
               const rowError = data.shortcutErrors.find((error) => error.id === shortcut.id)
+              const isDefault = shortcut.accelerator === shortcut.defaultAccelerator
               return (
                 <div className="settings-shortcut-row" key={shortcut.id}>
                   <div className="settings-row-copy">
                     <div className="settings-row-label">{shortcut.label}</div>
-                    <div className="settings-row-description">{shortcut.description}</div>
+                    <div className="settings-row-description">
+                      {shortcut.description}
+                      <span className="settings-shortcut-default">
+                        {' · '}默认 {formatAccelerator(shortcut.defaultAccelerator, platform)}
+                      </span>
+                    </div>
                     {rowError ? <div className="settings-plugin-error">{rowError.message}</div> : null}
                   </div>
                   <div className="settings-shortcut-actions">
                     <AcceleratorKeys accelerator={shortcut.accelerator} platform={platform} />
-                    {shortcut.accelerator !== shortcut.defaultAccelerator ? (
+                    {isDefault ? (
+                      <span className="settings-chip">默认</span>
+                    ) : (
                       <button
                         type="button"
                         className="settings-link-button"
+                        title={`恢复为默认组合 ${formatAccelerator(shortcut.defaultAccelerator, platform)}`}
                         onClick={async () => {
                           setSaving(true)
                           try {
@@ -175,9 +189,10 @@ export function ShortcutsPage({
                           }
                         }}
                       >
-                        默认
+                        <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
+                        恢复默认
                       </button>
-                    ) : null}
+                    )}
                     <button
                       type="button"
                       className="fc-btn"
