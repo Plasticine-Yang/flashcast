@@ -1,5 +1,5 @@
-import { app, Menu, nativeTheme, Notification, protocol, Tray } from 'electron'
-import { existsSync, writeFileSync, rmSync } from 'node:fs'
+import { app, Menu, nativeImage, nativeTheme, Notification, protocol, shell, Tray } from 'electron'
+import { existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { extname, join } from 'node:path'
@@ -20,6 +20,7 @@ import type {
   ShortcutError,
   ShortcutInfo,
   ThemeSetting,
+  UpdateState,
   WindowRole,
   WorkspaceSummary
 } from '@shared/types'
@@ -47,6 +48,7 @@ import {
 import { COMMANDS, PluginService } from './plugin-service'
 import { CHROME_DEFAULTS, CLIPBOARD_DEFAULTS } from './builtins/manifests'
 import { ShortcutManager } from './shortcut-manager'
+import { UpdateService } from './update-service'
 import { readDesktopWallpaper } from './wallpaper'
 import { wallpaperRequestTheme } from './wallpaper-path'
 import { WindowManager } from './window-manager'
@@ -76,6 +78,7 @@ export class FlashcastApplication {
   private apps!: AppDiscovery
   private shortcuts!: ShortcutManager
   private windows!: WindowManager
+  private updates!: UpdateService
   private tray: Tray | null = null
   private ready = false
 
@@ -133,6 +136,12 @@ export class FlashcastApplication {
     this.shortcuts.apply(this.config.getPrefs().hotkeys, { transactional: false })
     this.workspace.startStatusPolling()
 
+    // Create the updater before the first window so an early `updates:*` IPC
+    // call always finds a live service.
+    this.updates = new UpdateService(this.platform, (state) => {
+      this.broadcast(IPC.updateChanged, state)
+    })
+    this.updates.start()
     this.windows.createLauncher()
     this.setupTray()
 
@@ -262,6 +271,25 @@ export class FlashcastApplication {
     if (commandId === 'settings') {
       this.windows.openSettings()
       return { ok: true }
+    }
+    if (commandId === 'check-updates') {
+      const state = await this.checkForUpdates()
+      if (state.phase === 'available') {
+        return {
+          ok: true,
+          toast: {
+            message: `发现新版本 v${state.latestVersion}，可用右上角的更新按钮一键安装`,
+            tone: 'warning'
+          }
+        }
+      }
+      if (state.phase === 'latest') {
+        return {
+          ok: true,
+          toast: { message: `当前已是最新版本 v${state.currentVersion}`, tone: 'success' }
+        }
+      }
+      return { ok: false, error: state.error ?? state.message }
     }
     if (commandId === 'refresh-apps') {
       await this.apps.refresh()
@@ -458,21 +486,38 @@ export class FlashcastApplication {
     return { shortcuts: this.shortcuts.getInfo(), errors: this.shortcutErrors() }
   }
 
-  async checkUpdates(): Promise<{
-    currentVersion: string
-    latestVersion: string | null
-    updateAvailable: boolean
-    message: string
-  }> {
-    const currentVersion = appVersion()
-    return {
-      currentVersion,
-      latestVersion: null,
-      updateAvailable: false,
-      message: isDev()
-        ? '当前为开发构建，未配置更新源'
-        : '当前版本已是最新版本'
-    }
+  /* --------------------------------- updates ------------------------------ */
+
+  getUpdateState(): UpdateState {
+    return this.updates.getState()
+  }
+
+  async checkForUpdates(): Promise<UpdateState> {
+    return this.updates.check({ force: true })
+  }
+
+  async downloadUpdate(): Promise<UpdateState> {
+    return this.updates.download()
+  }
+
+  async cancelUpdate(): Promise<UpdateState> {
+    return this.updates.cancel()
+  }
+
+  async installUpdate(): Promise<ActionResult> {
+    const result = await this.updates.install()
+    if (result.toast) this.broadcast(IPC.toast, result.toast)
+    return result
+  }
+
+  async openReleasePage(): Promise<void> {
+    const url = this.updates.getState().releaseUrl
+    if (url) await shell.openExternal(url)
+  }
+
+  async showUpdateFile(): Promise<void> {
+    const path = this.updates.getState().downloadPath
+    if (path) shell.showItemInFolder(path)
   }
 
   async applyLaunchAtLogin(enabled: boolean): Promise<void> {
@@ -534,12 +579,13 @@ export class FlashcastApplication {
 
   private setupTray(): void {
     try {
-      const iconPath = join(assetsDir(), this.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png')
+      const named = this.platform === 'darwin' ? 'trayTemplate.png' : 'tray.png'
+      const iconPath = join(assetsDir(), named)
       if (!existsSync(iconPath)) {
         log.warn('tray icon missing:', iconPath)
         return
       }
-      this.tray = new Tray(iconPath)
+      this.tray = new Tray(this.trayImage(iconPath))
       this.tray.setToolTip(isDev() ? 'Flashcast (Dev)' : 'Flashcast')
       const menu = Menu.buildFromTemplate([
         { label: '打开 Flashcast', click: () => this.windows.toggleLauncher() },
@@ -554,6 +600,22 @@ export class FlashcastApplication {
     } catch (error) {
       log.warn('tray setup failed:', (error as Error).message)
     }
+  }
+
+  /**
+   * macOS 菜单栏图标必须按 point 尺寸提供：18pt 的模板图（@2x 36px）才会和系统
+   * 图标等高。以前直接把 32pt 的 PNG 交给 Tray，状态栏里的闪电比旁边图标大一圈。
+   * 这里显式组装 1x/2x 表示并标记为模板图，避免依赖文件名约定。
+   */
+  private trayImage(basePath: string): Electron.NativeImage | string {
+    if (this.platform !== 'darwin') return basePath
+    const retinaPath = basePath.replace(/\.png$/, '@2x.png')
+    if (!existsSync(retinaPath)) return basePath
+    const image = nativeImage.createEmpty()
+    image.addRepresentation({ scaleFactor: 1, buffer: readFileSync(basePath) })
+    image.addRepresentation({ scaleFactor: 2, buffer: readFileSync(retinaPath) })
+    image.setTemplateImage(true)
+    return image
   }
 
   private setupMenu(): void {
@@ -667,6 +729,7 @@ export class FlashcastApplication {
   }
 
   dispose(): void {
+    this.updates?.dispose()
     this.workspace?.stop()
     this.clipboard?.stop()
     this.shortcuts?.unregisterAll()

@@ -131,7 +131,13 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
   )
   ipcMain.handle(IPC.resetShortcuts, async () => application.resetShortcuts())
 
-  ipcMain.handle(IPC.checkUpdates, async () => application.checkUpdates())
+  ipcMain.handle(IPC.updateState, async () => application.getUpdateState())
+  ipcMain.handle(IPC.updateCheck, async () => application.checkForUpdates())
+  ipcMain.handle(IPC.updateDownload, async () => application.downloadUpdate())
+  ipcMain.handle(IPC.updateCancel, async () => application.cancelUpdate())
+  ipcMain.handle(IPC.updateInstall, async () => application.installUpdate())
+  ipcMain.handle(IPC.updateOpenRelease, async () => application.openReleasePage())
+  ipcMain.handle(IPC.updateShowFile, async () => application.showUpdateFile())
   ipcMain.on(IPC.quit, () => {
     log.info('quit requested from renderer')
     app.quit()

@@ -1,8 +1,10 @@
 import { FolderGit2, Info, Keyboard, Puzzle, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { BootstrapData } from '@shared/types'
+import { isUpdateActionable } from '@shared/update'
 import { api } from '../bridge'
 import { Toast, useToast } from '../components/ui'
+import { useUpdateState } from '../hooks/useUpdateState'
 import { AboutPage } from './AboutPage'
 import { GeneralPage } from './GeneralPage'
 import { PluginsPage } from './PluginsPage'
@@ -32,7 +34,9 @@ export function SettingsApp(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const autoCheckedRef = useRef(false)
   const { toast, showToast, dismissToast } = useToast()
+  const { update, loaded: updateLoaded } = useUpdateState()
 
   const applyTheme = (nextTheme: 'dark' | 'light', platform: BootstrapData['platform']): void => {
     setTheme(nextTheme)
@@ -84,6 +88,20 @@ export function SettingsApp(): React.JSX.Element {
     scrollRef.current?.scrollTo({ top: 0 })
   }, [page])
 
+  // Opening "关于" is an explicit request for update information: check when the
+  // cached state is missing or older than ten minutes, once per visit.
+  useEffect(() => {
+    if (page !== 'about') {
+      autoCheckedRef.current = false
+      return
+    }
+    if (!updateLoaded || autoCheckedRef.current) return
+    autoCheckedRef.current = true
+    if (update?.phase === 'downloading' || update?.phase === 'ready') return
+    if (update?.checkedAt && Date.now() - update.checkedAt < 10 * 60 * 1000) return
+    void api.checkForUpdates().catch(() => undefined)
+  }, [page, updateLoaded, update])
+
   useEffect(() => {
     if (!toast) return
     const dismiss = (): void => dismissToast()
@@ -134,21 +152,26 @@ export function SettingsApp(): React.JSX.Element {
           </div>
         </div>
         <nav className="settings-nav" aria-label="设置导航">
-          {NAV.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`settings-nav-item${page === item.id ? ' is-active' : ''}`}
-              aria-current={page === item.id ? 'page' : undefined}
-              onClick={() => setPage(item.id)}
-            >
-              {item.icon}
-              <span>{item.label}</span>
-              {item.id === 'plugins' ? (
-                <span className="settings-nav-count">{data.plugins.length}</span>
-              ) : null}
-            </button>
-          ))}
+          {NAV.map((item) => {
+            const showUpdateDot = item.id === 'about' && isUpdateActionable(update?.phase ?? 'idle')
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={`settings-nav-item${page === item.id ? ' is-active' : ''}`}
+                aria-current={page === item.id ? 'page' : undefined}
+                aria-label={showUpdateDot ? `${item.label}（有可用更新）` : undefined}
+                onClick={() => setPage(item.id)}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+                {item.id === 'plugins' ? (
+                  <span className="settings-nav-count">{data.plugins.length}</span>
+                ) : null}
+                {showUpdateDot ? <span className="settings-nav-dot" aria-hidden="true" /> : null}
+              </button>
+            )
+          })}
         </nav>
         <button
           type="button"
@@ -198,6 +221,7 @@ export function SettingsApp(): React.JSX.Element {
           {page === 'about' ? (
             <AboutPage
               data={data}
+              update={update}
               onToast={(message, tone) => showToast({ message, tone })}
             />
           ) : null}

@@ -78,11 +78,11 @@ export interface PluginSummary extends PluginManifest {
 }
 
 export interface CommandEntry {
-  id: 'settings' | 'refresh-apps' | 'quit'
+  id: 'settings' | 'check-updates' | 'refresh-apps' | 'quit'
   name: string
   subtitle: string
   keywords: string[]
-  iconKey: 'settings' | 'refresh' | 'power'
+  iconKey: 'settings' | 'update' | 'refresh' | 'power'
 }
 
 export interface AppEntry {
@@ -302,11 +302,44 @@ export interface PluginInspection {
   warning: string | null
 }
 
-export interface UpdateCheckResult {
+/**
+ * Update lifecycle. `unsupported` means the newest release has no artifact for
+ * this platform, so there is nothing the app can download.
+ */
+export type UpdatePhase =
+  | 'unsupported'
+  | 'idle'
+  | 'checking'
+  | 'latest'
+  | 'available'
+  | 'downloading'
+  | 'ready'
+  | 'installing'
+  | 'error'
+
+/** How the downloaded artifact gets applied. `manual` = hand off to the OS. */
+export type UpdateInstallKind = 'relaunch' | 'manual' | 'none'
+
+export interface UpdateState {
+  phase: UpdatePhase
   currentVersion: string
   latestVersion: string | null
-  updateAvailable: boolean
+  releaseName: string | null
+  releaseNotes: string | null
+  releaseUrl: string | null
+  publishedAt: number | null
+  assetName: string | null
+  assetSize: number | null
+  downloadedBytes: number
+  totalBytes: number
+  /** 0…1, mirrored so the renderer never recomputes it from bytes. */
+  progress: number
+  downloadPath: string | null
+  installKind: UpdateInstallKind
+  canInstall: boolean
   message: string
+  error: string | null
+  checkedAt: number | null
 }
 
 export interface GitDiffResult {
@@ -326,6 +359,7 @@ export interface FlashcastEvents {
   'shortcuts:changed': { shortcuts: ShortcutInfo[]; errors: ShortcutError[] }
   'toast': ToastMessage
   'prefs:changed': AppPrefs
+  'updates:changed': UpdateState
 }
 
 export type EventName = keyof FlashcastEvents
@@ -379,7 +413,13 @@ export interface FlashcastApi {
 
   setShortcuts(patch: Partial<GlobalHotkeys>): Promise<{ shortcuts: ShortcutInfo[]; errors: ShortcutError[] }>
   resetShortcuts(): Promise<{ shortcuts: ShortcutInfo[]; errors: ShortcutError[] }>
-  checkUpdates(): Promise<UpdateCheckResult>
+  getUpdateState(): Promise<UpdateState>
+  checkForUpdates(): Promise<UpdateState>
+  downloadUpdate(): Promise<UpdateState>
+  cancelUpdate(): Promise<UpdateState>
+  installUpdate(): Promise<ActionResult>
+  openReleasePage(): Promise<void>
+  showUpdateFile(): Promise<void>
   quit(): void
 
   on<K extends EventName>(event: K, handler: (payload: FlashcastEvents[K]) => void): () => void

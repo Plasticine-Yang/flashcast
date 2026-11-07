@@ -275,6 +275,148 @@
   }
 }
 
+
+/* Settings entry ---------------------------------------------------------- */
+
+.fc-settings-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 9px;
+  color: var(--fc-text-tertiary);
+  transition:
+    background var(--fc-dur-instant) ease,
+    color var(--fc-dur-instant) ease,
+    transform var(--fc-dur-instant) ease;
+}
+
+.fc-settings-button:hover {
+  background: var(--fc-surface-2);
+  color: var(--fc-text-primary);
+}
+
+.fc-settings-button:active {
+  transform: scale(0.96);
+}
+
+.fc-settings-button:focus-visible {
+  outline-offset: 1px;
+}
+
+/* Update chip ------------------------------------------------------------- */
+
+/* Only rendered while an update is actionable, so the idle top bar keeps its
+   original rhythm. Progress is a scaled bar, never an animated width. */
+.fc-update-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  max-width: 168px;
+  flex: none;
+  padding: 0 9px;
+  border-radius: 8px;
+  border: 1px solid var(--fc-accent-line);
+  background: color-mix(in srgb, var(--fc-accent) 16%, transparent);
+  color: var(--fc-accent-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  animation: fc-chip-in 220ms var(--fc-ease-out) both;
+  transition:
+    background var(--fc-dur-instant) ease,
+    border-color var(--fc-dur-instant) ease,
+    color var(--fc-dur-instant) ease;
+}
+
+.fc-update-chip:hover {
+  background: color-mix(in srgb, var(--fc-accent) 24%, transparent);
+  border-color: var(--fc-accent);
+}
+
+.fc-update-chip:focus-visible {
+  outline-offset: 1px;
+}
+
+.fc-update-chip[data-phase='downloading'],
+.fc-update-chip[data-phase='installing'] {
+  border-color: var(--fc-border-subtle);
+  background: var(--fc-surface-1);
+  color: var(--fc-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.fc-update-chip[data-phase='ready'] {
+  border-color: color-mix(in srgb, var(--fc-success) 42%, transparent);
+  background: var(--fc-success-soft);
+  color: var(--fc-success);
+}
+
+.fc-update-chip[data-phase='ready']:hover {
+  background: color-mix(in srgb, var(--fc-success) 20%, transparent);
+  border-color: var(--fc-success);
+}
+
+.fc-update-chip[data-phase='installing'] {
+  opacity: 0.86;
+}
+
+.fc-update-chip[aria-disabled='true'] {
+  cursor: default;
+}
+
+.fc-update-chip[aria-disabled='true']:hover {
+  border-color: var(--fc-border-subtle);
+  background: var(--fc-surface-1);
+}
+
+.fc-update-chip-icon {
+  display: flex;
+  flex: none;
+}
+
+.fc-update-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fc-update-chip-spinner {
+  animation: fc-spin 0.9s linear infinite;
+}
+
+.fc-update-chip-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--fc-surface-2);
+}
+
+.fc-update-chip-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: linear-gradient(90deg, #6fa8ff, var(--fc-accent));
+  transition: transform 200ms linear;
+}
+
+@keyframes fc-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .fc-views {
   position: relative;
   flex: 1;
@@ -827,7 +969,18 @@
 @media (prefers-reduced-motion: reduce) {
   .fc-enter .fc-row,
   .fc-plugin-badge,
-  .fc-plugin-view {
+  .fc-plugin-view,
+  .fc-update-chip {
     animation: none;
+  }
+
+  .fc-update-chip-fill,
+  .fc-update-chip-spinner {
+    transition: none;
+    animation-duration: 2s;
+  }
+
+  .fc-settings-button:active {
+    transform: none;
   }
 }

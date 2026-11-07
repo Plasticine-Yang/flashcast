@@ -1,8 +1,9 @@
-import { ExternalLink, Power, RefreshCw, ScrollText } from 'lucide-react'
+import { ExternalLink, Power, ScrollText } from 'lucide-react'
 import { useState } from 'react'
-import type { BootstrapData } from '@shared/types'
+import type { BootstrapData, UpdateState } from '@shared/types'
 import { api } from '../bridge'
 import { Modal, PageHeader, PlatformName, Section, Logo, StatusChip } from './components'
+import { UpdateCard } from './UpdateCard'
 
 const LICENSES = [
   { name: 'Electron', license: 'MIT', note: '跨平台桌面运行时' },
@@ -15,28 +16,15 @@ const LICENSES = [
 
 export function AboutPage({
   data,
+  update,
   onToast
 }: {
   data: BootstrapData
+  update: UpdateState | null
   onToast: (message: string, tone?: 'default' | 'success' | 'warning' | 'danger') => void
 }): React.JSX.Element {
-  const [checking, setChecking] = useState(false)
-  const [updateMessage, setUpdateMessage] = useState<string | null>(null)
   const [licensesOpen, setLicensesOpen] = useState(false)
   const [quitBusy, setQuitBusy] = useState(false)
-
-  const check = async (): Promise<void> => {
-    setChecking(true)
-    try {
-      const result = await api.checkUpdates()
-      setUpdateMessage(result.message)
-      onToast(result.message, 'default')
-    } catch (error) {
-      onToast((error as Error).message, 'danger')
-    } finally {
-      setChecking(false)
-    }
-  }
 
   return (
     <>
@@ -62,6 +50,10 @@ export function AboutPage({
           </div>
         </div>
 
+        <Section title="更新" description="检查新版本，下载后一键重启安装。">
+          <UpdateCard data={data} update={update} onToast={onToast} />
+        </Section>
+
         <Section title="应用信息">
           <div className="settings-kv settings-kv--card">
             <span>版本</span>
@@ -78,22 +70,6 @@ export function AboutPage({
           <div className="settings-kv settings-kv--card">
             <span>构建类型</span>
             <span>{data.isDev ? '开发构建' : '稳定构建'}</span>
-          </div>
-        </Section>
-
-        <Section title="更新">
-          <div className="settings-update-row">
-            <div>
-              <div className="settings-row-label">检查更新</div>
-              <div className="settings-row-description">
-                当前版本 v{data.version}
-                {updateMessage ? ` · ${updateMessage}` : ''}
-              </div>
-            </div>
-            <button type="button" className="fc-btn" onClick={() => void check()} disabled={checking}>
-              {checking ? <span className="fc-spinner" aria-hidden="true" /> : <RefreshCw size={13} strokeWidth={1.75} aria-hidden="true" />}
-              检查更新
-            </button>
           </div>
         </Section>
 

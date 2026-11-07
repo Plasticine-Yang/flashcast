@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   AppWindow,
+  ArrowDownToLine,
   Bookmark,
   Check,
   Clipboard,
@@ -90,6 +91,7 @@ const ICONS: Record<string, LucideIcon> = {
   clipboard: Clipboard,
   bookmark: Bookmark,
   settings: Settings,
+  update: ArrowDownToLine,
   refresh: RefreshCw,
   power: Power,
   app: AppWindow,

@@ -37,7 +37,14 @@ const appIconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height=
   <path d="M566 150 L300 558 H470 L402 874" fill="none" stroke="#EAF4FF" stroke-opacity="0.5" stroke-width="4" stroke-linejoin="round"/>
 </svg>`
 
-const traySvg = (color) => `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 1024 1024">
+/**
+ * 闪电外框是 x:286…750、y:120…904，在 1024 的 viewBox 里只占 77% 高。
+ * 菜单栏模板图（macOS）裁到字形外框并留 1pt 边距：18pt 画布里字形正好 16pt，
+ * 与系统状态栏图标一致；直接渲染 1024 画布会让字形只有约 14pt，看起来偏小。
+ */
+const BOLT_VIEWBOX = '77 71 882 882'
+
+const traySvg = (color, viewBox = '0 0 1024 1024') => `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="${viewBox}">
   <path d="M566 120 L286 556 H470 L392 904 L750 420 H548 L654 120 Z" fill="${color}"/>
 </svg>`
 
@@ -63,17 +70,31 @@ const videoCoverSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" heig
 
 await writeFile(join(build, 'icon.svg'), appIconSvg)
 await writeFile(join(build, 'tray.svg'), traySvg('#5B9DFF'))
-await writeFile(join(build, 'trayTemplate.svg'), traySvg('#000000'))
+await writeFile(join(build, 'trayTemplate.svg'), traySvg('#000000', BOLT_VIEWBOX))
 await writeFile(join(build, 'video-cover.svg'), videoCoverSvg)
 
-const chrome = ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'].find((command) => {
+// macOS 上 Chrome 不在 PATH 里，得按 .app 包内的可执行文件查找。
+const CHROME_CANDIDATES = [
+  'google-chrome',
+  'google-chrome-stable',
+  'chromium',
+  'chromium-browser',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium'
+]
+
+function resolveCommand(command) {
+  if (command.startsWith('/')) return existsSync(command) ? command : null
   try {
     execFileSync('which', [command], { stdio: 'ignore' })
-    return true
+    return command
   } catch {
-    return false
+    return null
   }
-})
+}
+
+const chrome = CHROME_CANDIDATES.map(resolveCommand).find((command) => typeof command === 'string')
+const trayOnly = process.argv.includes('--tray-only')
 
 if (!chrome) {
   console.warn('Chrome/Chromium not found; SVG sources were written but PNG icons were not generated.')
@@ -242,19 +263,25 @@ try {
     console.log(`generated ${output.replace(`${root}/`, '')} (${width}×${height})`)
   }
 
-  await render(appIconSvg, 'icon', 1024)
+  if (!trayOnly) {
+    await render(appIconSvg, 'icon', 1024)
 
-  // Linux 桌面图标需要一整套标准尺寸：hicolor 的 index.theme 只索引到 512x512，
-  // 只装一个 1024x1024 的 PNG 会被 GNOME 当成“没有图标”而回退到通用齿轮图标。
-  const ICON_SIZES = [16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512]
-  await mkdir(join(build, 'icons'), { recursive: true })
-  for (const size of ICON_SIZES) {
-    await render(appIconSvg, `${size}x${size}`, size, size, join(build, 'icons'))
+    // Linux 桌面图标需要一整套标准尺寸：hicolor 的 index.theme 只索引到 512x512，
+    // 只装一个 1024x1024 的 PNG 会被 GNOME 当成“没有图标”而回退到通用齿轮图标。
+    const ICON_SIZES = [16, 22, 24, 32, 36, 48, 64, 72, 96, 128, 192, 256, 512]
+    await mkdir(join(build, 'icons'), { recursive: true })
+    for (const size of ICON_SIZES) {
+      await render(appIconSvg, `${size}x${size}`, size, size, join(build, 'icons'))
+    }
+    await render(videoCoverSvg, 'video-cover', 1280, 720)
   }
+
+  // 托盘图：Linux/Windows 的托盘由面板自行缩放，保留 64px 彩色版本。
   await render(traySvg('#5B9DFF'), 'tray', 64)
-  await render(traySvg('#000000'), 'trayTemplate', 32)
-  await render(traySvg('#000000'), 'trayTemplate@2x', 64)
-  await render(videoCoverSvg, 'video-cover', 1280, 720)
+  // macOS 菜单栏模板图按 point 绘制：18pt（@2x 36px）。之前用 32pt，
+  // 状态栏里闪电高度比系统图标高出一截，明显偏大。
+  await render(traySvg('#000000', BOLT_VIEWBOX), 'trayTemplate', 18)
+  await render(traySvg('#000000', BOLT_VIEWBOX), 'trayTemplate@2x', 36)
 } finally {
   await client.close()
 }

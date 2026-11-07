@@ -13,6 +13,7 @@ import type {
   PluginPage,
   PluginSettingsPage,
   PluginSummary,
+  UpdateState,
   WorkspaceSummary
 } from '@shared/types'
 import {
@@ -48,6 +49,151 @@ export function createMockApi(): FlashcastApi {
   let workspace: WorkspaceSummary = { ...mockWorkspace }
   let clipboardMax = mockClipboardConfig.maxItems
   let chromeProfile = 'Default'
+
+  /* ------------------------------- updates ------------------------------- */
+
+  const updateScenario = params.get('update') ?? ''
+  const RELEASE_NOTES = [
+    '- 顶栏新增设置入口，⌘, / Ctrl+, 可直接打开设置',
+    '- 检查更新：发现新版本后可一键下载并重启安装',
+    '- 修复 macOS 菜单栏图标比系统图标偏大的问题'
+  ].join('\n')
+
+  const updateBase = (): UpdateState => ({
+    phase: 'idle',
+    currentVersion: mockBootstrap.version,
+    latestVersion: null,
+    releaseName: null,
+    releaseNotes: null,
+    releaseUrl: null,
+    publishedAt: null,
+    assetName: null,
+    assetSize: null,
+    downloadedBytes: 0,
+    totalBytes: 0,
+    progress: 0,
+    downloadPath: null,
+    installKind: 'none',
+    canInstall: false,
+    message: '尚未检查更新',
+    error: null,
+    checkedAt: null
+  })
+
+  const availableState = (): UpdateState => ({
+    ...updateBase(),
+    phase: 'available',
+    latestVersion: '0.3.0',
+    releaseName: 'Flashcast 0.3.0',
+    releaseNotes: RELEASE_NOTES,
+    releaseUrl: 'https://github.com/Plasticine-Yang/flashcast/releases/tag/v0.3.0',
+    publishedAt: Date.now() - 1000 * 60 * 60 * 26,
+    assetName:
+      platform === 'win32'
+        ? 'Flashcast.Setup.0.3.0.exe'
+        : platform === 'linux'
+          ? 'Flashcast-0.3.0.AppImage'
+          : 'Flashcast-0.3.0-arm64-mac.zip',
+    assetSize: 128_729_462,
+    totalBytes: 128_729_462,
+    installKind: 'relaunch',
+    canInstall: true,
+    checkedAt: Date.now() - 1000 * 120,
+    message: '发现新版本 v0.3.0'
+  })
+
+  const latestState = (): UpdateState => ({
+    ...updateBase(),
+    phase: 'latest',
+    latestVersion: mockBootstrap.version,
+    checkedAt: Date.now() - 1000 * 90,
+    releaseUrl: 'https://github.com/Plasticine-Yang/flashcast/releases',
+    message: `已是最新版本 v${mockBootstrap.version}`
+  })
+
+  const initialUpdate = (): UpdateState => {
+    if (updateScenario === 'available') return availableState()
+    if (updateScenario === 'downloading') {
+      const total = 128_729_462
+      return {
+        ...availableState(),
+        phase: 'downloading',
+        downloadedBytes: Math.round(total * 0.42),
+        progress: 0.42,
+        message: '正在下载更新…'
+      }
+    }
+    if (updateScenario === 'ready') {
+      return {
+        ...availableState(),
+        phase: 'ready',
+        downloadedBytes: 128_729_462,
+        progress: 1,
+        downloadPath: '/Users/you/Library/Application Support/Flashcast/updates/Flashcast-0.3.0-arm64-mac.zip',
+        message: '更新已就绪，重启后完成安装'
+      }
+    }
+    if (updateScenario === 'latest') return latestState()
+    if (updateScenario === 'error') {
+      return {
+        ...updateBase(),
+        phase: 'error',
+        checkedAt: Date.now(),
+        message: '检查更新失败',
+        error: '请求超时，请检查网络连接'
+      }
+    }
+    return updateBase()
+  }
+
+  /** Result of an explicit check: without a scenario the preview is up to date. */
+  const checkedUpdate = (): UpdateState => (updateScenario ? initialUpdate() : latestState())
+
+  let updateState = initialUpdate()
+  let downloadTimer: number | null = null
+
+  const emitUpdate = (next: UpdateState): void => {
+    updateState = next
+    emit('updates:changed', next)
+  }
+
+  const stopDownload = (): void => {
+    if (downloadTimer !== null) window.clearInterval(downloadTimer)
+    downloadTimer = null
+  }
+
+  const startDownload = (): void => {
+    stopDownload()
+    const total = updateState.totalBytes || 128_729_462
+    let downloaded = updateState.phase === 'downloading' ? updateState.downloadedBytes : 0
+    emitUpdate({
+      ...updateState,
+      phase: 'downloading',
+      downloadedBytes: downloaded,
+      totalBytes: total,
+      progress: downloaded / total,
+      message: '正在下载更新…',
+      error: null
+    })
+    downloadTimer = window.setInterval(() => {
+      downloaded = Math.min(total, downloaded + total / 20)
+      const done = downloaded >= total
+      if (done) stopDownload()
+      emitUpdate({
+        ...updateState,
+        phase: done ? 'ready' : 'downloading',
+        downloadedBytes: downloaded,
+        totalBytes: total,
+        progress: downloaded / total,
+        downloadPath: done
+          ? '/Users/you/Library/Application Support/Flashcast/updates/Flashcast-0.3.0-arm64-mac.zip'
+          : null,
+        installKind: 'relaunch',
+        canInstall: true,
+        message: done ? '更新已就绪，重启后完成安装' : '正在下载更新…'
+      })
+    }, 220)
+  }
 
   const bootstrap = (): BootstrapData => ({
     ...mockBootstrap,
@@ -177,6 +323,22 @@ export function createMockApi(): FlashcastApi {
       if (commandId === 'refresh-apps') {
         return { ok: true, toast: { message: '已重新加载应用列表', tone: 'success' } }
       }
+      if (commandId === 'check-updates') {
+        emitUpdate({ ...updateState, phase: 'checking', message: '正在检查更新…', error: null })
+        await new Promise((resolve) => window.setTimeout(resolve, 500))
+        const next = checkedUpdate()
+        emitUpdate(next)
+        if (next.phase === 'available') {
+          return {
+            ok: true,
+            toast: { message: `发现新版本 v${next.latestVersion}，可用右上角的更新按钮一键安装`, tone: 'warning' }
+          }
+        }
+        if (next.phase === 'latest') {
+          return { ok: true, toast: { message: `当前已是最新版本 v${next.currentVersion}`, tone: 'success' } }
+        }
+        return { ok: false, error: next.error ?? next.message }
+      }
       return { ok: true }
     },
 
@@ -276,12 +438,36 @@ export function createMockApi(): FlashcastApi {
       emit('shortcuts:changed', { shortcuts, errors: [] })
       return { shortcuts, errors: [] }
     },
-    checkUpdates: async () => ({
-      currentVersion: '0.1.0',
-      latestVersion: null,
-      updateAvailable: false,
-      message: '当前为开发构建，未配置更新源'
+    getUpdateState: async () => updateState,
+    checkForUpdates: async () => {
+      emitUpdate({ ...updateState, phase: 'checking', message: '正在检查更新…', error: null })
+      await new Promise((resolve) => window.setTimeout(resolve, 620))
+      const next = checkedUpdate()
+      emitUpdate(next)
+      return next
+    },
+    downloadUpdate: async () => {
+      startDownload()
+      return updateState
+    },
+    cancelUpdate: async () => {
+      stopDownload()
+      emitUpdate({
+        ...updateState,
+        phase: 'available',
+        downloadedBytes: 0,
+        progress: 0,
+        downloadPath: null,
+        message: '已取消下载'
+      })
+      return updateState
+    },
+    installUpdate: async () => ({
+      ok: true,
+      toast: { message: '正在重启并安装更新（预览模式不会真的重启）', tone: 'success' }
     }),
+    openReleasePage: async () => {},
+    showUpdateFile: async () => {},
     quit: () => {},
 
     on(event, handler) {

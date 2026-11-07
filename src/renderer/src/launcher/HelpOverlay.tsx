@@ -47,6 +47,7 @@ export function HelpOverlay({
     { label: '关闭窗口', keys: ['esc'] },
     { label: '移动选中项', keys: [...vimKeycap('j', platform), '/', ...vimKeycap('k', platform)] },
     { label: '打开选中项', keys: ['↵'] },
+    { label: '打开设置', keys: [platform === 'darwin' ? '⌘' : 'Ctrl', ','] },
     { label: '快捷键帮助', keys: ['?'] }
   ]
 

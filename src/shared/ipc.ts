@@ -49,6 +49,14 @@ export const IPC = {
   resetShortcuts: 'shortcuts:reset',
   shortcutsChanged: 'shortcuts:changed',
 
-  checkUpdates: 'app:check-updates',
+  updateState: 'updates:get-state',
+  updateCheck: 'updates:check',
+  updateDownload: 'updates:download',
+  updateCancel: 'updates:cancel',
+  updateInstall: 'updates:install',
+  updateOpenRelease: 'updates:open-release',
+  updateShowFile: 'updates:show-file',
+  updateChanged: 'updates:changed',
+
   quit: 'app:quit'
 } as const

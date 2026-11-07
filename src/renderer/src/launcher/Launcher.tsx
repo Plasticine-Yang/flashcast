@@ -19,6 +19,7 @@ import {
 } from '@shared/shortcuts'
 import { api, isMock, previewWallpaper } from '../bridge'
 import { SkeletonRows, Toast, useToast } from '../components/ui'
+import { useUpdateState } from '../hooks/useUpdateState'
 import { BookmarksView } from './BookmarksView'
 import { ClipboardView } from './ClipboardView'
 import { ExternalPluginView } from './ExternalPluginView'
@@ -81,6 +82,7 @@ export function Launcher(): React.JSX.Element {
   const [loadedWallpaper, setLoadedWallpaper] = useState<string | null>(null)
   const [failedWallpaper, setFailedWallpaper] = useState<string | null>(null)
   const { toast, showToast, dismissToast } = useToast()
+  const { update: updateState } = useUpdateState()
 
   const inputRef = useRef<HTMLInputElement>(null)
   const panelRef = useRef<HTMLElement>(null)
@@ -392,10 +394,12 @@ export function Launcher(): React.JSX.Element {
         })
         return
       }
-      void api.runCommand(item.refId as 'settings' | 'refresh-apps' | 'quit').then(async (result) => {
+      void api.runCommand(item.refId as 'settings' | 'check-updates' | 'refresh-apps' | 'quit').then(async (result) => {
         if (!result.ok) showToast({ message: result.error ?? '命令执行失败', tone: 'danger' })
         else if (result.toast) showToast(result.toast)
-        else if (item.refId !== 'settings') await closeLauncher(false)
+        else if (item.refId !== 'settings' && item.refId !== 'check-updates') {
+          await closeLauncher(false)
+        }
       })
       return
     }
@@ -632,6 +636,33 @@ export function Launcher(): React.JSX.Element {
   const closeLauncherRef = useRef(closeLauncher)
   closeLauncherRef.current = closeLauncher
 
+  const settingsShortcut = platform === 'darwin' ? '⌘,' : 'Ctrl+,'
+
+  // Open the settings window from inside the launcher: retract the panel first
+  // so the always-on-top launcher never covers the window that takes focus.
+  const openSettingsWindow = (): void => {
+    void closeLauncher(false)
+    window.setTimeout(() => {
+      void api.openSettings()
+    }, 140)
+  }
+
+  const runUpdateAction = (): void => {
+    const state = updateState
+    if (!state) return
+    if (state.phase === 'available') {
+      void api
+        .downloadUpdate()
+        .catch((error: Error) => showToast({ message: error.message, tone: 'danger' }))
+      return
+    }
+    if (state.phase === 'ready') {
+      void api.installUpdate().then((result) => {
+        if (!result.ok) showToast({ message: result.error ?? '安装更新失败', tone: 'danger' })
+      })
+    }
+  }
+
   /* ------------------------------- effects ------------------------------- */
 
   useEffect(() => {
@@ -859,6 +890,20 @@ export function Launcher(): React.JSX.Element {
         return
       }
       disarmClear()
+    }
+
+    const primaryModifier = platform === 'darwin' ? event.metaKey : event.ctrlKey
+    const secondaryModifier = platform === 'darwin' ? event.ctrlKey : event.metaKey
+    if (
+      primaryModifier &&
+      !secondaryModifier &&
+      !event.altKey &&
+      !event.shiftKey &&
+      key === ','
+    ) {
+      event.preventDefault()
+      openSettingsWindow()
+      return
     }
 
     if (settingsOpen) {
@@ -1215,6 +1260,8 @@ export function Launcher(): React.JSX.Element {
               settingsActive={settingsOpen}
               searchable={searchable}
               readOnly={readOnly}
+              update={updateState}
+              settingsShortcut={settingsShortcut}
               onChange={(value) => {
                 setQuery(value)
                 setSelection(0)
@@ -1225,6 +1272,8 @@ export function Launcher(): React.JSX.Element {
                 focusInput()
               }}
               onPluginClick={togglePluginSettings}
+              onOpenSettings={openSettingsWindow}
+              onUpdateAction={runUpdateAction}
               onCompositionStart={() => {
                 composingRef.current = true
               }}
@@ -1268,7 +1317,7 @@ export function Launcher(): React.JSX.Element {
                           else await closeLauncher(false)
                         })
                       } else {
-                        void api.runCommand(item.refId as 'settings' | 'refresh-apps' | 'quit').then(async (result) => {
+                        void api.runCommand(item.refId as 'settings' | 'check-updates' | 'refresh-apps' | 'quit').then(async (result) => {
                           if (!result.ok) showToast({ message: result.error ?? '命令执行失败', tone: 'danger' })
                           else if (result.toast) showToast(result.toast)
                         })

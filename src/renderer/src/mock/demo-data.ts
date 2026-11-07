@@ -121,6 +121,13 @@ export const mockCommands: CommandEntry[] = [
     iconKey: 'settings'
   },
   {
+    id: 'check-updates',
+    name: '检查更新',
+    subtitle: '获取新版本，并在有更新时一键安装',
+    keywords: ['更新', '升级', '新版本', 'update', 'upgrade', 'check'],
+    iconKey: 'update'
+  },
+  {
     id: 'refresh-apps',
     name: '重新加载应用',
     subtitle: '刷新可搜索的已安装应用',

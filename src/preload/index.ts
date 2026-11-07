@@ -16,6 +16,7 @@ import type {
   PlatformId,
   ShortcutError,
   ShortcutInfo,
+  UpdateState,
   WorkspaceSummary
 } from '@shared/types'
 
@@ -40,7 +41,8 @@ const eventNames = new Set<EventName>([
   'workspace:changed',
   'shortcuts:changed',
   'toast',
-  'prefs:changed'
+  'prefs:changed',
+  'updates:changed'
 ])
 
 const api: FlashcastApi = {
@@ -92,12 +94,13 @@ const api: FlashcastApi = {
     invoke<{ shortcuts: ShortcutInfo[]; errors: ShortcutError[] }>(IPC.setShortcuts, patch),
   resetShortcuts: () =>
     invoke<{ shortcuts: ShortcutInfo[]; errors: ShortcutError[] }>(IPC.resetShortcuts),
-  checkUpdates: () => invoke<{
-    currentVersion: string
-    latestVersion: string | null
-    updateAvailable: boolean
-    message: string
-  }>(IPC.checkUpdates),
+  getUpdateState: () => invoke<UpdateState>(IPC.updateState),
+  checkForUpdates: () => invoke<UpdateState>(IPC.updateCheck),
+  downloadUpdate: () => invoke<UpdateState>(IPC.updateDownload),
+  cancelUpdate: () => invoke<UpdateState>(IPC.updateCancel),
+  installUpdate: () => invoke<ActionResult>(IPC.updateInstall),
+  openReleasePage: () => invoke<void>(IPC.updateOpenRelease),
+  showUpdateFile: () => invoke<void>(IPC.updateShowFile),
   quit: () => ipcRenderer.send(IPC.quit),
 
   on<K extends EventName>(event: K, handler: (payload: FlashcastEvents[K]) => void): () => void {

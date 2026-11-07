@@ -1,6 +1,7 @@
-import { Search, X } from 'lucide-react'
-import type { PluginSummary } from '@shared/types'
+import { Search, Settings, X } from 'lucide-react'
+import type { PluginSummary, UpdateState } from '@shared/types'
 import { PluginIcon } from '../components/ui'
+import { UpdateChip } from './UpdateChip'
 
 export function SearchBar({
   inputRef,
@@ -10,9 +11,13 @@ export function SearchBar({
   settingsActive,
   searchable,
   readOnly,
+  update,
+  settingsShortcut,
   onChange,
   onClear,
   onPluginClick,
+  onOpenSettings,
+  onUpdateAction,
   onCompositionStart,
   onCompositionEnd,
   activeDescendant
@@ -24,9 +29,13 @@ export function SearchBar({
   settingsActive: boolean
   searchable: boolean
   readOnly: boolean
+  update: UpdateState | null
+  settingsShortcut: string
   onChange: (value: string) => void
   onClear: () => void
   onPluginClick: () => void
+  onOpenSettings: () => void
+  onUpdateAction: () => void
   onCompositionStart: () => void
   onCompositionEnd: () => void
   activeDescendant?: string
@@ -63,6 +72,7 @@ export function SearchBar({
         ) : null}
       </div>
       <div className="fc-search-actions">
+        <UpdateChip state={update} onAction={onUpdateAction} />
         {value ? (
           <button
             type="button"
@@ -85,6 +95,15 @@ export function SearchBar({
             <PluginIcon icon={activePlugin.icon} iconKey={activePlugin.iconKey} size={17} />
           </button>
         ) : null}
+        <button
+          type="button"
+          className="fc-settings-button"
+          aria-label="打开设置"
+          title={`打开设置（${settingsShortcut}）`}
+          onClick={onOpenSettings}
+        >
+          <Settings size={16} strokeWidth={1.6} aria-hidden="true" />
+        </button>
       </div>
     </header>
   )
