@@ -244,6 +244,7 @@ export class VscodeLikeWorkspaceService {
       stats[variant.id] = {
         total: entry.workspaces.length,
         missing: entry.workspaces.filter((workspace) => !workspace.exists).length,
+        remote: entry.workspaces.filter((workspace) => workspace.remote !== null).length,
         running: running.has(variant.id)
       }
     }

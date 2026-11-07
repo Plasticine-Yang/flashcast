@@ -372,6 +372,7 @@ export function VscodeLikeWorkspaceSettingsView({
                       <span className="fc-cleanup-setting-name">{variant.name}</span>
                       <span className="fc-cleanup-setting-meta">
                         {stats.total} 个工作区
+                        {stats.remote > 0 ? ` · ${stats.remote} 个远程` : ''}
                         {stats.missing > 0 ? ` · ${stats.missing} 个路径不存在` : ''}
                       </span>
                       {stats.running ? (

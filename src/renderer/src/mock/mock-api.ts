@@ -293,6 +293,7 @@ export function createMockApi(): FlashcastApi {
           {
             total: list.length,
             missing: list.filter((workspace) => !workspace.exists).length,
+            remote: list.filter((workspace) => workspace.remote !== null).length,
             running: variant.id === 'trae-cn'
           }
         ]

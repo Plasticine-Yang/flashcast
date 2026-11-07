@@ -160,6 +160,70 @@ describe('workspace history pruning', () => {
     expect(existsSync(join(result.backupDir!, 'storage.json'))).toBe(true)
   })
 
+  it('prunes remote workspaces by their authority and path', async () => {
+    const dataDir = join(root, 'User Data')
+    const globalStorage = join(dataDir, 'User', 'globalStorage')
+    const remoteUri = 'vscode-remote://ssh-remote%2Bdevbox/cloudide/workspace'
+    const remoteEntry = { folderUri: remoteUri, remoteAuthority: 'ssh-remote+devbox' }
+
+    await write(
+      join(globalStorage, 'storage.json'),
+      JSON.stringify({
+        windowsState: { openedWindows: [remoteEntry] },
+        profileAssociations: { workspaces: { [remoteUri]: 'p' } }
+      })
+    )
+
+    const db = new DatabaseSync(join(globalStorage, 'state.vscdb'))
+    db.exec('CREATE TABLE ItemTable (key TEXT, value TEXT)')
+    db.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)').run(
+      'history.recentlyOpenedPathsList',
+      JSON.stringify({ entries: [remoteEntry] })
+    )
+    db.close()
+
+    await write(
+      join(dataDir, 'User', 'workspaceStorage', 'remote-hash', 'workspace.json'),
+      JSON.stringify({ folder: remoteUri })
+    )
+
+    const target: EditorWorkspace = {
+      id: 'remote',
+      variantId: 'code',
+      name: 'cloudide-workspace',
+      path: '/cloudide/workspace',
+      displayPath: 'devbox:/cloudide/workspace',
+      uri: remoteUri,
+      kind: 'folder',
+      remote: { authority: 'ssh-remote+devbox', host: 'devbox', label: 'ssh-remote · devbox' },
+      isOpen: false,
+      lastActiveAt: 0,
+      exists: true
+    }
+
+    const result = await pruneWorkspaces(
+      variant(dataDir),
+      [target],
+      join(root, 'backups'),
+      'darwin'
+    )
+    expect(result.removed).toBeGreaterThan(0)
+
+    const dbCheck = new DatabaseSync(join(globalStorage, 'state.vscdb'), { readOnly: true })
+    const row = dbCheck
+      .prepare('SELECT value FROM ItemTable WHERE key = ?')
+      .get('history.recentlyOpenedPathsList') as { value: string }
+    dbCheck.close()
+    expect((JSON.parse(row.value) as { entries: unknown[] }).entries).toEqual([])
+
+    const storage = JSON.parse(
+      await readFile(join(globalStorage, 'storage.json'), 'utf8')
+    ) as { windowsState: { openedWindows: unknown[] }; profileAssociations: { workspaces: Record<string, string> } }
+    expect(storage.windowsState.openedWindows).toEqual([])
+    expect(Object.keys(storage.profileAssociations.workspaces)).toEqual([])
+    expect(await readdir(join(result.backupDir!, 'workspaceStorage'))).toEqual(['remote-hash'])
+  })
+
   it('does nothing when the target list is empty', async () => {
     const dataDir = join(root, 'User Data')
     const result = await pruneWorkspaces(variant(dataDir), [], join(root, 'backups'), 'darwin')

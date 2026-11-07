@@ -6,7 +6,7 @@ import { relativeTime } from '@shared/time'
 import { api } from '../bridge'
 import { Highlight, scrollRowIntoView } from '../components/ui'
 
-type Filter = 'all' | 'missing'
+type Filter = 'all' | 'missing' | 'remote'
 
 export interface CleanupTarget {
   variantId: string
@@ -61,6 +61,7 @@ export function WorkspaceCleanupView({
     const trimmed = query.trim()
     return workspaces.filter((workspace) => {
       if (filter === 'missing' && workspace.exists) return false
+      if (filter === 'remote' && !workspace.remote) return false
       if (!trimmed) return true
       return Boolean(matchFields(trimmed, [workspace.name, workspace.displayPath, workspace.path]))
     })
@@ -68,6 +69,7 @@ export function WorkspaceCleanupView({
 
   const selectedCount = selected.size
   const missingCount = workspaces.filter((workspace) => !workspace.exists).length
+  const remoteCount = workspaces.filter((workspace) => workspace.remote !== null).length
   const activeIndex = Math.min(cursor, Math.max(0, visible.length - 1))
 
   useEffect(() => {
@@ -200,6 +202,18 @@ export function WorkspaceCleanupView({
           只看不存在
           {missingCount > 0 ? <span className="fc-chip-count">{missingCount}</span> : null}
         </button>
+        <button
+          type="button"
+          className={`fc-chip${filter === 'remote' ? ' is-active' : ''}`}
+          aria-pressed={filter === 'remote'}
+          onClick={() => {
+            setFilter((value) => (value === 'remote' ? 'all' : 'remote'))
+            setCursor(0)
+          }}
+        >
+          只看远程
+          {remoteCount > 0 ? <span className="fc-chip-count">{remoteCount}</span> : null}
+        </button>
         <span className="fc-cleanup-spacer" />
         <button type="button" className="fc-cleanup-link" onClick={() => setSelected(new Set(visible.map((row) => row.id)))}>
           全选
@@ -227,6 +241,16 @@ export function WorkspaceCleanupView({
         >
           选中全部不存在
         </button>
+        <button
+          type="button"
+          className="fc-cleanup-link"
+          disabled={remoteCount === 0}
+          onClick={() =>
+            setSelected(new Set(workspaces.filter((row) => row.remote).map((row) => row.id)))
+          }
+        >
+          选中全部远程
+        </button>
         {running ? (
           <span className="fc-cleanup-warning">
             <AlertTriangle size={12} strokeWidth={1.75} aria-hidden="true" />
@@ -250,7 +274,11 @@ export function WorkspaceCleanupView({
       >
         {visible.length === 0 ? (
           <div className="fc-empty-inline">
-            {filter === 'missing' ? '没有路径不存在的工作区' : '没有匹配的工作区'}
+            {filter === 'missing'
+              ? '没有路径不存在的工作区'
+              : filter === 'remote'
+                ? '没有远程工作区'
+                : '没有匹配的工作区'}
           </div>
         ) : (
           visible.map((workspace, index) => {
@@ -295,7 +323,11 @@ export function WorkspaceCleanupView({
 
       <div className="fc-settings-footer fc-cleanup-footer" aria-live="polite">
         <span className="fc-cleanup-summary">
-          {selectedCount > 0 ? `已选 ${selectedCount} 项` : `共 ${workspaces.length} 个工作区`}
+          {selectedCount > 0
+            ? `已选 ${selectedCount} 项`
+            : visible.length === workspaces.length
+              ? `共 ${workspaces.length} 个工作区`
+              : `显示 ${visible.length} / 共 ${workspaces.length} 个工作区`}
         </span>
         <span className="fc-cleanup-hint">
           <kbd>空格</kbd> 勾选 · <kbd>↵</kbd> 删除 · <kbd>esc</kbd> 返回

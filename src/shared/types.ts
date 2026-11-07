@@ -269,6 +269,7 @@ export interface VscodeLikeWorkspaceOptions {
 export interface EditorWorkspaceStats {
   total: number
   missing: number
+  remote: number
   running: boolean
 }
 

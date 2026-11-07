@@ -753,9 +753,9 @@ export const mockEditorSettings: VscodeLikeWorkspaceSettingsPage = {
   options: { includeRemote: true, hideMissing: false, maxItems: 1000 },
   triggerErrors: {},
   workspaceStats: {
-    code: { total: 3, missing: 1, running: false },
-    'trae-cn': { total: 3, missing: 0, running: false },
-    cursor: { total: 1, missing: 0, running: false }
+    code: { total: 3, missing: 1, remote: 0, running: false },
+    'trae-cn': { total: 3, missing: 0, remote: 1, running: false },
+    cursor: { total: 1, missing: 0, remote: 0, running: false }
   },
   error: null,
   notice: null,
