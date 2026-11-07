@@ -1,10 +1,10 @@
 import { shell } from 'electron'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import type {
@@ -19,6 +19,7 @@ import type {
 import type { ConfigStore } from './config-store'
 import { BUILTIN_MANIFESTS } from './builtins/manifests'
 import { log } from './logger'
+import { sanitizeSource } from './source'
 import type { WorkspaceLayout } from './paths'
 
 const execFileAsync = promisify(execFile)
@@ -27,6 +28,10 @@ const nativeImport = new Function('specifier', 'return import(specifier)') as (
 ) => Promise<Record<string, unknown>>
 
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,63}$/
+const MAX_PLUGIN_BYTES = 20 * 1024 * 1024
+const EXCLUDED_PLUGIN_SEGMENTS = new Set(['.git', 'node_modules', '.DS_Store', '.tmp'])
+const PLUGIN_CODE_COMMIT_NOTICE =
+  '插件代码会写入工作区 extensions/ 并随工作区 Git 提交；仅安装可信来源。'
 
 export interface ExternalSettingDefinition {
   key: string
@@ -623,6 +628,7 @@ export class ExternalPluginManager {
       : 'local'
 
     let dir: string
+    let cloned = false
     if (sourceType === 'git') {
       const token = randomUUID()
       const cloneDir = join(this.layout.installTempDir, token)
@@ -642,6 +648,7 @@ export class ExternalPluginManager {
         throw new Error(`克隆失败：${(error as Error).message.split('\n')[0]}`)
       }
       dir = cloneDir
+      cloned = true
     } else {
       const expanded = trimmed.startsWith('~')
         ? join(process.env.HOME ?? process.env.USERPROFILE ?? '', trimmed.slice(1))
@@ -650,41 +657,52 @@ export class ExternalPluginManager {
       if (!existsSync(dir)) throw new Error('路径不存在')
     }
 
-    const manifest = await readExternalManifest(dir)
-    if (BUILTIN_MANIFESTS.some((builtin) => builtin.id === manifest.id)) {
-      throw new Error(`插件 id「${manifest.id}」与内置插件冲突`)
-    }
+    try {
+      const manifest = await readExternalManifest(dir)
+      if (BUILTIN_MANIFESTS.some((builtin) => builtin.id === manifest.id)) {
+        throw new Error(`插件 id「${manifest.id}」与内置插件冲突`)
+      }
 
-    const token = randomUUID()
-    const stats = await directoryStats(dir)
-    const existing = this.plugins.get(manifest.id)
-    const record: InspectionRecord = {
-      token,
-      manifest,
-      source: { sourceType, source: trimmed, installedAt: Date.now() },
-      dir,
-      fileCount: stats.fileCount,
-      size: stats.size,
-      expiresAt: Date.now() + 10 * 60 * 1000,
-      alreadyInstalled: Boolean(existing),
-      installedVersion: existing?.manifest.version ?? null
-    }
-    this.inspections.set(token, record)
+      const token = randomUUID()
+      const safeSource = sanitizeSource(trimmed)
+      const stats = await directoryStats(dir)
+      if (stats.size > MAX_PLUGIN_BYTES) {
+        throw new Error(
+          `插件体积 ${formatBytes(stats.size)} 超过 ${formatBytes(MAX_PLUGIN_BYTES)} 上限，已拒绝安装`
+        )
+      }
+      const existing = this.plugins.get(manifest.id)
+      const record: InspectionRecord = {
+        token,
+        manifest,
+        source: { sourceType, source: safeSource, installedAt: Date.now() },
+        dir,
+        fileCount: stats.fileCount,
+        size: stats.size,
+        expiresAt: Date.now() + 10 * 60 * 1000,
+        alreadyInstalled: Boolean(existing),
+        installedVersion: existing?.manifest.version ?? null
+      }
+      this.inspections.set(token, record)
 
-    return {
-      token,
-      manifest: toPublicManifest(manifest),
-      sourceType,
-      source: trimmed,
-      permissions: manifest.permissions,
-      entry: manifest.entry,
-      fileCount: stats.fileCount,
-      size: stats.size,
-      alreadyInstalled: record.alreadyInstalled,
-      installedVersion: record.installedVersion,
-      warning: manifest.permissions.length
-        ? '插件将在本机以当前用户权限运行，请仅安装可信来源'
-        : null
+      return {
+        token,
+        manifest: toPublicManifest(manifest),
+        sourceType,
+        source: safeSource,
+        permissions: manifest.permissions,
+        entry: manifest.entry,
+        fileCount: stats.fileCount,
+        size: stats.size,
+        alreadyInstalled: record.alreadyInstalled,
+        installedVersion: record.installedVersion,
+        warning: manifest.permissions.length
+          ? `${PLUGIN_CODE_COMMIT_NOTICE}插件将在本机以当前用户权限运行，申请权限：${manifest.permissions.join('、')}`
+          : PLUGIN_CODE_COMMIT_NOTICE
+      }
+    } catch (error) {
+      if (cloned) await rm(dir, { recursive: true, force: true })
+      throw error
     }
   }
 
@@ -763,7 +781,15 @@ export class ExternalPluginManager {
 
     await cp(sourceDir, staging, {
       recursive: true,
-      filter: (path) => !path.includes(`${sep}.git${sep}`) && !path.endsWith(`${sep}.git`)
+      dereference: false,
+      filter: (path) => {
+        if (!isCopyablePluginPath(relative(sourceDir, path))) return false
+        try {
+          return !lstatSync(path).isSymbolicLink()
+        } catch {
+          return false
+        }
+      }
     })
     await writeFile(
       join(staging, '.flashcast-source.json'),
@@ -797,7 +823,9 @@ export class ExternalPluginManager {
       const raw = JSON.parse(
         readFileSync(join(dir, '.flashcast-source.json'), 'utf8')
       ) as SourceMeta
-      if (raw && (raw.sourceType === 'git' || raw.sourceType === 'local')) return raw
+      if (raw && (raw.sourceType === 'git' || raw.sourceType === 'local')) {
+        return { ...raw, source: sanitizeSource(String(raw.source ?? '')) }
+      }
     } catch {
       // no metadata
     }
@@ -1094,7 +1122,7 @@ async function directoryStats(dir: string): Promise<{ fileCount: number; size: n
       return
     }
     for (const entry of entries) {
-      if (entry.name === '.git') continue
+      if (!isCopyablePluginPath(entry.name) || entry.isSymbolicLink()) continue
       const full = join(current, entry.name)
       if (entry.isDirectory()) await walk(full)
       else if (entry.isFile()) {
@@ -1109,6 +1137,20 @@ async function directoryStats(dir: string): Promise<{ fileCount: number; size: n
   }
   await walk(dir)
   return { fileCount, size }
+}
+
+/** Package files only: VCS/dependency/cache directories and logs are never copied. */
+function isCopyablePluginPath(path: string): boolean {
+  const segments = path.split(/[\\/]/)
+  if (segments.some((segment) => EXCLUDED_PLUGIN_SEGMENTS.has(segment))) return false
+  const name = segments[segments.length - 1] ?? ''
+  return !name.toLowerCase().endsWith('.log')
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`
+  return `${bytes}B`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

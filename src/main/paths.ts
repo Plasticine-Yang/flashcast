@@ -83,6 +83,8 @@ export function workspaceLayout(root: string) {
     pluginConfigFile: (id: string) => join(root, 'plugins', id, 'config.json'),
     extensionsDir: join(root, 'extensions'),
     extensionDir: (id: string) => join(root, 'extensions', id),
+    themesDir: join(root, 'themes'),
+    themeDir: (id: string) => join(root, 'themes', id),
     stateDir: join(root, 'state'),
     clipboardDir: join(root, 'state', 'clipboard'),
     clipboardMediaDir: join(root, 'state', 'clipboard', 'media'),

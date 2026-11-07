@@ -4,6 +4,14 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { extname, join } from 'node:path'
 import { IPC } from '@shared/ipc'
+import {
+  BLUE_GLASS_THEME,
+  resolveThemeState,
+  supportedThemeModes,
+  type ResolvedThemeState,
+  type ThemeDefinition,
+  type ThemeMode
+} from '@shared/theme'
 import type {
   ActionResult,
   AppPrefs,
@@ -18,10 +26,10 @@ import type {
   PluginPage,
   PluginSettingsPage,
   PluginSummary,
-  ResolvedTheme,
   ShortcutError,
   ShortcutInfo,
-  ThemeSetting,
+  ThemeInspection,
+  ThemePackError,
   UpdateState,
   WindowRole,
   WorkspaceSummary
@@ -56,6 +64,7 @@ import {
 } from './builtins/manifests'
 import { VscodeLikeWorkspaceService } from './vscode-like-workspace/service'
 import { ShortcutManager } from './shortcut-manager'
+import { ThemeManager } from './theme-manager'
 import { UpdateService } from './update-service'
 import { readDesktopWallpaper } from './wallpaper'
 import { wallpaperRequestTheme } from './wallpaper-path'
@@ -88,6 +97,7 @@ export class FlashcastApplication {
   private shortcuts!: ShortcutManager
   private windows!: WindowManager
   private updates!: UpdateService
+  private themes!: ThemeManager
   private tray: Tray | null = null
   private ready = false
 
@@ -104,6 +114,13 @@ export class FlashcastApplication {
     await this.workspace.init()
 
     const layout = this.workspace.workspaceLayout
+    this.themes = new ThemeManager(
+      layout,
+      (snapshot) => this.broadcast(IPC.themesChanged, snapshot),
+      (message, tone = 'default') => this.toast(message, tone)
+    )
+    await this.themes.init()
+
     this.clipboard = new ClipboardService(this.config, this.platform, layout)
     await this.clipboard.init()
 
@@ -137,7 +154,8 @@ export class FlashcastApplication {
     await this.applyLaunchAtLogin(this.config.getPrefs().launchAtLogin)
 
     this.windows = new WindowManager(this.platform, {
-      onPasteAfterHide: () => pasteIntoActiveApp(this.platform)
+      onPasteAfterHide: () => pasteIntoActiveApp(this.platform),
+      theme: () => this.themeForWindow()
     })
     this.shortcuts = new ShortcutManager(this.platform, {
       launcher: () => this.windows.toggleLauncher(),
@@ -198,41 +216,101 @@ export class FlashcastApplication {
       this.broadcast(IPC.workspaceChanged, summary)
     })
     nativeTheme.on('updated', () => {
-      this.broadcast(IPC.themeChanged, {
-        theme: this.resolvedTheme(),
-        setting: this.config.getPrefs().theme
-      })
+      if (!this.themes) return
+      const requested = this.themes.getTheme(this.config.getPrefs().themeId)
+      // A single-variant theme ignores the OS setting, so reacting would only
+      // re-apply the same state and can loop with nativeTheme updates.
+      if (supportedThemeModes(requested).length === 1) return
+      this.applyThemeState(true)
     })
   }
 
   private setupTheme(): void {
+    this.applyThemeState(false)
+  }
+
+  private computeThemeState(): {
+    state: ResolvedThemeState
+    definition: ThemeDefinition
+    fallbackReason: string | null
+  } {
     const prefs = this.config.getPrefs()
-    nativeTheme.themeSource = prefs.theme
-    this.windows?.broadcast(IPC.themeChanged, {
-      theme: this.resolvedTheme(),
-      setting: prefs.theme
-    })
+    const requested = this.themes.getTheme(prefs.themeId)
+    const supported = supportedThemeModes(requested)
+    const desiredThemeSource = supported.length === 1 ? supported[0] : prefs.theme
+    if (nativeTheme.themeSource !== desiredThemeSource) {
+      nativeTheme.themeSource = desiredThemeSource
+    }
+    const systemMode: ThemeMode = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+    const state = resolveThemeState(requested, prefs.theme, systemMode, BLUE_GLASS_THEME)
+    const definition = this.themes.getTheme(state.themeId) ?? BLUE_GLASS_THEME
+    const fallbackReason =
+      state.themeId === prefs.themeId
+        ? null
+        : requested
+          ? '主题包没有可用的深色或浅色变体'
+          : '未找到主题包，或主题包校验失败'
+    return { state, definition, fallbackReason }
   }
 
-  resolvedTheme(): ResolvedTheme {
-    const setting = this.config.getPrefs().theme
-    if (setting === 'dark' || setting === 'light') return setting
-    return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+  private applyThemeState(broadcast = true): {
+    state: ResolvedThemeState
+    definition: ThemeDefinition
+    fallbackReason: string | null
+  } {
+    const computed = this.computeThemeState()
+    const variant = computed.definition.variants[computed.state.mode]
+    const background =
+      variant?.tokens.windowSolid ?? BLUE_GLASS_THEME.variants.dark!.tokens.windowSolid
+    this.windows?.setTheme(background)
+    if (broadcast) {
+      const prefs = this.config.getPrefs()
+      this.broadcast(IPC.themeChanged, {
+        theme: computed.state.mode,
+        setting: prefs.theme,
+        themeId: computed.state.themeId,
+        locked: computed.state.locked,
+        supportedModes: computed.state.supportedModes,
+        definition: computed.definition,
+        requestedThemeId: prefs.themeId,
+        fallbackReason: computed.fallbackReason
+      })
+      this.broadcast(IPC.themesChanged, this.themes.snapshot())
+    }
+    return computed
   }
 
-  getThemeSetting(): ThemeSetting {
-    return this.config.getPrefs().theme
+  private themeForWindow(): { themeId: string; mode: ThemeMode; background: string } {
+    const { state, definition } = this.computeThemeState()
+    return {
+      themeId: definition.id,
+      mode: state.mode,
+      background:
+        definition.variants[state.mode]?.tokens.windowSolid ??
+        BLUE_GLASS_THEME.variants.dark!.tokens.windowSolid
+    }
   }
 
   async getBootstrap(role: WindowRole): Promise<BootstrapData> {
     const chromeProfiles =
       role === 'settings' ? (await discoverChromeProfiles(this.platform)).profiles : []
+    const { state, fallbackReason } = this.computeThemeState()
+    const prefs = this.config.getPrefs()
     return {
       role,
       platform: this.platform,
       version: appVersion(),
-      prefs: this.config.getPrefs(),
-      theme: this.resolvedTheme(),
+      prefs,
+      theme: state.mode,
+      themeId: state.themeId,
+      themeLocked: state.locked,
+      themeSupportedModes: state.supportedModes,
+      themeFallback:
+        fallbackReason === null
+          ? null
+          : { requestedId: prefs.themeId, reason: fallbackReason },
+      themes: this.themes.getThemes(),
+      themeErrors: this.themes.getErrors(),
       shortcuts: this.shortcuts.getInfo(),
       shortcutErrors: this.shortcutErrors(),
       plugins: this.plugins.getSummaries(),
@@ -409,9 +487,18 @@ export class FlashcastApplication {
     return this.favicons.get(Array.isArray(domains) ? domains.slice(0, 100) : [])
   }
 
-  async updatePrefs(patch: Partial<Pick<AppPrefs, 'theme' | 'launchAtLogin' | 'autoCommit'>>): Promise<BootstrapData> {
+  async updatePrefs(
+    patch: Partial<Pick<AppPrefs, 'theme' | 'themeId' | 'launchAtLogin' | 'autoCommit'>>
+  ): Promise<BootstrapData> {
     const configPatch: Partial<AppPrefs> = {}
     if (patch.theme && ['system', 'dark', 'light'].includes(patch.theme)) configPatch.theme = patch.theme
+    if (patch.themeId !== undefined) {
+      const themeId = typeof patch.themeId === 'string' ? patch.themeId.trim() : ''
+      if (!themeId || !this.themes.hasTheme(themeId)) {
+        throw new Error('主题不存在或不可用')
+      }
+      configPatch.themeId = themeId
+    }
     if (typeof patch.launchAtLogin === 'boolean') configPatch.launchAtLogin = patch.launchAtLogin
     if (Object.keys(configPatch).length > 0) {
       await this.config.updatePrefs(configPatch)
@@ -422,13 +509,10 @@ export class FlashcastApplication {
     if (typeof patch.autoCommit === 'boolean') {
       await this.workspace.setAutoCommit(patch.autoCommit)
     }
-    if (configPatch.theme) {
-      nativeTheme.themeSource = configPatch.theme
-    }
 
     const prefs = this.config.getPrefs()
     this.broadcast(IPC.prefsChanged, prefs)
-    this.broadcast(IPC.themeChanged, { theme: this.resolvedTheme(), setting: prefs.theme })
+    this.applyThemeState(true)
     this.broadcast(IPC.workspaceChanged, this.workspace.getSummary())
     return this.getBootstrap('settings')
   }
@@ -444,22 +528,22 @@ export class FlashcastApplication {
 
   private async applyWorkspaceChange(): Promise<void> {
     const layout = this.workspace.workspaceLayout
+    // The new workspace's config is already loaded; resolve its theme before
+    // touching windows so the new workspace's themes/ directory wins.
+    await this.themes.setLayout(layout)
+    this.applyThemeState(true)
+    this.broadcast(IPC.prefsChanged, this.config.getPrefs())
+
     await this.clipboard.setWorkspace(layout)
     await this.external.setLayout(layout)
     await this.external.reload()
     this.editors.invalidate()
     await this.editors.init()
     this.favicons.setRoot(layout.faviconDir)
-    nativeTheme.themeSource = this.config.getPrefs().theme
     this.shortcuts.apply(this.config.getPrefs().hotkeys, { transactional: false })
     await this.applyLaunchAtLogin(this.config.getPrefs().launchAtLogin)
 
     this.broadcast(IPC.pluginChanged, this.plugins.getSummaries())
-    this.broadcast(IPC.prefsChanged, this.config.getPrefs())
-    this.broadcast(IPC.themeChanged, {
-      theme: this.resolvedTheme(),
-      setting: this.config.getPrefs().theme
-    })
     this.broadcast(IPC.shortcutsChanged, {
       shortcuts: this.shortcuts.getInfo(),
       errors: this.shortcutErrors()
@@ -481,23 +565,120 @@ export class FlashcastApplication {
     return this.workspace.diff()
   }
 
+  /* --------------------------------- themes ------------------------------- */
+
+  async inspectTheme(input: string): Promise<ThemeInspection> {
+    return this.themes.inspect(input)
+  }
+
+  async installTheme(token: string): Promise<{
+    theme: ThemeDefinition
+    themes: ThemeDefinition[]
+    errors: ThemePackError[]
+  }> {
+    const theme = await this.themes.install(token)
+    await this.requestWorkspaceCommit(`theme: install ${theme.id}@${theme.version}`)
+    this.applyThemeState(true)
+    if (!this.config.getPrefs().autoCommit) {
+      this.toast('已写入工作区；提交并推送后可在其他电脑恢复', 'success')
+    }
+    return {
+      theme,
+      themes: this.themes.getThemes(),
+      errors: this.themes.getErrors()
+    }
+  }
+
+  async updateTheme(themeId: string): Promise<ActionResult> {
+    const result = await this.themes.update(themeId)
+    if (!result.ok) return result
+    await this.requestWorkspaceCommit(`theme: update ${themeId}`)
+    this.applyThemeState(true)
+    if (result.toast) this.broadcast(IPC.toast, result.toast)
+    if (!this.config.getPrefs().autoCommit) {
+      this.toast('已写入工作区；提交并推送后可在其他电脑恢复', 'success')
+    }
+    return result
+  }
+
+  async uninstallTheme(themeId: string): Promise<ActionResult> {
+    const previous = this.config.getPrefs().themeId
+    if (previous === themeId) {
+      await this.config.updatePrefs({ themeId: BLUE_GLASS_THEME.id })
+    }
+    const result = await this.themes.uninstall(themeId)
+    if (!result.ok) {
+      if (previous === themeId && this.themes.hasTheme(previous)) {
+        await this.config.updatePrefs({ themeId: previous })
+      }
+      return result
+    }
+    await this.requestWorkspaceCommit(`theme: remove ${themeId}`)
+    this.applyThemeState(true)
+    if (result.toast) this.broadcast(IPC.toast, result.toast)
+    if (!this.config.getPrefs().autoCommit) {
+      this.toast('已写入工作区；提交并推送后可在其他电脑恢复', 'success')
+    }
+    return result
+  }
+
+  async openThemeDirectory(themeId: string): Promise<void> {
+    await this.themes.openDirectory(themeId)
+  }
+
+  async reloadThemes(): Promise<{ themes: ThemeDefinition[]; errors: ThemePackError[] }> {
+    const snapshot = await this.themes.reload()
+    this.applyThemeState(true)
+    return snapshot
+  }
+
+  private async requestWorkspaceCommit(message: string): Promise<void> {
+    try {
+      const result = await this.workspace.requestCommit(message)
+      if (result.error) {
+        this.toast(`自动提交失败：${result.error}`, 'danger')
+      }
+    } catch (error) {
+      const reason = (error as Error).message
+      log.warn('workspace commit failed:', reason)
+      this.toast(`自动提交失败：${reason}`, 'danger')
+    }
+  }
+
   async inspectPlugin(input: string): Promise<PluginInspection> {
     return this.external.inspect(input)
   }
 
   async installPlugin(token: string): Promise<{ plugin: PluginSummary; plugins: PluginSummary[] }> {
     const plugin = await this.external.install(token)
+    await this.requestWorkspaceCommit(`plugin: install ${plugin.id}@${plugin.version}`)
+    if (!this.config.getPrefs().autoCommit) {
+      this.toast('插件代码已写入工作区；提交并推送后可在其他电脑恢复', 'success')
+    }
     return { plugin, plugins: this.plugins.getSummaries() }
   }
 
   async updatePlugin(pluginId: string): Promise<ActionResult> {
     const result = await this.external.update(pluginId)
+    if (result.ok) {
+      await this.requestWorkspaceCommit(`plugin: update ${pluginId}`)
+    }
     if (result.toast) this.broadcast(IPC.toast, result.toast)
+    if (result.ok && !this.config.getPrefs().autoCommit) {
+      this.toast('插件代码已写入工作区；提交并推送后可在其他电脑恢复', 'success')
+    }
     return result
   }
 
   async uninstallPlugin(pluginId: string): Promise<ActionResult> {
-    return this.external.uninstall(pluginId)
+    const result = await this.external.uninstall(pluginId)
+    if (result.ok) {
+      await this.requestWorkspaceCommit(`plugin: remove ${pluginId}`)
+      if (!this.config.getPrefs().autoCommit) {
+        this.toast('插件代码已从工作区移除；提交并推送后可在其他电脑同步', 'success')
+      }
+    }
+    return result
   }
 
   async setPluginEnabled(pluginId: string, enabled: boolean): Promise<ActionResult> {

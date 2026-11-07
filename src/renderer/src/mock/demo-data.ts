@@ -16,6 +16,7 @@ import type {
   ShortcutInfo,
   WorkspaceSummary
 } from '@shared/types'
+import { BUILTIN_THEMES } from '@shared/themes'
 
 const now = Date.now()
 
@@ -499,6 +500,7 @@ export const mockBootstrap: BootstrapData = {
   version: '0.1.0',
   prefs: {
     theme: 'dark',
+    themeId: 'blue-glass',
     launchAtLogin: false,
     language: 'zh-CN',
     autoCommit: true,
@@ -506,6 +508,12 @@ export const mockBootstrap: BootstrapData = {
     enabledPlugins: { clipboard: true, 'chrome-bookmarks': true }
   },
   theme: 'dark',
+  themeId: 'blue-glass',
+  themeLocked: false,
+  themeSupportedModes: ['dark', 'light'],
+  themeFallback: null,
+  themes: BUILTIN_THEMES,
+  themeErrors: [],
   shortcuts: mockShortcuts,
   shortcutErrors: [],
   plugins: mockPlugins,

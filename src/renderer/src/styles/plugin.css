@@ -145,6 +145,8 @@
   width: 14px;
   height: 14px;
   border-radius: 50%;
+  /* Sits directly on top of the video thumbnail: intentionally theme-independent
+     black/white so the play glyph always reads over media. */
   background: rgba(0, 0, 0, 0.65);
   color: #fff;
 }
@@ -291,10 +293,10 @@
   border-radius: 10px;
   background-color: var(--fc-surface-2);
   background-image:
-    linear-gradient(45deg, rgba(150, 190, 255, 0.05) 25%, transparent 25%),
-    linear-gradient(-45deg, rgba(150, 190, 255, 0.05) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, rgba(150, 190, 255, 0.05) 75%),
-    linear-gradient(-45deg, transparent 75%, rgba(150, 190, 255, 0.05) 75%);
+    linear-gradient(45deg, var(--fc-checker-a) 25%, var(--fc-checker-b) 25%),
+    linear-gradient(-45deg, var(--fc-checker-a) 25%, var(--fc-checker-b) 25%),
+    linear-gradient(45deg, var(--fc-checker-b) 75%, var(--fc-checker-a) 75%),
+    linear-gradient(-45deg, var(--fc-checker-b) 75%, var(--fc-checker-a) 75%);
   background-size: 20px 20px;
   background-position:
     0 0,
@@ -302,14 +304,6 @@
     10px -10px,
     -10px 0;
   overflow: hidden;
-}
-
-:root[data-theme='light'] .fc-preview-image-wrap {
-  background-image:
-    linear-gradient(45deg, rgba(37, 99, 235, 0.06) 25%, transparent 25%),
-    linear-gradient(-45deg, rgba(37, 99, 235, 0.06) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, rgba(37, 99, 235, 0.06) 75%),
-    linear-gradient(-45deg, transparent 75%, rgba(37, 99, 235, 0.06) 75%);
 }
 
 .fc-preview-image-wrap img {
@@ -377,7 +371,11 @@
   height: 64px;
   border-radius: 18px;
   background:
-    radial-gradient(120% 120% at 30% 0%, rgba(255, 255, 255, 0.18), transparent 70%),
+    radial-gradient(
+      120% 120% at 30% 0%,
+      color-mix(in srgb, var(--fc-text-primary) 18%, transparent),
+      transparent 70%
+    ),
     var(--fc-accent-soft);
   box-shadow: inset 0 0 0 1px var(--fc-accent-line);
   color: var(--fc-accent);

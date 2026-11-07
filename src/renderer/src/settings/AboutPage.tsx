@@ -5,13 +5,21 @@ import { api } from '../bridge'
 import { Modal, PageHeader, PlatformName, Section, Logo, StatusChip } from './components'
 import { UpdateCard } from './UpdateCard'
 
+const THEME_LICENSE_NOTE = '内置主题；调色板针对 Flashcast 玻璃材质调整'
+
 const LICENSES = [
   { name: 'Electron', license: 'MIT', note: '跨平台桌面运行时' },
   { name: 'React', license: 'MIT', note: '界面渲染' },
   { name: 'Lucide', license: 'ISC', note: '线性图标' },
   { name: 'Inter', license: 'OFL-1.1', note: '界面字体' },
   { name: 'JetBrains Mono', license: 'OFL-1.1', note: '等宽字体' },
-  { name: 'electron-vite / Vite', license: 'MIT', note: '构建工具链' }
+  { name: 'electron-vite / Vite', license: 'MIT', note: '构建工具链' },
+  { name: 'Blue Glass', license: 'MIT', note: THEME_LICENSE_NOTE },
+  { name: 'Dracula', license: 'MIT', note: THEME_LICENSE_NOTE },
+  { name: 'Tokyo Night', license: 'MIT', note: THEME_LICENSE_NOTE },
+  { name: 'Kanagawa', license: 'MIT', note: THEME_LICENSE_NOTE },
+  { name: 'Atelier', license: 'MIT', note: THEME_LICENSE_NOTE },
+  { name: 'Everforest', license: 'MIT', note: THEME_LICENSE_NOTE }
 ]
 
 export function AboutPage({
@@ -78,7 +86,7 @@ export function AboutPage({
             <div>
               <div className="settings-row-label">第三方组件</div>
               <div className="settings-row-description">
-                Flashcast 使用了 Electron、React、Lucide 与开源字体等组件。
+                Flashcast 使用了 Electron、React、Lucide、开源字体与多套开源主题调色板。
               </div>
             </div>
             <button type="button" className="fc-btn" onClick={() => setLicensesOpen(true)}>

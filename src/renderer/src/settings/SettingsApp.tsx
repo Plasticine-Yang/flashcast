@@ -1,18 +1,20 @@
-import { FolderGit2, Info, Keyboard, Puzzle, SlidersHorizontal } from 'lucide-react'
+import { FolderGit2, Info, Keyboard, Palette, Puzzle, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { BootstrapData } from '@shared/types'
 import { isUpdateActionable } from '@shared/update'
 import { api } from '../bridge'
 import { Toast, useToast } from '../components/ui'
 import { useUpdateState } from '../hooks/useUpdateState'
+import { applyTheme, themeById, upsertThemeDefinition } from '../theme'
 import { AboutPage } from './AboutPage'
+import { AppearancePage } from './AppearancePage'
 import { GeneralPage } from './GeneralPage'
 import { PluginsPage } from './PluginsPage'
 import { ShortcutsPage } from './ShortcutsPage'
 import { WorkspacePage } from './WorkspacePage'
 import { InlineSpinner, Logo, SyncChip } from './components'
 
-type PageId = 'general' | 'plugins' | 'workspace' | 'shortcuts' | 'about'
+type PageId = 'general' | 'appearance' | 'plugins' | 'workspace' | 'shortcuts' | 'about'
 
 const NAV: Array<{
   id: PageId
@@ -20,6 +22,7 @@ const NAV: Array<{
   icon: React.JSX.Element
 }> = [
   { id: 'general', label: '通用', icon: <SlidersHorizontal size={16} strokeWidth={1.5} aria-hidden="true" /> },
+  { id: 'appearance', label: '外观', icon: <Palette size={16} strokeWidth={1.5} aria-hidden="true" /> },
   { id: 'plugins', label: '插件', icon: <Puzzle size={16} strokeWidth={1.5} aria-hidden="true" /> },
   { id: 'workspace', label: '工作区', icon: <FolderGit2 size={16} strokeWidth={1.5} aria-hidden="true" /> },
   { id: 'shortcuts', label: '快捷键', icon: <Keyboard size={16} strokeWidth={1.5} aria-hidden="true" /> },
@@ -35,13 +38,16 @@ export function SettingsApp(): React.JSX.Element {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const scrollRef = useRef<HTMLDivElement>(null)
   const autoCheckedRef = useRef(false)
+  const dataRef = useRef<BootstrapData | null>(null)
   const { toast, showToast, dismissToast } = useToast()
   const { update, loaded: updateLoaded } = useUpdateState()
 
-  const applyTheme = (nextTheme: 'dark' | 'light', platform: BootstrapData['platform']): void => {
-    setTheme(nextTheme)
-    document.documentElement.dataset.theme = nextTheme
-    document.documentElement.dataset.platform = platform
+  dataRef.current = data
+
+  const applyResolvedTheme = (next: BootstrapData): void => {
+    dataRef.current = next
+    setTheme(next.theme)
+    applyTheme(themeById(next.themes, next.themeId), next.theme, next.platform)
     document.documentElement.dataset.preview = window.flashcast ? 'false' : 'true'
   }
 
@@ -50,7 +56,7 @@ export function SettingsApp(): React.JSX.Element {
       const next = await api.getBootstrap()
       setData(next)
       setError(null)
-      applyTheme(next.theme, next.platform)
+      applyResolvedTheme(next)
     } catch (loadError) {
       setError((loadError as Error).message)
     }
@@ -71,10 +77,40 @@ export function SettingsApp(): React.JSX.Element {
       api.on('shortcuts:changed', ({ shortcuts, errors }) => {
         setData((current) => (current ? { ...current, shortcuts, shortcutErrors: errors } : current))
       }),
-      api.on('theme:changed', ({ theme: resolved, setting }) => {
-        setTheme(resolved)
-        document.documentElement.dataset.theme = resolved
-        setData((current) => (current ? { ...current, theme: resolved, prefs: { ...current.prefs, theme: setting } } : current))
+      api.on('theme:changed', (payload) => {
+        applyTheme(payload.definition, payload.theme)
+        setTheme(payload.theme)
+        const current = dataRef.current
+        if (!current) return
+        const next: BootstrapData = {
+          ...current,
+          theme: payload.theme,
+          themeId: payload.themeId,
+          themeLocked: payload.locked,
+          themeSupportedModes: payload.supportedModes,
+          themeFallback: payload.fallbackReason
+            ? { requestedId: payload.requestedThemeId, reason: payload.fallbackReason }
+            : null,
+          themes: upsertThemeDefinition(current.themes, payload.definition),
+          prefs: {
+            ...current.prefs,
+            theme: payload.setting,
+            themeId: payload.requestedThemeId
+          }
+        }
+        // Update the ref eagerly: a `themes:changed` emitted right after this
+        // event must re-apply the new theme, not the previous one.
+        dataRef.current = next
+        setData(next)
+      }),
+      api.on('themes:changed', ({ themes, errors }) => {
+        const current = dataRef.current
+        if (!current) return
+        const next: BootstrapData = { ...current, themes, themeErrors: errors }
+        dataRef.current = next
+        setData(next)
+        const active = themeById(themes, current.themeId)
+        if (active) applyTheme(active, current.theme)
       }),
       api.on('toast', (message) => showToast(message))
     ]
@@ -111,7 +147,7 @@ export function SettingsApp(): React.JSX.Element {
 
   const onData = (next: BootstrapData): void => {
     setData(next)
-    applyTheme(next.theme, next.platform)
+    applyResolvedTheme(next)
   }
 
   if (error) {
@@ -195,6 +231,13 @@ export function SettingsApp(): React.JSX.Element {
               onData={onData}
               onToast={(message, tone) => showToast({ message, tone })}
               onNavigate={(next) => setPage(next as PageId)}
+            />
+          ) : null}
+          {page === 'appearance' ? (
+            <AppearancePage
+              data={data}
+              onData={onData}
+              onToast={(message, tone) => showToast({ message, tone })}
             />
           ) : null}
           {page === 'plugins' ? (

@@ -241,10 +241,14 @@
   border-radius: 9px;
   border: 1px solid var(--fc-accent-line);
   background:
-    radial-gradient(120% 120% at 30% 0%, rgba(255, 255, 255, 0.22), transparent 70%),
+    radial-gradient(
+      120% 120% at 30% 0%,
+      color-mix(in srgb, var(--fc-text-primary) 22%, transparent),
+      transparent 70%
+    ),
     var(--fc-accent-soft);
   color: var(--fc-accent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 var(--fc-keycap-highlight);
   animation: fc-badge-spring 260ms var(--fc-spring) both;
   transition:
     transform var(--fc-dur-instant) ease,
@@ -402,7 +406,7 @@
   position: absolute;
   inset: 0;
   transform-origin: left center;
-  background: linear-gradient(90deg, #6fa8ff, var(--fc-accent));
+  background: linear-gradient(90deg, var(--fc-accent-strong), var(--fc-accent));
   transition: transform 200ms linear;
 }
 
@@ -538,7 +542,7 @@
   background: var(--fc-row-selected-bg);
   box-shadow:
     inset 0 0 0 1px var(--fc-row-selected-rim),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 1px 0 var(--fc-keycap-highlight),
     var(--fc-row-selected-glow);
 }
 
@@ -572,7 +576,11 @@
 .fc-row-icon--accent {
   color: var(--fc-accent);
   background:
-    radial-gradient(120% 120% at 30% 0%, rgba(255, 255, 255, 0.2), transparent 70%),
+    radial-gradient(
+      120% 120% at 30% 0%,
+      color-mix(in srgb, var(--fc-text-primary) 20%, transparent),
+      transparent 70%
+    ),
     var(--fc-accent-soft);
   box-shadow: inset 0 0 0 1px var(--fc-accent-line);
 }
@@ -670,7 +678,11 @@
   margin-bottom: 4px;
   border-radius: 16px;
   background:
-    radial-gradient(120% 120% at 30% 0%, rgba(120, 175, 255, 0.16), transparent 70%),
+    radial-gradient(
+      120% 120% at 30% 0%,
+      color-mix(in srgb, var(--fc-accent) 16%, transparent),
+      transparent 70%
+    ),
     var(--fc-surface-1);
   box-shadow: inset 0 0 0 1px var(--fc-border-subtle);
   color: var(--fc-accent);

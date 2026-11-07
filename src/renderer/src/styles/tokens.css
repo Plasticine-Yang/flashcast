@@ -71,6 +71,9 @@
   --fc-accent-line: rgba(120, 176, 255, 0.5);
   --fc-accent-fill: #2563eb;
   --fc-accent-fill-hover: #1d4fd8;
+  /* Deep end of the primary-fill gradient: a darker, saturated azure. */
+  --fc-accent-fill-deep: #0b2a8a;
+  --fc-accent-fill-hover-deep: #071f6b;
   --fc-on-accent: #ffffff;
 
   /* Feedback --------------------------------------------------------------- */
@@ -103,6 +106,16 @@
   --fc-shadow-popover: 0 22px 64px rgba(0, 6, 20, 0.58), 0 2px 10px rgba(0, 6, 20, 0.32);
   --fc-shadow-accent: 0 10px 26px -10px rgba(37, 99, 235, 0.65);
   --fc-highlight-line: inset 0 1px 0 rgba(216, 234, 255, 0.16);
+  /* Small white top-edge highlight on keycaps, buttons and inset rows. */
+  --fc-keycap-highlight: rgba(255, 255, 255, 0.08);
+
+  /* Scrollbars ------------------------------------------------------------- */
+  --fc-scrollbar-thumb: rgba(150, 190, 255, 0.24);
+  --fc-scrollbar-thumb-hover: rgba(150, 190, 255, 0.34);
+
+  /* Checkerboard behind transparent images --------------------------------- */
+  --fc-checker-a: rgba(150, 190, 255, 0.05);
+  --fc-checker-b: transparent;
 
   /* Motion ----------------------------------------------------------------- */
   --fc-dur-instant: 120ms;
@@ -174,6 +187,8 @@
   --fc-accent-line: rgba(37, 99, 235, 0.45);
   --fc-accent-fill: #2563eb;
   --fc-accent-fill-hover: #1d4fd8;
+  --fc-accent-fill-deep: #0b2a8a;
+  --fc-accent-fill-hover-deep: #071f6b;
   --fc-on-accent: #ffffff;
 
   --fc-success: #0b5b34;
@@ -190,6 +205,13 @@
   --fc-shadow-popover: 0 22px 60px rgba(21, 48, 96, 0.16), 0 2px 10px rgba(21, 48, 96, 0.08);
   --fc-shadow-accent: 0 10px 26px -10px rgba(37, 99, 235, 0.5);
   --fc-highlight-line: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --fc-keycap-highlight: rgba(255, 255, 255, 0.85);
+
+  --fc-scrollbar-thumb: rgba(37, 99, 235, 0.22);
+  --fc-scrollbar-thumb-hover: rgba(37, 99, 235, 0.32);
+
+  --fc-checker-a: rgba(37, 99, 235, 0.06);
+  --fc-checker-b: transparent;
 
   --fc-aurora:
     radial-gradient(1100px 720px at 4% -14%, rgba(96, 156, 255, 0.6), transparent 62%),
@@ -209,6 +231,10 @@
   --fc-surface-selected: rgba(120, 175, 255, 0.3);
   --fc-text-secondary: #d6e1f5;
   --fc-text-tertiary: #c5d2e8;
+  --fc-keycap-highlight: rgba(255, 255, 255, 0.16);
+  --fc-scrollbar-thumb: rgba(170, 205, 255, 0.4);
+  --fc-scrollbar-thumb-hover: rgba(190, 220, 255, 0.55);
+  --fc-checker-a: rgba(170, 205, 255, 0.09);
 }
 
 :root[data-theme='light'][data-contrast='more'] {
@@ -220,6 +246,10 @@
   --fc-surface-selected: rgba(37, 99, 235, 0.16);
   --fc-text-secondary: #23354f;
   --fc-text-tertiary: #35466a;
+  --fc-keycap-highlight: rgba(255, 255, 255, 0.95);
+  --fc-scrollbar-thumb: rgba(20, 48, 100, 0.32);
+  --fc-scrollbar-thumb-hover: rgba(20, 48, 100, 0.45);
+  --fc-checker-a: rgba(20, 60, 130, 0.1);
 }
 
 /* Browser-only preview: a plausible "desktop" so the glass can be reviewed

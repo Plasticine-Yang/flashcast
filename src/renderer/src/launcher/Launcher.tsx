@@ -23,6 +23,7 @@ import {
 import { api, isMock, previewWallpaper } from '../bridge'
 import { SkeletonRows, Toast, useToast } from '../components/ui'
 import { useUpdateState } from '../hooks/useUpdateState'
+import { applyTheme, themeById, upsertThemeDefinition } from '../theme'
 import { BookmarksView } from './BookmarksView'
 import { ClipboardView } from './ClipboardView'
 import { ExternalPluginView } from './ExternalPluginView'
@@ -246,11 +247,6 @@ export function Launcher(): React.JSX.Element {
 
   const focusInput = (): void => {
     window.setTimeout(() => inputRef.current?.focus(), 0)
-  }
-
-  const applyTheme = (theme: 'dark' | 'light', platformId = platform): void => {
-    document.documentElement.dataset.theme = theme
-    document.documentElement.dataset.platform = platformId
   }
 
   const moveSelection = (delta: number): void => {
@@ -803,14 +799,13 @@ export function Launcher(): React.JSX.Element {
 
   useEffect(() => {
     let cancelled = false
-    applyTheme(isMock ? ((params.get('theme') as 'dark' | 'light') || 'dark') : 'dark')
     void (async () => {
       try {
         const data = await api.getBootstrap()
         if (cancelled) return
         setBootstrap(data)
         setClipboardMax((current) => (current > 0 ? current : 10))
-        applyTheme(data.theme, data.platform)
+        applyTheme(themeById(data.themes, data.themeId), data.theme, data.platform)
         document.documentElement.dataset.preview = isMock ? 'true' : 'false'
         if (data.role === 'settings') return
         const preview = params.get('preview')
@@ -860,7 +855,7 @@ export function Launcher(): React.JSX.Element {
   useEffect(() => {
     if (!bootstrap) return
     bootstrapRef.current = bootstrap
-    applyTheme(bootstrap.theme, bootstrap.platform)
+    applyTheme(themeById(bootstrap.themes, bootstrap.themeId), bootstrap.theme, bootstrap.platform)
     if (pendingOpenRef.current) {
       const id = pendingOpenRef.current
       const direct = pendingDirectRef.current
@@ -942,10 +937,49 @@ export function Launcher(): React.JSX.Element {
       })
     )
     offs.push(
-      api.on('theme:changed', ({ theme, setting }) => {
-        applyTheme(theme, bootstrapRef.current?.platform ?? platform)
+      api.on(
+        'theme:changed',
+        ({
+          theme,
+          setting,
+          themeId,
+          locked,
+          supportedModes,
+          definition,
+          requestedThemeId,
+          fallbackReason
+        }) => {
+          const data = bootstrapRef.current
+          applyTheme(definition, theme, data?.platform ?? platform)
+          if (!data) return
+          const next: BootstrapData = {
+            ...data,
+            theme,
+            themeId,
+            themeLocked: locked,
+            themeSupportedModes: supportedModes,
+            themeFallback: fallbackReason
+              ? { requestedId: requestedThemeId, reason: fallbackReason }
+              : null,
+            themes: upsertThemeDefinition(data.themes, definition),
+            prefs: { ...data.prefs, theme: setting, themeId: requestedThemeId }
+          }
+          // Keep the ref in step so a `themes:changed` emitted right after this
+          // event re-applies the new theme instead of the previous one.
+          bootstrapRef.current = next
+          setBootstrap(next)
+        }
+      )
+    )
+    offs.push(
+      api.on('themes:changed', ({ themes, errors }) => {
         const data = bootstrapRef.current
-        if (data) setBootstrap({ ...data, theme, prefs: { ...data.prefs, theme: setting } })
+        if (!data) return
+        const next: BootstrapData = { ...data, themes, themeErrors: errors }
+        bootstrapRef.current = next
+        setBootstrap(next)
+        const active = themeById(themes, data.themeId)
+        if (active) applyTheme(active, data.theme, data.platform)
       })
     )
     offs.push(

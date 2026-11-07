@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { log } from './logger'
@@ -54,16 +54,43 @@ const README = `# Flashcast workspace
 
 This git repository keeps your Flashcast configuration:
 
-- \`config.json\` — app preferences and hotkeys
+- \`config.json\` — app preferences, hotkeys and the selected theme
 - \`plugins/<id>/config.json\` — per-plugin settings
+- \`themes/<id>/theme.json\` — installed theme packs, including their \`LICENSE\`
+- \`extensions/<id>/\` — installed external plugin code
 - \`README.md\` — this file
 
-Machine-local runtime data lives in \`state/\` and is intentionally ignored by git.
-Installed external plugin code lives in \`extensions/\` and is also ignored; the
-per-plugin settings are still versioned under \`plugins/\`.
+Theme packs and external plugin code are versioned so another machine can
+restore the same setup after pulling. Machine-local runtime data lives in
+\`state/\` and is intentionally ignored by git; plugin settings remain under
+\`plugins/\`, and each theme pack keeps its own metadata in \`themes/<id>/\`.
 `
 
-const GITIGNORE_ENTRIES = ['.DS_Store', 'state/', 'extensions/', '*.log', '.tmp/']
+const GITIGNORE_ENTRIES = [
+  '.DS_Store',
+  'state/',
+  '*.log',
+  '.tmp/',
+  // Plugin code is versioned, but dependencies, VCS metadata and transient
+  // staging directories inside an extension must never be committed.
+  'extensions/**/node_modules/',
+  'extensions/**/.git/',
+  'extensions/.staging-*',
+  'extensions/.backup-*'
+]
+
+/** Flashcast-owned paths; unrelated files in the workspace repo are never staged. */
+const COMMITTED_PATHS = [
+  'config.json',
+  'plugins',
+  'themes',
+  'extensions',
+  'README.md',
+  '.gitignore'
+]
+
+/** Older releases ignored `extensions/`; drop those lines when migrating. */
+const LEGACY_IGNORE_ENTRIES = new Set(['extensions/', 'extensions'])
 
 async function ensureGitignore(root: string): Promise<void> {
   const path = join(root, '.gitignore')
@@ -73,10 +100,19 @@ async function ensureGitignore(root: string): Promise<void> {
   } catch {
     content = ''
   }
-  const missing = GITIGNORE_ENTRIES.filter((entry) => !content.split(/\r?\n/).includes(entry))
+  const lines = content.split(/\r?\n/)
+  const filtered = lines.filter(
+    (line) => !LEGACY_IGNORE_ENTRIES.has(line.trim())
+  )
+  const present = new Set(filtered.map((line) => line.trim()))
+  const missing = GITIGNORE_ENTRIES.filter((entry) => !present.has(entry))
+  let next = filtered.join('\n')
   if (missing.length > 0) {
-    const prefix = content && !content.endsWith('\n') ? '\n' : ''
-    await appendFile(path, `${prefix}${missing.join('\n')}\n`, 'utf8')
+    const prefix = next && !next.endsWith('\n') ? '\n' : ''
+    next = `${next}${prefix}${missing.join('\n')}\n`
+  }
+  if (next !== content) {
+    await writeFile(path, next, 'utf8')
   }
 }
 
@@ -208,7 +244,8 @@ export async function commitWorkspace(
   push: boolean
 ): Promise<{ committed: boolean; pushed: boolean; error: string | null }> {
   try {
-    await git(root, ['add', '--all', '--', 'config.json', 'plugins', 'README.md', '.gitignore'], {
+    const paths = COMMITTED_PATHS.filter((path) => existsSync(join(root, path)))
+    await git(root, ['add', '--all', '--', ...paths], {
       allowFailure: true
     })
     const stagedList = await git(root, ['diff', '--cached', '--name-only'], { allowFailure: true })
@@ -255,7 +292,8 @@ export async function gitHasCommits(root: string): Promise<boolean> {
 
 export async function initializeFirstCommit(root: string): Promise<boolean> {
   if (await gitHasCommits(root)) return false
-  await git(root, ['add', '--', 'config.json', 'README.md', '.gitignore', 'plugins'], {
+  const paths = COMMITTED_PATHS.filter((path) => existsSync(join(root, path)))
+  await git(root, ['add', '--', ...paths], {
     allowFailure: true
   })
   const result = await git(root, ['commit', '-m', 'chore: initialize Flashcast workspace'], {

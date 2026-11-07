@@ -13,6 +13,8 @@ import {
 import type { ConfigStore } from './config-store'
 import { log } from './logger'
 
+const DEFAULT_COMMIT_MESSAGE = 'config: update Flashcast workspace'
+
 export class WorkspaceService extends EventEmitter {
   private layout: WorkspaceLayout
   private summary: WorkspaceSummary
@@ -170,19 +172,39 @@ export class WorkspaceService extends EventEmitter {
     }, 1200)
   }
 
-  private async commitNow(): Promise<void> {
-    if (!this.config.getPrefs().autoCommit) return
-    const result = await commitWorkspace(
-      this.layout.root,
-      'config: update Flashcast workspace',
-      true
-    )
+  /**
+   * Commits pending workspace changes immediately. Callers that just wrote a
+   * theme or plugin request this so the install lands in one commit even when
+   * auto-commit is enabled; with auto-commit off it only cancels the pending
+   * timer and reports that nothing was committed.
+   */
+  async requestCommit(
+    message = DEFAULT_COMMIT_MESSAGE
+  ): Promise<{ committed: boolean; pushed: boolean; error: string | null }> {
+    if (this.commitTimer) {
+      clearTimeout(this.commitTimer)
+      this.commitTimer = null
+    }
+    if (!this.config.getPrefs().autoCommit) {
+      return { committed: false, pushed: false, error: null }
+    }
+    return this.commitNow(message)
+  }
+
+  private async commitNow(
+    message = DEFAULT_COMMIT_MESSAGE
+  ): Promise<{ committed: boolean; pushed: boolean; error: string | null }> {
+    if (!this.config.getPrefs().autoCommit) {
+      return { committed: false, pushed: false, error: null }
+    }
+    const result = await commitWorkspace(this.layout.root, message, true)
     if (result.error) {
       this.summary = { ...this.summary, lastError: result.error, syncState: 'error' }
       this.emit('changed', this.getSummary())
     } else if (result.committed) {
       await this.refreshStatus()
     }
+    return result
   }
 
   async setAutoCommit(enabled: boolean): Promise<WorkspaceSummary> {

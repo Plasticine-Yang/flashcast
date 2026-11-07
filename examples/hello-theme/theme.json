@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "id": "hello-harbor",
+  "name": "Hello Harbor",
+  "description": "海港青与深海蓝：一盏安静的青色航标，深色与浅色成对。",
+  "version": "1.0.0",
+  "author": "Flashcast",
+  "license": "MIT",
+  "homepage": "https://github.com/Plasticine-Yang/flashcast/tree/main/examples/hello-theme",
+  "application": "generated-tokens",
+  "variants": {
+    "dark": {
+      "label": "Harbor Night",
+      "palette": {
+        "bg": "#071a1e",
+        "bgElevated": "#0e262c",
+        "surface": "#3d8f94",
+        "border": "#63a9ae",
+        "text": "#e8f7f5",
+        "textSecondary": "#bfe0dd",
+        "textTertiary": "#9ec4c2",
+        "accent": "#5fd7cf",
+        "onAccent": "#ffffff",
+        "success": "#6ee7a8",
+        "warning": "#f2c46d",
+        "danger": "#ff9b8a",
+        "focus": "#7ee8dd",
+        "accentFill": "#0f766e",
+        "accentFillHover": "#0d6b63"
+      },
+      "overrides": {
+        "glassSheen": "radial-gradient(120% 130% at 6% -24%, rgba(95, 215, 207, 0.20), transparent 58%), radial-gradient(90% 110% at 104% 112%, rgba(56, 189, 248, 0.12), transparent 62%)",
+        "aurora": "radial-gradient(1100px 720px at 4% -14%, rgba(95, 215, 207, 0.28), transparent 62%), radial-gradient(900px 640px at 104% -8%, rgba(56, 189, 248, 0.16), transparent 58%), radial-gradient(1040px 720px at 82% 116%, rgba(15, 118, 110, 0.24), transparent 64%), linear-gradient(158deg, #071a1e 0%, #041214 52%, #020c0e 100%)"
+      },
+      "wallpaperOpacity": 0.2,
+      "wallpaperSaturate": 1
+    },
+    "light": {
+      "label": "Harbor Morning",
+      "palette": {
+        "bg": "#f3faf8",
+        "bgElevated": "#e9f4f1",
+        "surface": "#26595c",
+        "border": "#456f70",
+        "text": "#0f2a2c",
+        "textSecondary": "#31595b",
+        "textTertiary": "#44696b",
+        "accent": "#0f6b66",
+        "onAccent": "#ffffff",
+        "success": "#1f6b45",
+        "warning": "#7a4b12",
+        "danger": "#9e2b24",
+        "focus": "#0b5f5b",
+        "accentFill": "#0f766e",
+        "accentFillHover": "#0d6b63"
+      },
+      "overrides": {
+        "glassSheen": "radial-gradient(120% 130% at 6% -24%, rgba(15, 107, 102, 0.14), transparent 58%), radial-gradient(90% 110% at 104% 112%, rgba(14, 116, 144, 0.08), transparent 62%)",
+        "aurora": "radial-gradient(1100px 720px at 4% -14%, rgba(15, 107, 102, 0.12), transparent 62%), radial-gradient(900px 640px at 104% -8%, rgba(14, 116, 144, 0.08), transparent 58%), radial-gradient(1040px 720px at 82% 116%, rgba(15, 118, 110, 0.10), transparent 64%), linear-gradient(158deg, #f3faf8 0%, #e9f4f1 52%, #e2efec 100%)"
+      },
+      "wallpaperOpacity": 0.14,
+      "wallpaperSaturate": 0.8
+    }
+  }
+}

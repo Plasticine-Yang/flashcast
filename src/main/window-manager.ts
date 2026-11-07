@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeTheme, Notification, screen, shell } from 'electron'
+import { BrowserWindow, Notification, screen, shell } from 'electron'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { IPC } from '@shared/ipc'
@@ -8,6 +8,7 @@ import { log } from './logger'
 
 interface WindowCallbacks {
   onPasteAfterHide: () => Promise<{ ok: boolean; error?: string }>
+  theme: () => { themeId: string; mode: 'dark' | 'light'; background: string }
 }
 
 export class WindowManager extends EventEmitter {
@@ -118,6 +119,7 @@ export class WindowManager extends EventEmitter {
 
   createSettings(): BrowserWindow {
     if (this.settings && !this.settings.isDestroyed()) return this.settings
+    const theme = this.callbacks.theme()
     const window = new BrowserWindow({
       width: 920,
       height: 640,
@@ -125,7 +127,7 @@ export class WindowManager extends EventEmitter {
       minHeight: 540,
       show: false,
       title: 'Flashcast 设置',
-      backgroundColor: nativeTheme.shouldUseDarkColors ? '#0B1222' : '#F4F8FF',
+      backgroundColor: theme.background,
       autoHideMenuBar: true,
       titleBarStyle: this.platform === 'darwin' ? 'hiddenInset' : 'default',
       icon: join(assetsDir(), 'icon.png'),
@@ -156,16 +158,26 @@ export class WindowManager extends EventEmitter {
   }
 
   private loadRenderer(window: BrowserWindow, role: WindowRole): void {
+    const theme = this.callbacks.theme()
     const devUrl = process.env['ELECTRON_RENDERER_URL']
     if (isDev() && devUrl) {
       const url = new URL(devUrl)
       url.searchParams.set('window', role)
+      url.searchParams.set('theme', theme.mode)
+      url.searchParams.set('themeId', theme.themeId)
       void window.loadURL(url.toString())
       return
     }
     void window.loadFile(join(__dirname, '../renderer/index.html'), {
-      query: { window: role }
+      query: { window: role, theme: theme.mode, themeId: theme.themeId }
     })
+  }
+
+  /** Updates the settings window backdrop while the theme is applied. */
+  setTheme(background: string): void {
+    if (this.settings && !this.settings.isDestroyed()) {
+      this.settings.setBackgroundColor(background)
+    }
   }
 
   showLauncher(pluginId?: string): void {

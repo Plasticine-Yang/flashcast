@@ -1,5 +1,7 @@
 /* Shared contract between the Electron main process, the preload bridge and the renderer. */
 
+import type { ThemeDefinition, ThemeMode, ThemeValidationIssue } from './theme'
+
 export type PlatformId = 'darwin' | 'win32' | 'linux'
 export type ThemeSetting = 'system' | 'dark' | 'light'
 export type ResolvedTheme = 'dark' | 'light'
@@ -12,6 +14,8 @@ export interface GlobalHotkeys {
 
 export interface AppPrefs {
   theme: ThemeSetting
+  /** Selected theme pack id. Unknown ids fall back to `blue-glass`. */
+  themeId: string
   launchAtLogin: boolean
   language: 'zh-CN'
   autoCommit: boolean
@@ -395,6 +399,15 @@ export interface BootstrapData {
   version: string
   prefs: AppPrefs
   theme: ResolvedTheme
+  /** Active/effective theme pack id; already resolved against available themes. */
+  themeId: string
+  /** True when the active theme only has one variant, so the mode preference is ignored. */
+  themeLocked: boolean
+  themeSupportedModes: ThemeMode[]
+  /** Set when the requested theme id is missing; Blue Glass is used instead. */
+  themeFallback: { requestedId: string; reason: string } | null
+  themes: ThemeDefinition[]
+  themeErrors: ThemePackError[]
   shortcuts: ShortcutInfo[]
   shortcutErrors: ShortcutError[]
   plugins: PluginSummary[]
@@ -418,6 +431,21 @@ export interface PluginInspection {
   alreadyInstalled: boolean
   installedVersion: string | null
   warning: string | null
+}
+
+export interface ThemePackError {
+  id: string
+  message: string
+}
+
+export interface ThemeInspection {
+  token: string
+  definition: ThemeDefinition
+  sourceType: 'git' | 'local'
+  source: string
+  warnings: ThemeValidationIssue[]
+  alreadyInstalled: boolean
+  installedVersion: string | null
 }
 
 /**
@@ -472,7 +500,17 @@ export interface FlashcastEvents {
   'launcher:open-plugin': { pluginId: string }
   'clipboard:changed': ClipboardItem[]
   'plugins:changed': PluginSummary[]
-  'theme:changed': { theme: ResolvedTheme; setting: ThemeSetting }
+  'theme:changed': {
+    theme: ResolvedTheme
+    setting: ThemeSetting
+    themeId: string
+    locked: boolean
+    supportedModes: ThemeMode[]
+    definition: ThemeDefinition
+    requestedThemeId: string
+    fallbackReason: string | null
+  }
+  'themes:changed': { themes: ThemeDefinition[]; errors: ThemePackError[] }
   'workspace:changed': WorkspaceSummary
   'shortcuts:changed': { shortcuts: ShortcutInfo[]; errors: ShortcutError[] }
   'toast': ToastMessage
@@ -526,11 +564,24 @@ export interface FlashcastApi {
   launchApp(appId: string): Promise<ActionResult>
   runCommand(commandId: CommandEntry['id']): Promise<ActionResult>
 
-  updatePrefs(patch: Partial<Pick<AppPrefs, 'theme' | 'launchAtLogin' | 'autoCommit'>>): Promise<BootstrapData>
+  updatePrefs(
+    patch: Partial<Pick<AppPrefs, 'theme' | 'themeId' | 'launchAtLogin' | 'autoCommit'>>
+  ): Promise<BootstrapData>
   chooseWorkspace(): Promise<{ canceled: boolean; workspace: WorkspaceSummary }>
   openWorkspaceFolder(): Promise<void>
   refreshWorkspace(): Promise<WorkspaceSummary>
   getGitDiff(): Promise<GitDiffResult>
+
+  inspectTheme(input: string): Promise<ThemeInspection>
+  installTheme(token: string): Promise<{
+    theme: ThemeDefinition
+    themes: ThemeDefinition[]
+    errors: ThemePackError[]
+  }>
+  updateTheme(themeId: string): Promise<ActionResult>
+  uninstallTheme(themeId: string): Promise<ActionResult>
+  openThemeDirectory(themeId: string): Promise<void>
+  reloadThemes(): Promise<{ themes: ThemeDefinition[]; errors: ThemePackError[] }>
 
   inspectPlugin(input: string): Promise<PluginInspection>
   installPlugin(token: string): Promise<{ plugin: PluginSummary; plugins: PluginSummary[] }>

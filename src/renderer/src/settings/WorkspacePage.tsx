@@ -197,7 +197,7 @@ export function WorkspacePage({
 
         <Section
           title="自动提交并推送"
-          description="只提交 Flashcast 管理的 config.json、plugins/ 与 README，不会改动仓库中的其他文件。"
+          description="只提交 Flashcast 管理的 config.json、plugins/、themes/、extensions/、README.md 与 .gitignore，不会改动仓库中的其他文件。"
         >
           <Row
             label="自动提交并推送"
@@ -218,7 +218,10 @@ export function WorkspacePage({
           </Row>
         </Section>
 
-        <Section title="工作区文件" description="运行时状态保存在 state/，不纳入 Git；插件代码保存在 extensions/。">
+        <Section
+          title="工作区文件"
+          description="state/ 是机器本地目录并已被忽略；themes/ 与 extensions/ 会纳入版本控制并自动提交。"
+        >
           <div className="settings-kv settings-kv--card">
             <span>数据目录</span>
             <code>{data.dataDir}</code>
@@ -230,7 +233,7 @@ export function WorkspacePage({
             </span>
           </div>
           <p className="settings-hint">
-            删除或移动工作区前请先关闭 Flashcast。重新关联后，插件与快捷键设置会从新工作区加载。
+            删除或移动工作区前请先关闭 Flashcast。重新关联后，主题与插件会从仓库中恢复，快捷键等设置会从新工作区加载。
           </p>
         </Section>
       </div>

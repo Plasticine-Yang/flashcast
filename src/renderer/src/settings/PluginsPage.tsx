@@ -335,7 +335,9 @@ export function PluginsPage({
               }}
             />
             <p className="settings-hint">
-              本地目录需包含 <code>plugin.json</code>（或 <code>package.json</code> 中的 <code>flashcast</code> 字段）与入口文件。
+              本地目录需包含 <code>plugin.json</code>（或 <code>package.json</code> 中的{' '}
+              <code>flashcast</code> 字段）与入口文件。插件代码会写入{' '}
+              <code>{data.workspace.path}/extensions/</code>，并提交到工作区 Git 仓库；安装器不会复制 node_modules/.git，插件需自包含。请只安装可信来源的插件。
             </p>
             {inspecting ? <InlineSpinner label="正在读取插件清单与文件信息…" /> : null}
             {installError ? (
@@ -427,7 +429,9 @@ export function PluginsPage({
           </>
         }
       >
-        <p className="settings-hint">插件保存在工作区的 extensions 目录中，设置文件位于 plugins 目录。</p>
+        <p className="settings-hint">
+          插件保存在工作区的 extensions 目录中，设置文件位于 plugins 目录；卸载产生的删除同样会提交到工作区 Git 仓库。
+        </p>
       </Modal>
     </>
   )

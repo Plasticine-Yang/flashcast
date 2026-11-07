@@ -123,7 +123,9 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
 
   ipcMain.handle(IPC.updatePrefs, async (_event, patch: unknown) =>
     application.updatePrefs(
-      asRecord(patch, '偏好设置') as Partial<Pick<AppPrefs, 'theme' | 'launchAtLogin' | 'autoCommit'>>
+      asRecord(patch, '偏好设置') as Partial<
+        Pick<AppPrefs, 'theme' | 'themeId' | 'launchAtLogin' | 'autoCommit'>
+      >
     )
   )
 
@@ -131,6 +133,23 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
   ipcMain.handle(IPC.openWorkspaceFolder, async () => application.openWorkspaceFolder())
   ipcMain.handle(IPC.refreshWorkspace, async () => application.refreshWorkspace())
   ipcMain.handle(IPC.gitDiff, async () => application.getGitDiff())
+
+  ipcMain.handle(IPC.themesInspect, async (_event, input: unknown) =>
+    application.inspectTheme(requireString(input, '主题来源'))
+  )
+  ipcMain.handle(IPC.themesInstall, async (_event, token: unknown) =>
+    application.installTheme(requireString(token, '安装令牌'))
+  )
+  ipcMain.handle(IPC.themesUpdate, async (_event, themeId: unknown) =>
+    application.updateTheme(requireString(themeId, '主题 id'))
+  )
+  ipcMain.handle(IPC.themesUninstall, async (_event, themeId: unknown) =>
+    application.uninstallTheme(requireString(themeId, '主题 id'))
+  )
+  ipcMain.handle(IPC.themesOpenDirectory, async (_event, themeId: unknown) =>
+    application.openThemeDirectory(requireString(themeId, '主题 id'))
+  )
+  ipcMain.handle(IPC.themesReload, async () => application.reloadThemes())
 
   ipcMain.handle(IPC.inspectPlugin, async (_event, input: unknown) =>
     application.inspectPlugin(requireString(input, '插件来源'))

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { EventEmitter } from 'node:events'
 import type { AppPrefs, GlobalHotkeys, PlatformId, ThemeSetting } from '@shared/types'
+import { DEFAULT_THEME_ID } from '@shared/theme'
 import { defaultHotkeys } from '@shared/shortcuts'
 import { readJson, writeJsonAtomic, ensureDir } from './json-store'
 import type { WorkspaceLayout } from './paths'
@@ -8,6 +9,7 @@ import type { WorkspaceLayout } from './paths'
 interface StoredConfig {
   version: 1
   theme: ThemeSetting
+  themeId: string
   launchAtLogin: boolean
   language: 'zh-CN'
   autoCommit: boolean
@@ -31,6 +33,7 @@ export class ConfigStore extends EventEmitter {
   private defaults(): AppPrefs {
     return {
       theme: 'dark',
+      themeId: DEFAULT_THEME_ID,
       launchAtLogin: false,
       language: 'zh-CN',
       autoCommit: false,
@@ -60,6 +63,7 @@ export class ConfigStore extends EventEmitter {
     const defaults = this.defaults()
     this.prefs = {
       theme: isTheme(raw.theme) ? raw.theme : defaults.theme,
+      themeId: normalizeThemeId(raw.themeId) ?? defaults.themeId,
       launchAtLogin: typeof raw.launchAtLogin === 'boolean' ? raw.launchAtLogin : defaults.launchAtLogin,
       language: 'zh-CN',
       autoCommit: typeof raw.autoCommit === 'boolean' ? raw.autoCommit : defaults.autoCommit,
@@ -96,6 +100,10 @@ export class ConfigStore extends EventEmitter {
     this.prefs = {
       ...this.prefs,
       ...patch,
+      themeId:
+        patch.themeId === undefined
+          ? this.prefs.themeId
+          : (normalizeThemeId(patch.themeId) ?? DEFAULT_THEME_ID),
       hotkeys: patch.hotkeys ? { ...patch.hotkeys } : this.prefs.hotkeys,
       enabledPlugins: patch.enabledPlugins
         ? { ...this.prefs.enabledPlugins, ...patch.enabledPlugins }
@@ -156,6 +164,7 @@ export class ConfigStore extends EventEmitter {
     const stored: StoredConfig = {
       version: 1,
       theme: this.prefs.theme,
+      themeId: this.prefs.themeId,
       launchAtLogin: this.prefs.launchAtLogin,
       language: this.prefs.language,
       autoCommit: this.prefs.autoCommit,
@@ -169,4 +178,10 @@ export class ConfigStore extends EventEmitter {
 
 function isTheme(value: unknown): value is ThemeSetting {
   return value === 'system' || value === 'dark' || value === 'light'
+}
+
+function normalizeThemeId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
 }

@@ -16,7 +16,7 @@ UI/UX 规范第 12 节把 Electron / Tauri 列为待确认项，同时以 Electr
 ```text
 src/main/
   index.ts                 应用生命周期、单实例、userData/协议注册
-  application.ts           FlashcastApplication：服务编排、业务 API、托盘、主题
+  application.ts           FlashcastApplication：服务编排、业务 API、托盘、主题状态
   window-manager.ts        全屏透明启动器窗口 / 设置窗口 / 动画协调
   shortcut-manager.ts      全局快捷键注册、事务式更新、冲突/占用错误
   update-assets.ts         版本比较、按平台挑选 Release 资产、SHA256SUMS 解析
@@ -25,6 +25,7 @@ src/main/
   config-store.ts          工作区 config.json + 插件配置 + 原子写入
   workspace-service.ts     工作区切换、Git 状态、自动提交
   git-service.ts           git 命令封装（rev-parse/status/commit/push/diff）
+  theme-manager.ts         工作区主题扫描/校验、安装/更新/卸载、来源元数据
   paths.ts                 工作区布局、userData、资源与版本
   apps.ts                  Linux .desktop / macOS .app / Windows 快捷方式发现与启动
   mac-alias.ts             Finder 替身（别名）文件的字节解析
@@ -45,11 +46,15 @@ src/main/
 src/preload/index.ts       contextBridge 白名单 API
 src/renderer/src/
   launcher/                Launcher、搜索、键盘路由、剪切板、书签、外部插件、设置页
-  settings/                独立设置窗口
+  settings/                独立设置窗口（外观页：主题画廊、深浅模式与主题安装）
+    AppearancePage.tsx     主题画廊、模式选择、安装/更新/卸载与回退/错误横幅
+  theme.ts                 主题注入、启动缓存、bootstrap / 主题事件同步
   styles/                  tokens/base/launcher/plugin/settings
   mock/                    浏览器预览用 mock bridge 与示例数据
 src/shared/
   types.ts                 IPC / 数据契约
+  theme.ts                 主题契约、令牌构建、模式解析、外部 JSON 校验与对比度
+  themes/                  内置主题目录（Blue Glass、Dracula、Tokyo Night、Kanagawa、Atelier、Everforest）
   fuzzy.ts                 子序列 + 词首/连续加分、多字段匹配、高亮切片
   pinyin.ts                拼音视图、音节级 DP 匹配、汉字下标回映
   editor-triggers.ts       触发词正则、保留字与冲突校验（主进程与 mock 共用）
@@ -134,8 +139,10 @@ Windows 的 `app.getFileIcon()` 对 `.lnk` 按扩展名取图，只会返回“�
 ### 3.6 工作区与 Git
 
 - 默认 `~/.flashcast`，首次运行 `git init -b main`、创建 README/.gitignore，并在所有内置插件默认配置生成后做一次初始提交。
-- 选择目录时 `rev-parse --show-toplevel` 解析到仓库根；动态切换会重载 config、插件、剪切板历史、favicon 缓存与快捷键，不需要重启。
-- 自动提交只 `git add` Flashcast 管理路径，提交信息 `config: update Flashcast workspace`；有 upstream 才推送。
+- 选择目录时 `rev-parse --show-toplevel` 解析到仓库根；动态切换会重载 config、插件、主题、剪切板历史、favicon 缓存与快捷键，不需要重启。
+- `themes/` 与 `extensions/` 纳入 Git，`state/` 保持机器本地并被忽略；旧版本写入 `.gitignore` 的 `extensions/` 行会在 `ensureGitignore()` 中自动清理。
+- 自动提交默认关闭（`config-store.ts` 的 `autoCommit: false`）；开启后只 `git add` Flashcast 管理路径：`config.json`、`plugins/`、`themes/`、`extensions/`、`README.md`、`.gitignore`，提交信息默认 `config: update Flashcast workspace`。主题/插件安装、更新、卸载成功后，会通过 `requestCommit()` 请求一次带专用消息的即时提交；有 upstream 才推送。
+- 关闭自动提交时，主题/插件操作只写入工作区，并提示「提交并推送后可在其他电脑恢复」；另一台电脑只有在 commit + push 后拉取同一仓库才能恢复。
 - 工作区状态每 20s 轮询并在配置变更后刷新；设置页展示分支、最近提交、dirty/conflict/ahead/behind，差异弹窗读取 `git status --short` 与 `git diff --stat`。
 
 ### 3.6.1 VS Code 系工作区
@@ -168,6 +175,51 @@ SQLite 走 Electron 45 内置的 `node:sqlite`（只读打开）；被占用时�
 | `workspaceStorage/<hash>` | 整个目录**移动**到 `<工作区>/state/editor-backups/<编辑器>-<时间戳>/` |
 
 写入前先把 `state.vscdb`（含 `-wal` / `-shm`）和 `storage.json` 复制进同一个备份目录，所以一次误删可以手工还原。编辑器正在运行时会拒绝执行：历史文件由编辑器自己持有，运行期改写会在退出时被覆盖。运行状态用 `ps`（Windows 用 `tasklist`）按应用路径匹配。
+
+### 3.6.2 主题系统
+
+主题由“外观令牌集合 + 工作区数据”组成：主进程负责发现、校验、安装与解析模式，渲染器只把令牌投影成 CSS 变量；主题包内容从不执行。
+
+**契约与令牌构建**
+
+- `ThemeDefinition` 包含元数据、`source` / `application` 与 `variants`；`ThemeVariant` 保存 `palette`、完整 `tokens`、`contrastTokens` 与壁纸参数。`THEME_TOKEN_CSS` 是唯一令牌白名单，当前 55 个，映射到渲染器消费的 `--fc-*`。
+- `defineTheme()` 调用 `buildThemeVariant()`：从 palette 推导窗口、表面、选中行、玻璃、阴影、极光与滚动条等令牌；`accentFill` 缺省回退 `accent`，`accentFillHover` 缺省为填充色混 10% 黑。外部 JSON 先由 `parseThemeDefinition()` 做结构与安全校验，再由 `validateThemeDefinition()` 做硬性对比度校验。
+- Blue Glass 的 `application` 为 `bundled-css`，令牌主源是 `styles/tokens.css`；其余五个内置主题与所有外部主题为 `generated-tokens`，由渲染器在运行时注入。
+
+**模式解析**
+
+- `resolveThemeState(theme, preference, systemMode, fallback)`：主题缺失或没有任何变体时回退 Blue Glass；单变体锁定到该变体；双变体在 `system` 下跟随系统，否则使用显式偏好。`preference` 原样保留，不会被改写。
+- `application.computeThemeState()` 对单变体主题把 `nativeTheme.themeSource` 设为该变体；`nativeTheme` 的 `updated` 监听器会跳过单变体主题，避免重复应用与循环。请求的 `themeId` 不可用时回退 Blue Glass，并通过 `themeFallback` 把 `requestedId` / `reason` 交给启动器与外观页。
+- `BootstrapData` 下发 `theme`（生效模式）、`themeId`（生效包）、`themeLocked`、`themeSupportedModes`、`themes` 与 `themeErrors`；`theme:changed` 事件额外携带 `definition`、`requestedThemeId` 与 `fallbackReason`。
+
+**工作区发现与校验**
+
+- `ThemeManager.init()` / `setLayout()` 创建 `<workspace>/themes` 并扫描。以 `.` 开头的目录跳过；目录必须含 `theme.json`；主题 `id` 必须与目录名一致，且不能与内置 ID 重复。损坏目录写入 `broken` 并在外观页顶部列出，不阻塞其他主题。
+- `theme.json` 不超过 256KB，不能是符号链接；外部主题只能声明 `generated-tokens`。`LICENSE` 可选：加载时超过 64KB 会被忽略，安装时超限则拒绝。
+- 工作区主题按名称排序追加到内置主题之后；`themes/` 同时作为工作区 Git 的版本化目录。
+
+**安装、更新与卸载**
+
+- `inspect()` 按输入识别 Git（`http(s)://`、`git@`、`ssh://` 或以 `.git` 结尾）与本地目录。Git 源以 `--depth 1 --single-branch` 克隆到 `<workspace>/state/install-temp`；校验后返回一次性 token 和安装确认信息，检查结果 10 分钟有效。
+- `install()` 校验 token 后进入 staging：只复制 `theme.json` 与可选的 `LICENSE`，重新校验，写入 `.flashcast-source.json`（来源、安装时间、版本），再用 rename 替换 `themes/<id>`。已有目录会先备份，替换失败自动回滚；安装后重新加载并确认主题可用。
+- `update()` 读取 `.flashcast-source.json` 重新拉取来源，要求 ID 一致；版本字符串相同返回「已是最新版本」，失败时旧主题保持可用。`uninstall()` 删除整个主题目录；`application.uninstallTheme()` 在卸载当前激活主题前先把 `config.json#themeId` 切到 `blue-glass`，卸载返回失败时恢复原选择。
+- 内置主题不可更新或卸载。主题没有启用/禁用状态：安装即进入画廊，卸载即移除。安装、更新、卸载成功后 `application` 会调用 `requestWorkspaceCommit()`（仅在自动提交开启时真正提交），随后 `applyThemeState(true)` 广播新状态。
+
+**工作区 Git 与切换**
+
+- `themes/` 与 `extensions/` 在 `COMMITTED_PATHS` 中，`state/` 保持忽略；旧版 `.gitignore` 中的 `extensions/` 行由 `ensureGitignore()` 清理。
+- 自动提交默认关闭；开启后只 stage `config.json`、`plugins/`、`themes/`、`extensions/`、`README.md`、`.gitignore`。主题操作使用 `theme: install …` / `theme: update …` / `theme: remove …` 的提交消息。
+- 切换工作区时 `applyWorkspaceChange()` 先 `themes.setLayout()`，再解析并应用主题，因此新工作区的 `themes/` 与 `config.json#themeId` 会立即生效；提交并推送后，另一台电脑拉取同一仓库即可恢复。
+
+**渲染器注入与启动缓存**
+
+- `applyTheme(definition, mode)` 设置 `documentElement.dataset.theme` / `dataset.themeId` 与 `colorScheme`。Blue Glass / `bundled-css` 只移除注入样式；其余主题把令牌写进单个 `<style id="flashcast-theme-vars">`，选择器为 `:root[data-theme-id="<id>"]`，并再次锁定单变体主题的可用模式。
+- `applyBootTheme()` 在 React 挂载前读取主进程附加到窗口 URL 的 `theme` / `themeId` 查询参数，并用 `localStorage` 的 `flashcast.theme-cache.v1` 缓存恢复上次序列化主题，避免自定义主题每次启动先闪 Blue Glass。缓存会做结构检查与令牌值消毒，只有 `generated-tokens` 定义可用。
+- 高对比：`main.tsx` 在系统 `prefers-contrast: more` 时设置 `data-contrast="more"`，生成式主题的注入样式写入 `contrastTokens`（更高 alpha、次级/三级文字提升为主文字、壁纸归零）；减少透明度下 `@media (prefers-reduced-transparency: reduce)` 强制实色窗口、关闭玻璃滤镜与内部光源、隐藏壁纸。
+
+**外部插件代码的 Git 跟踪**
+
+- `extensions/` 已从工作区 `.gitignore` 移除并加入 `COMMITTED_PATHS`，因此插件安装、更新、卸载在自动提交开启时也会随工作区提交；`state/` 仍是机器本地。插件代码仍在 Electron 主进程以当前用户权限执行，安全边界不变。
 
 ### 3.7 外部插件
 
@@ -209,7 +261,7 @@ SQLite 走 Electron 45 内置的 `node:sqlite`（只读打开）；被占用时�
 - `styles/base.css` 提供 Keycap、按钮、开关、Chip、Toast、Skeleton、焦点环与 `prefers-reduced-motion` / `prefers-contrast` 适配。
 - `styles/launcher.css` 负责窗口/面板、搜索栏、分组行、stagger 入场、Footer、Help 浮层、Toast。
 - `styles/plugin.css` 负责插件外壳、剪切板预览、设置表单、书签、错误卡、虚拟列表。
-- `styles/settings.css` 负责 200px 侧栏、内容区、主题选择器、插件卡片、模态框、工作区、快捷键表、关于页。
+- `styles/settings.css` 负责 200px 侧栏、内容区、外观页主题画廊/模式选择器、插件卡片、模态框、工作区、快捷键表、关于页。
 - 图标统一 Lucide 1.5px；无 emoji 图标；插件图标 fallback 为 puzzle。
 - 快捷键符号由 `keycapParts(accelerator, platform)` 生成，不硬编码 Ctrl/⌘。
 
@@ -217,13 +269,14 @@ SQLite 走 Electron 45 内置的 `node:sqlite`（只读打开）；被占用时�
 
 - 渲染器开启 `contextIsolation`、关闭 `nodeIntegration`、禁用 `webviewTag`；preload 仅暴露白名单方法。
 - CSP 限制脚本/样式/图片/字体来源；媒体自定义协议只读剪切板媒体目录。
-- 外部插件在主进程有完整 Node 权限，这是有意的可扩展性取舍；UI 在安装确认卡中明确提示，不做虚假的权限隔离。
-- 工作区相关的路径都由主进程解析，renderer 传 id/域/URL，不传任意文件系统路径（插件安装输入除外）。
-- 外部网络请求只有三处：Favicon、插件 Git 安装、更新检查/下载。更新只访问 Releases API 与 Release 资产地址，安装包先做 SHA256 校验；不会执行 Release 说明里的任何内容。没有遥测。
+- 外部插件在主进程有完整 Node 权限，这是有意的可扩展性取舍；UI 在安装确认卡中明确提示，不做虚假的权限隔离。插件代码位于工作区 `extensions/` 并纳入工作区 Git，安装入口应只信任审查过的来源。
+- 主题包是纯数据：安装器只复制 `theme.json` 与 `LICENSE`，不执行其中任何内容；令牌白名单与危险 CSS 值校验阻止远程资源、声明逃逸与表达式注入。主题安装只访问用户输入的 Git 地址。
+- 工作区相关的路径都由主进程解析，renderer 传 id/域/URL，不传任意文件系统路径（插件与主题安装输入除外）。
+- 外部网络请求只有四处：Favicon、插件 Git 安装、主题 Git 安装/更新、更新检查/下载。更新只访问 Releases API 与 Release 资产地址，安装包先做 SHA256 校验；不会执行 Release 说明里的任何内容。没有遥测。
 
 ## 6. 已验证范围
 
-- `pnpm typecheck` 通过；`pnpm test` 全部用例通过（模糊匹配、快捷键、Chrome 书签扁平化与账户书签选择、`.desktop`/Exec 解析、更新版本比较/选包/校验、假网络栈驱动的检查→下载→校验状态机，以及配置读写与旧键清理）。
+- `pnpm typecheck` 通过；`pnpm test` 全部用例通过（模糊匹配、快捷键、Chrome 书签扁平化与账户书签选择、`.desktop`/Exec 解析、更新版本比较/选包/校验、假网络栈驱动的检查→下载→校验状态机、主题契约与内置主题校验、主题包安装/更新/卸载、工作区 Git 路径，以及配置读写与旧键清理）。
 - Windows 快捷方式解析（`.lnk` 的 Unicode/ANSI 路径、LinkInfo、IconLocation、环境变量数据块与 `.url`）用 pylnk3 生成的真实结构样本固定；图标取图依赖 Windows shell，需在 Windows 机器上验证实际显示。
 - 用本机真实 Chrome（153，登录 Google 账户，Profile 内只有 `AccountBookmarks`）验证：能读出 18 条书签及其文件夹路径，`bookmarkSource` 为 `account`。
 - `pnpm build` 通过；`electron-builder --dir --linux` 生成可运行的 unpacked 应用，asar 与 `resources/build` 图标/封面资源路径验证通过。
@@ -254,7 +307,8 @@ SQLite 走 Electron 45 内置的 `node:sqlite`（只读打开）；被占用时�
 | 剪切板快捷键、容量、类型展示 | `ClipboardService`、`plugins/clipboard/config.json` |
 | 剪切板默认预览、回车/Alt+回车 | `ClipboardView`、`native-paste.ts` |
 | Chrome 书签设置与列表 | `chrome-bookmarks.ts`、`BookmarksView` |
-| 设置窗口五页、快捷键冲突、差异、许可 | `src/renderer/src/settings/*` |
+| 设置窗口六页、快捷键冲突、差异、许可 | `src/renderer/src/settings/*` |
+| 主题画廊、深/浅模式、工作区主题包 | `theme-manager.ts`、`shared/theme.ts`、`shared/themes/*`、`settings/AppearancePage.tsx`、`renderer/src/theme.ts` |
 | 空/加载/错误/Toast 状态 | 各视图与 `components/ui.tsx` |
 | 无障碍、减少动效、高对比 | `aria-*`、焦点环、`prefers-reduced-motion` / `prefers-contrast` |
 | 启动器内的设置入口 | `SearchBar` 齿轮按钮（仅全局页）、`⌘,` / `Ctrl+,`、帮助浮层 |
@@ -267,6 +321,7 @@ SQLite 走 Electron 45 内置的 `node:sqlite`（只读打开）；被占用时�
 - 视频封面在没有 `ffmpeg` 时使用设计封面，而不是尝试解析视频容器；视频始终不播放。
 - 外部插件 UI 为宿主渲染的列表 + 设置 schema，不支持插件自带 React bundle；这是为了跨进程安全和安装可审查性。
 - 更新源固定为 GitHub Releases，没有增量差分（每次整包下载）与灰度/回滚开关；`.dmg`/`.deb` 只能下载后交给系统安装器，做不到完全无交互。产物未签名，更新后的首次启动仍受 Gatekeeper / SmartScreen 约束（macOS 安装脚本会清掉下载文件的 quarantine 属性）。
+- 主题 v1 只允许外观令牌（颜色、玻璃、阴影、壁纸），不支持字体、圆角、布局或动效覆盖；单变体主题会锁定模式，且没有自动生成缺失模式的机制。主题包的实际更新检查依赖 `.flashcast-source.json`，手工复制的主题只能重新安装或点「重新加载」。
 - 更新状态保存在内存里，应用重启后需要重新检查；这是有意的——避免把"已下载"的路径写进工作区配置并在清理后指向不存在的文件。
 - 毛玻璃只能靠面板 alpha 把桌面“盖住”，不能真正模糊窗口后面的其他应用：Chromium 透明窗口的 `backdrop-filter` 不采样桌面。要做到系统级背景模糊需要 `NSVisualEffectView` / Mica / KWin 模糊，本期未接入；可调强度也因此没有保留。
 - 书签超过 60 行使用固定行高虚拟列表；模糊匹配仍在渲染线程完成，超大书签库（1000+）后续可迁移到 Worker 并做 60ms 防抖。

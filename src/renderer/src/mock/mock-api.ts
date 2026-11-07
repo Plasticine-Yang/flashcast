@@ -1,4 +1,12 @@
 import { normalizeTrigger, validateTriggers, type TriggerDraft } from '@shared/editor-triggers'
+import {
+  BLUE_GLASS_THEME,
+  defineTheme,
+  resolveThemeState,
+  supportedThemeModes,
+  type ThemeDefinition
+} from '@shared/theme'
+import { BUILTIN_THEMES } from '@shared/themes'
 import type {
   AppEntry,
   AppPrefs,
@@ -40,6 +48,58 @@ import {
   mockWorkspace
 } from './demo-data'
 
+const DEMO_THEME = defineTheme(
+  {
+    schemaVersion: 1,
+    id: 'demo-harbor',
+    name: 'Harbor',
+    description: '预览用的海湾青主题包。',
+    version: '1.0.0',
+    author: 'Flashcast Preview',
+    license: 'MIT',
+    application: 'generated-tokens',
+    variants: {
+      dark: {
+        label: 'Night',
+        palette: {
+          bg: '#0d1b1e',
+          bgElevated: '#15282c',
+          surface: '#5fc7c9',
+          border: '#9ed6d8',
+          text: '#eef8f7',
+          textSecondary: '#bfdcdb',
+          textTertiary: '#a5c5c4',
+          accent: '#5fc7c9',
+          onAccent: '#0d1b1e',
+          success: '#7fd18b',
+          warning: '#e8c07a',
+          danger: '#ff8a80',
+          focus: '#8ee6e9'
+        }
+      },
+      light: {
+        label: 'Day',
+        palette: {
+          bg: '#f2f8f7',
+          bgElevated: '#e4efee',
+          surface: '#0e5f63',
+          border: '#20484c',
+          text: '#10292b',
+          textSecondary: '#31585b',
+          textTertiary: '#3f6468',
+          accent: '#0e6b6f',
+          onAccent: '#ffffff',
+          success: '#2f6b3f',
+          warning: '#7a4a00',
+          danger: '#a33a2a',
+          focus: '#0e6b6f'
+        }
+      }
+    }
+  },
+  'workspace'
+)
+
 export function createMockApi(): FlashcastApi {
   const params = new URLSearchParams(window.location.search)
   const role = params.get('window') === 'settings' ? 'settings' : 'launcher'
@@ -47,9 +107,12 @@ export function createMockApi(): FlashcastApi {
   const listeners = new Map<string, Set<(payload: unknown) => void>>()
 
   const initialTheme: 'light' | 'dark' = params.get('theme') === 'light' ? 'light' : 'dark'
+  const initialThemeId = params.get('themeId')?.trim() || 'blue-glass'
+  let themes: ThemeDefinition[] = [...BUILTIN_THEMES]
   let prefs: AppPrefs = {
     ...mockBootstrap.prefs,
     theme: initialTheme,
+    themeId: initialThemeId,
     hotkeys: { ...mockBootstrap.prefs.hotkeys }
   }
   let shortcuts = mockShortcuts.map((shortcut) => ({ ...shortcut }))
@@ -207,17 +270,61 @@ export function createMockApi(): FlashcastApi {
     }, 220)
   }
 
-  const bootstrap = (): BootstrapData => ({
-    ...mockBootstrap,
-    role,
-    platform,
-    prefs,
-    theme: prefs.theme === 'light' ? 'light' : 'dark',
-    shortcuts,
-    plugins,
-    workspace,
-    launchAtLoginSupported: true
-  })
+  const themeState = (): {
+    state: ReturnType<typeof resolveThemeState>
+    definition: ThemeDefinition
+    fallbackReason: string | null
+  } => {
+    const requested = themes.find(
+      (theme) => theme.id === prefs.themeId && supportedThemeModes(theme).length > 0
+    )
+    const state = resolveThemeState(requested, prefs.theme, 'dark', BLUE_GLASS_THEME)
+    const definition = themes.find((theme) => theme.id === state.themeId) ?? BLUE_GLASS_THEME
+    const fallbackReason =
+      state.themeId === prefs.themeId
+        ? null
+        : `主题「${prefs.themeId}」不可用，已回退 Blue Glass`
+    return { state, definition, fallbackReason }
+  }
+
+  const emitThemeState = (): void => {
+    const { state, definition, fallbackReason } = themeState()
+    emit('theme:changed', {
+      theme: state.mode,
+      setting: prefs.theme,
+      themeId: state.themeId,
+      locked: state.locked,
+      supportedModes: state.supportedModes,
+      definition,
+      requestedThemeId: prefs.themeId,
+      fallbackReason
+    })
+    emit('themes:changed', { themes, errors: [] })
+  }
+
+  const bootstrap = (): BootstrapData => {
+    const { state, fallbackReason } = themeState()
+    return {
+      ...mockBootstrap,
+      role,
+      platform,
+      prefs,
+      theme: state.mode,
+      themeId: state.themeId,
+      themeLocked: state.locked,
+      themeSupportedModes: state.supportedModes,
+      themeFallback:
+        fallbackReason === null
+          ? null
+          : { requestedId: prefs.themeId, reason: fallbackReason },
+      themes,
+      themeErrors: [],
+      shortcuts,
+      plugins,
+      workspace,
+      launchAtLoginSupported: true
+    }
+  }
 
   const clipboardPage = (): ClipboardPluginPage => ({
     kind: 'clipboard',
@@ -523,14 +630,17 @@ export function createMockApi(): FlashcastApi {
     },
 
     updatePrefs: async (patch) => {
+      if (patch.themeId !== undefined) {
+        const themeId = typeof patch.themeId === 'string' ? patch.themeId.trim() : ''
+        if (!themeId || !themes.some((theme) => theme.id === themeId)) {
+          throw new Error('主题不存在或不可用')
+        }
+      }
       prefs = { ...prefs, ...patch }
       if (typeof patch.autoCommit === 'boolean') {
         workspace = { ...workspace, autoCommit: patch.autoCommit }
       }
-      emit('theme:changed', {
-        theme: prefs.theme === 'light' ? 'light' : 'dark',
-        setting: prefs.theme
-      })
+      emitThemeState()
       emit('prefs:changed', prefs)
       return bootstrap()
     },
@@ -542,6 +652,45 @@ export function createMockApi(): FlashcastApi {
       diff: ' config.json         | 3 +--\n plugins/.../config.json | 2 ++\n 2 files changed, 3 insertions(+), 2 deletions(-)',
       error: null
     }),
+
+    inspectTheme: async () => ({
+      token: 'demo-theme-token',
+      definition: DEMO_THEME,
+      sourceType: 'local',
+      source: '/demo/flashcast-theme-harbor',
+      warnings: [],
+      alreadyInstalled: themes.some((theme) => theme.id === DEMO_THEME.id),
+      installedVersion: themes.find((theme) => theme.id === DEMO_THEME.id)?.version ?? null
+    }),
+    installTheme: async () => {
+      themes = themes.some((theme) => theme.id === DEMO_THEME.id)
+        ? themes
+        : [...themes, DEMO_THEME]
+      emit('themes:changed', { themes, errors: [] })
+      return { theme: DEMO_THEME, themes, errors: [] }
+    },
+    updateTheme: async (themeId) => {
+      if (themeId !== DEMO_THEME.id) {
+        return { ok: false, error: '预览模式只有 Harbor 可更新' }
+      }
+      emit('themes:changed', { themes, errors: [] })
+      return { ok: true, toast: { message: 'Harbor 已是最新版本', tone: 'default' } }
+    },
+    uninstallTheme: async (themeId) => {
+      if (themeId !== DEMO_THEME.id) {
+        return { ok: false, error: '预览模式只有 Harbor 可卸载' }
+      }
+      themes = themes.filter((theme) => theme.id !== themeId)
+      if (prefs.themeId === themeId) prefs = { ...prefs, themeId: 'blue-glass' }
+      emitThemeState()
+      emit('prefs:changed', prefs)
+      return { ok: true, toast: { message: '已卸载 Harbor', tone: 'success' } }
+    },
+    openThemeDirectory: async () => {},
+    reloadThemes: async () => {
+      emit('themes:changed', { themes, errors: [] })
+      return { themes, errors: [] }
+    },
 
     inspectPlugin: async (input): Promise<PluginInspection> => ({
       token: 'demo-token',

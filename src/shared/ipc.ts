@@ -50,6 +50,14 @@ export const IPC = {
   setPluginEnabled: 'extensions:set-enabled',
   openPluginDirectory: 'extensions:open-directory',
 
+  themesInspect: 'themes:inspect',
+  themesInstall: 'themes:install',
+  themesUpdate: 'themes:update',
+  themesUninstall: 'themes:uninstall',
+  themesOpenDirectory: 'themes:open-directory',
+  themesReload: 'themes:reload',
+  themesChanged: 'themes:changed',
+
   setShortcuts: 'shortcuts:set',
   resetShortcuts: 'shortcuts:reset',
   shortcutsChanged: 'shortcuts:changed',

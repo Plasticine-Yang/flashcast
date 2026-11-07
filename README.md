@@ -30,14 +30,15 @@
 - **全局模糊搜索**：应用、插件关键字、命令统一搜索；子序列命中（`fbb` → `Foo-Bar-Baz`）、连续/词首加分、中文整串包含、逐字高亮。
 - **拼音搜索**：中文条目支持全拼、混拼与首字母（`kualiulan`、`kualanqi`、`kllq` 都能命中「夸克浏览器」），命中会标在对应汉字上，字面匹配仍然优先。
 - **插件机制**：类似 Cordis 的上下文/生命周期模型；从 Git 仓库或本地目录安装、启停、更新、卸载；插件设置由插件维护并存入工作区。
-- **工作区**：关联一个 Git 仓库，集中保存配置、插件设置；自动提交并推送（可选）；状态、分支、最近提交、冲突与差异可视化。
+- **主题与主题包**：内置 Blue Glass、Dracula、Tokyo Night、Kanagawa、Atelier、Everforest 六套主题；外部主题包放在工作区 `themes/`，可从 Git 仓库或本地目录安装；切换工作区即切换主题，并随工作区提交、推送。
+- **工作区**：关联一个 Git 仓库，集中保存配置、插件设置、主题包与外部插件代码；自动提交并推送（可选）；状态、分支、最近提交、冲突与差异可视化。
 - **流体动画**：启动器先出现输入框、再像液体一样长出列表，不做全屏压暗遮罩；插件进入/退出、预览水珠展开、列表 FLIP 删除、窗口收回后粘贴；遵循 `prefers-reduced-motion`。
 - **内置插件**：
   - `剪切板`：文本 / 图片 / 视频 / 音乐；右侧预览常驻、切换选中原位更新；回车置顶并关闭；`Alt/Option+Enter` 粘贴；`Ctrl+Backspace` 删除；二次确认清空。通过全局快捷键直接进入时，`Esc` 直接关闭启动器；从主页面进入时先返回主页面。
   - `Chrome 书签`：自动发现 Chrome Profile、读书架、favicon、文件夹 chip、在 Chrome 中打开；同时支持本地 `Bookmarks` 与登录 Google 账户后的 `AccountBookmarks`，即使 Profile 尚未生成书签文件也能识别。
   - `VSCode-like Workspace`：索引 VS Code、Trae、Cursor、Windsurf、VSCodium 等打开过的工作区；按 `product.json` 识别产品，读取 `state.vscdb` 最近列表、打开窗口与 `workspaceStorage` 合并去重；用该产品自己的 CLI 打开（不经过 `vscode://` 协议），支持远程工作区与「新窗口」打开。触发词在插件设置页按编辑器配置，默认留空；清理区支持多选删除历史与一键删除路径已失效的记录，只动编辑器历史、不删项目目录，被移除的编辑器状态会移入备份目录。
 - **设置入口**：启动器顶栏右侧的齿轮，或直接按 `⌘,` / `Ctrl+,`；全局搜索里的「打开设置」命令保留。
-- **设置窗口**：通用（主题、开机自启、语言）、插件管理、工作区、快捷键录制、关于与许可。
+- **设置窗口**：通用（启动、语言）、外观（主题与主题包、深浅模式）、插件管理、工作区、快捷键录制、关于与许可。
 - **自动更新**：读取 GitHub Releases 检查新版本；发现新版本后，启动器顶栏或 设置 → 关于 都能一键下载，校验 `SHA256SUMS.txt` 后重启安装。开发构建只检查、不就地安装。
 - **无障碍**：完整键盘路径、可见焦点环、`aria-live` 结果播报、对比度按 UI 规范核算、减少动效/高对比适配。
 
@@ -158,19 +159,23 @@ node scripts/release.mjs 1.4.0   # 指定版本
 
 ```text
 <workspace>/
-├── config.json                  # 主题、快捷键、自动提交、插件启停
+├── config.json                  # 主题、主题 ID、快捷键、自动提交、插件启停
 ├── plugins/
 │   ├── clipboard/config.json    # 每个插件的设置（纳入 Git）
 │   ├── chrome-bookmarks/config.json
 │   └── vscode-like-workspace/config.json   # 每个编辑器的启用状态与触发词
-├── extensions/                  # 外部插件代码（不纳入 Git）
-├── state/                       # 剪切板历史/媒体、favicon 缓存（不纳入 Git）
+├── themes/                      # 工作区主题包（纳入 Git）
+│   └── <id>/theme.json          # 可选 LICENSE、.flashcast-source.json
+├── extensions/                  # 外部插件代码（纳入 Git）
+├── state/                       # 剪切板历史/媒体、favicon 缓存、安装临时目录（不纳入 Git）
 ├── README.md
 └── .gitignore
 ```
 
-- 自动提交默认关闭；开启后只提交 Flashcast 管理的路径（`config.json`、`plugins/`、`README.md`、`.gitignore`），不会 stage 仓库中的其他文件。
+- 自动提交默认关闭；开启后只提交 Flashcast 管理的路径（`config.json`、`plugins/`、`themes/`、`extensions/`、`README.md`、`.gitignore`），不会 stage 仓库中的其他文件。
 - 有 upstream 时自动尝试推送；没有远程仓库或推送失败会以状态/错误呈现，不阻塞配置保存。
+- 主题安装/更新/卸载成功后，在自动提交开启时会立即请求一次提交；关闭时只写入工作区，并提示「提交并推送后可在其他电脑恢复」。
+- `themes/` 与 `extensions/` 都随工作区 Git 版本化；`state/` 保持机器本地并被忽略。另一台电脑只有在**提交并推送**后拉取同一仓库，才能恢复相同的主题与外部插件代码。
 - 开发与自动化可使用环境变量：
   - `FLASHCAST_WORKSPACE`：覆盖工作区路径（默认 `~/.flashcast`，开发版为 `~/.flashcast-dev`）
   - `FLASHCAST_USER_DATA`：覆盖 Electron userData（便于沙箱测试）
@@ -233,28 +238,68 @@ module.exports = {
 
 安装入口是 **设置 → 插件 → 安装插件**，支持 Git URL 或本地目录；安装前展示插件 id、版本、权限、文件大小与信任警告。完整的可运行示例位于 [examples/hello-flashcast](examples/hello-flashcast)。
 
-> **安全边界**：外部插件在 Electron 主进程中以当前用户权限执行，不是沙箱。请仅安装可信来源；manifest 中的 permissions 仅用于展示，不构成操作系统级隔离。内置插件不可卸载。
+> **安全边界**：外部插件代码位于 `<workspace>/extensions/`，并纳入工作区 Git（提交、推送后会在其他电脑恢复）；它会在 Electron 主进程中以当前用户权限执行，不是沙箱。请仅从可信来源安装，并只提交你审查过的代码；manifest 中的 permissions 仅用于展示，不构成操作系统级隔离。安装器不会复制 `node_modules/` 与 `.git/`，插件应打包为自包含代码（单文件或自带运行时代码），否则换电脑后可能缺少依赖。内置插件不可卸载。
+
+## 主题
+
+内置主题随应用发布，工作区主题包则是数据文件；两者都在 **设置 → 外观** 中统一选择。
+
+| 主题 | 模式 | 强调色 / 气质 |
+|---|---|---|
+| `blue-glass` | 深色 / 浅色 | 蔚蓝玻璃，默认主题 |
+| `dracula` | 仅深色 | 高饱和紫 + 青，经典 Dracula |
+| `tokyo-night` | 仅深色 | 深靛蓝 + 霓虹青，东京夜景 |
+| `kanagawa` | 深色 Wave / 浅色 Lotus | 和纸墨色，灰蓝强调 |
+| `atelier` | 深色 Ink / 浅色 Paper | 暖纸、墨色与赭石，安静的编辑感 |
+| `everforest` | 深色 Dark / 浅色 Light | 柔和苔绿与晨雾 |
+
+Dracula 与 Tokyo Night 只提供深色变体：选中后生效模式锁定为深色，但用户原本的「跟随系统 / 浅色 / 深色」偏好会保留，切回双模式主题后继续生效。外观页对单模式主题隐藏模式选择器，改为显示一条说明信息，而不是展示一个禁用的控件。
+
+### 工作区主题包
+
+主题是**工作区级**的：`config.json` 的 `themeId` 选中主题，外部主题包位于 `<workspace>/themes/<id>/theme.json`（可选的 `LICENSE` 与安装器写入的 `.flashcast-source.json` 一起存放）。`themes/` 纳入工作区 Git，因此：
+
+- 切换工作区会切换该工作区自己的主题；
+- 提交并推送后，在另一台电脑拉取同一仓库即可恢复相同的主题设置；
+- 只在本机提交、没有 push 时，另一台电脑不会自动恢复。
+
+安装入口是 **设置 → 外观 → 安装主题**，支持 Git 仓库地址或本地目录；安装前会先校验主题并展示 ID、版本、作者、许可与模式。工作区主题的 `...` 菜单提供「检查更新 / 打开目录 / 卸载」：更新依据 `.flashcast-source.json` 记录的来源；卸载当前激活主题会回退到 Blue Glass。主题没有启用/禁用状态，**安装即可用，卸载即移除**；内置主题不能更新或卸载。
+
+### 主题包是纯数据
+
+- 主题包只有 `theme.json` 与可选的 `LICENSE`，没有 JavaScript，也不允许远程 URL、字体或图片；安装器只复制 `theme.json` 与可选的 `LICENSE`，并在暂存目录校验后用 rename 原子替换。
+- schema v1 由 palette（语义色板）与可选 overrides（令牌覆盖）构成，令牌有严格白名单；安装与加载都会执行 WCAG 对比度校验。细节见 [docs/themes.md](docs/themes.md)。
+- 主题契约支持深色 / 浅色变体，一个主题可以实现其中一个或两个，但不会自动生成缺失模式。
+- 主题只改变外观令牌（颜色、玻璃、阴影、壁纸强度）；v1 不支持字体、圆角、布局或动效覆盖。
+- `ThemeDefinition` / `ThemeTokens` 定义在 `src/shared/theme.ts`，共 55 个令牌，`THEME_TOKEN_CSS` 将它们映射到 `--fc-*`。Blue Glass 使用 `application: 'bundled-css'`，其余主题使用 `generated-tokens`，在运行时通过 `data-theme-id` 与 `data-theme` 注入。
+- 生成式主题包的高对比模式使用自动生成的 `contrastTokens`；减少透明度会强制实色窗口并隐藏壁纸层。
+
+完整的工作区主题示例见 [examples/hello-theme](examples/hello-theme)，开发说明见 [docs/themes.md](docs/themes.md)。
+
+### 主题许可
+
+内置主题的调色板与实现均以 MIT 授权：Blue Glass 与 Atelier 是 Flashcast 原创；Dracula、Tokyo Night、Kanagawa、Everforest 的配色分别改编自其 MIT 上游项目，详见[许可](#许可)。请勿使用主题项目的 logo 或商标；Atelier 仅受暖色编辑排版风格启发，与 Claude / Anthropic 无关联。
 
 ## 架构
 
 ```text
 ┌──────────────── renderer (React) ────────────────┐
 │ Launcher（搜索 / 键盘 / 动画）                    │
-│ Settings（通用 / 插件 / 工作区 / 快捷键 / 关于）   │
-│ 设计令牌 · Keycap · Preview · FLIP / 虚拟列表      │
+│ Settings（通用 / 外观 / 插件 / 工作区 / 快捷键 / 关于） │
+│ 设计令牌 · 主题注入 · Keycap · Preview · FLIP     │
 └───────────────────────▲──────────────────────────┘
                         │ preload contextBridge（白名单）
 ┌───────────────────────┴──────────────────────────┐
 │ main（Electron）                                  │
 │ WindowManager · ShortcutManager · IPC             │
-│ WorkspaceService · GitService · ConfigStore       │
-│ PluginService · ExternalPluginManager             │
+│ ThemeManager · WorkspaceService · GitService      │
+│ ConfigStore · PluginService · ExternalPluginManager │
 │ ClipboardService · ChromeBookmarks · FaviconCache │
 │ AppDiscovery · NativePaste · CustomMediaProtocol  │
 └──────────────────────────────────────────────────┘
 ```
 
-更详细的模块说明、数据流、动效映射与需求对照见 [docs/implementation.md](docs/implementation.md)。
+更详细的模块说明、数据流、动效映射与需求对照见 [docs/implementation.md](docs/implementation.md)，主题包开发见 [docs/themes.md](docs/themes.md)。
 
 ## 隐私与网络
 
@@ -262,7 +307,7 @@ module.exports = {
 - 启动器的壁纸磨砂只在本机读取系统壁纸路径（GNOME `gsettings` / Windows 注册表），用于生成模糊背景，不写入磁盘、不上传。
 - `VSCode-like Workspace` 读取本地编辑器数据目录，不联网；启动的是检测到的编辑器可执行文件，参数以数组传递，不经过 shell。清理历史时只在编辑器关闭状态下改写其 `state.vscdb` / `storage.json`，改写前备份到工作区的 `state/editor-backups`。
 - Chrome 书签插件的 favicon 会向 `https://www.google.com/s2/favicons` 请求，结果缓存在 `state/favicons`；离线或企业网络阻断时自动使用本地 `globe` 图标。
-- 插件安装/更新会访问你输入的 Git 地址。
+- 插件与主题的安装/更新会访问你输入的 Git 地址。
 - 检查更新会访问 `https://api.github.com/repos/Plasticine-Yang/flashcast/releases/latest`（可用 `FLASHCAST_UPDATE_FEED` 或 `FLASHCAST_UPDATE_REPO` 覆盖），下载安装包走该 Release 的资产地址；除此之外应用自身不访问其他网络。
 
 ## 平台说明与已知限制
@@ -281,15 +326,15 @@ module.exports = {
 ## 目录
 
 ```text
-src/main/        Electron 主进程、服务、插件宿主
+src/main/        Electron 主进程、服务、主题管理、插件宿主
 src/preload/     contextBridge 白名单 API
-src/renderer/    React 启动器与设置窗口、设计令牌
-src/shared/      类型、模糊匹配、快捷键、时间格式化
-examples/        外部插件示例
-docs/            PRD、UI/UX 规格、实现说明、截图
+src/renderer/    React 启动器与设置窗口、设计令牌、主题注入
+src/shared/      类型、主题契约与内置主题、模糊匹配、快捷键、时间格式化
+examples/        外部插件与主题包示例
+docs/            PRD、UI/UX 规格、实现说明、主题包指南、截图
 scripts/         图标/封面生成、开发用桌面项（Wayland 全局快捷键身份）
 ```
 
 ## 许可
 
-[MIT](LICENSE)。内置的 Inter / JetBrains Mono 字体、Lucide 图标与 Electron/React 等依赖遵循各自许可证。
+[MIT](LICENSE)。内置主题的调色板与实现同样以 MIT 授权：Blue Glass、Atelier 为 Flashcast 原创；Dracula（[draculatheme.com](https://draculatheme.com)）、Tokyo Night（[enkia/tokyo-night-vscode-theme](https://github.com/enkia/tokyo-night-vscode-theme)）、Kanagawa（[rebelot/kanagawa.nvim](https://github.com/rebelot/kanagawa.nvim)）、Everforest（[sainnhe/everforest](https://github.com/sainnhe/everforest)）的配色分别改编自其 MIT 上游项目。内置的 Inter / JetBrains Mono 字体、Lucide 图标与 Electron/React 等依赖遵循各自许可证。上游主题项目的 logo 与商标不随本仓库分发；Atelier 与 Claude / Anthropic 无关联。

@@ -18,9 +18,12 @@ import type {
   PlatformId,
   ShortcutError,
   ShortcutInfo,
+  ThemeInspection,
+  ThemePackError,
   UpdateState,
   WorkspaceSummary
 } from '@shared/types'
+import type { ThemeDefinition } from '@shared/theme'
 
 const platform = process.platform as PlatformId
 
@@ -40,6 +43,7 @@ const eventNames = new Set<EventName>([
   'clipboard:changed',
   'plugins:changed',
   'theme:changed',
+  'themes:changed',
   'workspace:changed',
   'shortcuts:changed',
   'toast',
@@ -91,6 +95,18 @@ const api: FlashcastApi = {
   openWorkspaceFolder: () => invoke<void>(IPC.openWorkspaceFolder),
   refreshWorkspace: () => invoke<WorkspaceSummary>(IPC.refreshWorkspace),
   getGitDiff: () => invoke<{ status: string; diff: string; error: string | null }>(IPC.gitDiff),
+
+  inspectTheme: (input) => invoke<ThemeInspection>(IPC.themesInspect, input),
+  installTheme: (token) =>
+    invoke<{ theme: ThemeDefinition; themes: ThemeDefinition[]; errors: ThemePackError[] }>(
+      IPC.themesInstall,
+      token
+    ),
+  updateTheme: (themeId) => invoke<ActionResult>(IPC.themesUpdate, themeId),
+  uninstallTheme: (themeId) => invoke<ActionResult>(IPC.themesUninstall, themeId),
+  openThemeDirectory: (themeId) => invoke<void>(IPC.themesOpenDirectory, themeId),
+  reloadThemes: () =>
+    invoke<{ themes: ThemeDefinition[]; errors: ThemePackError[] }>(IPC.themesReload),
 
   inspectPlugin: (input) => invoke<PluginInspection>(IPC.inspectPlugin, input),
   installPlugin: (token) =>
