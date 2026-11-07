@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { EventEmitter } from 'node:events'
 import type { AppPrefs, GlobalHotkeys, PlatformId, ThemeSetting } from '@shared/types'
-import { GLASS_INTENSITY_DEFAULT, normalizeGlassIntensity } from '@shared/glass'
 import { defaultHotkeys } from '@shared/shortcuts'
 import { readJson, writeJsonAtomic, ensureDir } from './json-store'
 import type { WorkspaceLayout } from './paths'
@@ -12,7 +11,6 @@ interface StoredConfig {
   launchAtLogin: boolean
   language: 'zh-CN'
   autoCommit: boolean
-  glassIntensity: number
   hotkeys: GlobalHotkeys
   enabledPlugins: Record<string, boolean>
 }
@@ -36,7 +34,6 @@ export class ConfigStore extends EventEmitter {
       launchAtLogin: false,
       language: 'zh-CN',
       autoCommit: false,
-      glassIntensity: GLASS_INTENSITY_DEFAULT,
       hotkeys: defaultHotkeys(this.platform),
       enabledPlugins: {}
     }
@@ -66,10 +63,6 @@ export class ConfigStore extends EventEmitter {
       launchAtLogin: typeof raw.launchAtLogin === 'boolean' ? raw.launchAtLogin : defaults.launchAtLogin,
       language: 'zh-CN',
       autoCommit: typeof raw.autoCommit === 'boolean' ? raw.autoCommit : defaults.autoCommit,
-      glassIntensity:
-        raw.glassIntensity === undefined
-          ? defaults.glassIntensity
-          : normalizeGlassIntensity(raw.glassIntensity),
       hotkeys: {
         launcher:
           typeof raw.hotkeys?.launcher === 'string' && raw.hotkeys.launcher
@@ -166,7 +159,6 @@ export class ConfigStore extends EventEmitter {
       launchAtLogin: this.prefs.launchAtLogin,
       language: this.prefs.language,
       autoCommit: this.prefs.autoCommit,
-      glassIntensity: this.prefs.glassIntensity,
       hotkeys: this.prefs.hotkeys,
       enabledPlugins: this.prefs.enabledPlugins
     }

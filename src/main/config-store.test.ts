@@ -2,7 +2,6 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { GLASS_INTENSITY_DEFAULT } from '@shared/glass'
 import { ConfigStore } from './config-store'
 
 /** Only the paths ConfigStore.init()/persist() touches. */
@@ -24,7 +23,7 @@ function layoutFor(root: string) {
   }
 }
 
-describe('ConfigStore glass preference', () => {
+describe('ConfigStore preferences', () => {
   let root: string
 
   beforeEach(async () => {
@@ -35,33 +34,44 @@ describe('ConfigStore glass preference', () => {
     await rm(root, { recursive: true, force: true })
   })
 
-  it('defaults to the shipped frost level and persists updates', async () => {
+  it('starts from defaults and persists theme changes', async () => {
     const store = new ConfigStore(layoutFor(root), 'darwin')
     await store.init()
-    expect(store.getPrefs().glassIntensity).toBe(GLASS_INTENSITY_DEFAULT)
+    expect(store.getPrefs().theme).toBe('dark')
+    expect(store.getPrefs().launchAtLogin).toBe(false)
 
-    await store.updatePrefs({ glassIntensity: 42 })
+    await store.updatePrefs({ theme: 'light' })
     const raw = JSON.parse(await readFile(join(root, 'config.json'), 'utf8')) as {
-      glassIntensity?: number
+      theme?: string
     }
-    expect(raw.glassIntensity).toBe(42)
+    expect(raw.theme).toBe('light')
 
     const reopened = new ConfigStore(layoutFor(root), 'darwin')
     await reopened.init()
-    expect(reopened.getPrefs().glassIntensity).toBe(42)
+    expect(reopened.getPrefs().theme).toBe('light')
   })
 
-  it('clamps out-of-range values read from disk', async () => {
-    await writeFile(join(root, 'config.json'), JSON.stringify({ version: 1, glassIntensity: 420 }))
+  it('falls back to defaults when the stored theme is invalid', async () => {
+    await writeFile(join(root, 'config.json'), JSON.stringify({ version: 1, theme: 'neon' }))
     const store = new ConfigStore(layoutFor(root), 'linux')
     await store.init()
-    expect(store.getPrefs().glassIntensity).toBe(100)
+    expect(store.getPrefs().theme).toBe('dark')
   })
 
-  it('falls back to the default when the stored value is not a number', async () => {
-    await writeFile(join(root, 'config.json'), JSON.stringify({ version: 1, glassIntensity: 'x' }))
+  it('drops unknown legacy keys on the next write', async () => {
+    await writeFile(
+      join(root, 'config.json'),
+      JSON.stringify({ version: 1, theme: 'light', glassIntensity: 80 })
+    )
     const store = new ConfigStore(layoutFor(root), 'linux')
     await store.init()
-    expect(store.getPrefs().glassIntensity).toBe(GLASS_INTENSITY_DEFAULT)
+    await store.updatePrefs({ theme: 'dark' })
+
+    const raw = JSON.parse(await readFile(join(root, 'config.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >
+    expect(raw.glassIntensity).toBeUndefined()
+    expect(raw.theme).toBe('dark')
   })
 })

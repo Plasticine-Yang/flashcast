@@ -35,8 +35,7 @@
   - `剪切板`：文本 / 图片 / 视频 / 音乐；右侧预览常驻、切换选中原位更新；回车置顶并关闭；`Alt/Option+Enter` 粘贴；`Ctrl+Backspace` 删除；二次确认清空。通过全局快捷键直接进入时，`Esc` 直接关闭启动器；从主页面进入时先返回主页面。
   - `Chrome 书签`：自动发现 Chrome Profile、读书架、favicon、文件夹 chip、在 Chrome 中打开；同时支持本地 `Bookmarks` 与登录 Google 账户后的 `AccountBookmarks`，即使 Profile 尚未生成书签文件也能识别。
 - **设置入口**：启动器顶栏右侧的齿轮，或直接按 `⌘,` / `Ctrl+,`；全局搜索里的「打开设置」命令保留。
-- **设置窗口**：通用（主题、毛玻璃强度、开机自启、语言）、插件管理、工作区、快捷键录制、关于与许可。
-- **可调毛玻璃**：启动器面板的磨砂程度是 0–100 的偏好设置，默认 80（更实、更磨砂）；滑杆拖动即时预览，并写入工作区配置。
+- **设置窗口**：通用（主题、开机自启、语言）、插件管理、工作区、快捷键录制、关于与许可。
 - **自动更新**：读取 GitHub Releases 检查新版本；发现新版本后，启动器顶栏或 设置 → 关于 都能一键下载，校验 `SHA256SUMS.txt` 后重启安装。开发构建只检查、不就地安装。
 - **无障碍**：完整键盘路径、可见焦点环、`aria-live` 结果播报、对比度按 UI 规范核算、减少动效/高对比适配。
 
@@ -262,7 +261,7 @@ module.exports = {
 
 ## 平台说明与已知限制
 
-- **透明与模糊**：启动器是透明窗口，面板由半透明蓝色玻璃、内部光源与磨砂颗粒构成；GNOME 与 Windows 会读取当前桌面壁纸，重度模糊后以 `mix-blend-mode: color` 混入玻璃，形成真实的壁纸磨砂（macOS 无免授权接口，回退纯玻璃）。Chromium 透明窗口无法采样桌面，"能看见多少"由面板 alpha 决定，因此在 **设置 → 通用 → 毛玻璃强度** 提供 0–100 的调节（默认 80，面板 alpha 0.964、blur 83px）；拖动即时生效，停顿后写入工作区。桌面级实时模糊仍需系统材质（`NSVisualEffectView` / Mica），本期未启用。设置窗口内部绘制蓝色极光背景，侧栏与卡片在其上做真实模糊。
+- **透明与模糊**：启动器是透明窗口，面板由半透明蓝色玻璃、内部光源与磨砂颗粒构成；GNOME 与 Windows 会读取当前桌面壁纸，重度模糊后以 `mix-blend-mode: color` 混入玻璃，形成真实的壁纸磨砂（macOS 无免授权接口，回退纯玻璃）。Chromium 透明窗口无法采样桌面，"能看见多少"由面板 alpha 决定：面板不透明度为 0.964（浅色 0.956）、blur 83px，桌面文字已经基本透不出来。桌面级实时模糊仍需系统材质（`NSVisualEffectView` / Mica），本期未启用。设置窗口内部绘制蓝色极光背景，侧栏与卡片在其上做真实模糊。
 - **Wayland 全局快捷键**：走 `xdg-desktop-portal` 的 `GlobalShortcuts`（Electron 45 默认启用，无需 feature flag）。应用身份来自 `package.json#desktopName`，必须与已安装的 `.desktop` 文件同名：生产版由 electron-builder 的 `syncDesktopName` 安装为 `com.flashcast.app.desktop`，开发版由 `pnpm dev` 写入 `~/.local/share/applications/com.flashcast.app.dev.desktop`。身份无法解析时系统会静默拒绝绑定，应用会在启动时写入设置页诊断并发系统通知；首次绑定需要用户在系统弹窗中确认。X11 会话直接抓键，不受影响。
 - **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限）；Windows 使用 PowerShell SendKeys；Linux 依赖 `wtype`/`xdotool`/`ydotool`。失败时保留系统剪贴板内容并发送系统通知。
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。

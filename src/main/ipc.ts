@@ -100,9 +100,7 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
 
   ipcMain.handle(IPC.updatePrefs, async (_event, patch: unknown) =>
     application.updatePrefs(
-      asRecord(patch, '偏好设置') as Partial<
-        Pick<AppPrefs, 'theme' | 'launchAtLogin' | 'autoCommit' | 'glassIntensity'>
-      >
+      asRecord(patch, '偏好设置') as Partial<Pick<AppPrefs, 'theme' | 'launchAtLogin' | 'autoCommit'>>
     )
   )
 

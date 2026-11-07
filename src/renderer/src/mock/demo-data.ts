@@ -1,4 +1,3 @@
-import { GLASS_INTENSITY_DEFAULT } from '@shared/glass'
 import type {
   AppEntry,
   BootstrapData,
@@ -478,7 +477,6 @@ export const mockBootstrap: BootstrapData = {
     launchAtLogin: false,
     language: 'zh-CN',
     autoCommit: true,
-    glassIntensity: GLASS_INTENSITY_DEFAULT,
     hotkeys: { launcher: 'Alt+Space', openClipboard: 'Control+Alt+C' },
     enabledPlugins: { clipboard: true, 'chrome-bookmarks': true }
   },

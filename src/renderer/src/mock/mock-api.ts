@@ -16,7 +16,6 @@ import type {
   UpdateState,
   WorkspaceSummary
 } from '@shared/types'
-import { normalizeGlassIntensity } from '@shared/glass'
 import {
   mockApps,
   mockBookmarks,
@@ -39,14 +38,9 @@ export function createMockApi(): FlashcastApi {
   const listeners = new Map<string, Set<(payload: unknown) => void>>()
 
   const initialTheme: 'light' | 'dark' = params.get('theme') === 'light' ? 'light' : 'dark'
-  const glassParam = params.get('glass')
   let prefs: AppPrefs = {
     ...mockBootstrap.prefs,
     theme: initialTheme,
-    glassIntensity:
-      glassParam === null
-        ? mockBootstrap.prefs.glassIntensity
-        : normalizeGlassIntensity(Number(glassParam)),
     hotkeys: { ...mockBootstrap.prefs.hotkeys }
   }
   let shortcuts = mockShortcuts.map((shortcut) => ({ ...shortcut }))

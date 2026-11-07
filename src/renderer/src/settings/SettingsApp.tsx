@@ -4,7 +4,6 @@ import type { BootstrapData } from '@shared/types'
 import { isUpdateActionable } from '@shared/update'
 import { api } from '../bridge'
 import { Toast, useToast } from '../components/ui'
-import { applyGlass } from '../glass'
 import { useUpdateState } from '../hooks/useUpdateState'
 import { AboutPage } from './AboutPage'
 import { GeneralPage } from './GeneralPage'
@@ -88,11 +87,6 @@ export function SettingsApp(): React.JSX.Element {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 })
   }, [page])
-
-  useEffect(() => {
-    if (!data) return
-    applyGlass(data.prefs.glassIntensity, theme)
-  }, [data, theme])
 
   // Opening "关于" is an explicit request for update information: check when the
   // cached state is missing or older than ten minutes, once per visit.
