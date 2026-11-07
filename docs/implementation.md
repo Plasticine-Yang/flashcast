@@ -25,6 +25,7 @@ src/main/
   git-service.ts           git 命令封装（rev-parse/status/commit/push/diff）
   paths.ts                 工作区布局、userData、资源与版本
   apps.ts                  Linux .desktop / macOS .app / Windows 快捷方式发现与启动
+  mac-alias.ts             Finder 替身（别名）文件的字节解析
   clipboard-service.ts     剪贴板历史轮询、媒体落盘、预览数据、激活/清理
   chrome-bookmarks.ts      Chrome Profile 探测、书签解析、在 Chrome 打开
   favicons.ts              favicon 拉取与磁盘缓存
@@ -51,7 +52,7 @@ src/shared/
 
 1. `app.requestSingleInstanceLock()` 保证只有一条常驻进程；第二次启动唤起已有实例。
 2. 启动器是**全屏透明、无边框、置顶、跳过任务栏**的窗口，面板本身固定 720×480，由 `.fc-panel-anchor` 居中并通过 `top: min(18vh, 160px)` 定位。窗口 bounds 使用当前鼠标所在显示器的 `workArea`，避免超出工作区。
-3. 显示时重新定位到鼠标所在屏，`show()` + `focus()`。
+3. 显示时重新定位到鼠标所在屏，`show()` + `focus()`。macOS 会在 `show()` 时把铺满工作区的窗口整体平移（实测 x 从 0 变成 218），面板是相对窗口视口居中的，因此 `show()` 之后必须再 `setBounds()` 一次，否则每次呼出都不居中。
 4. 窗口失焦 100ms 后请求关闭动画；关闭动画由渲染进程用 WAAPI 播放（180ms），完成后调用 `launcher:hide`，主进程 `hide()`。主进程还有 420ms 兜底定时器。
 5. 打开设置窗口时启动器失焦自动收起；设置窗口独立 920×640。
 
@@ -68,6 +69,8 @@ src/shared/
 - 结果统一返回 `{score, indices}`，渲染层用 `highlightSegments` 生成 `<mark class="fc-match">`。
 
 插件、应用、命令都在 renderer 内基于同一算法排序；书签和剪切板在各自页面内过滤。书签超过 60 行时切到固定行高虚拟列表。
+
+macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占位图）：先解析 bundle 的 `Contents/Resources/*.icns`，交给系统自带的 `sips` 转成 64px PNG，失败或全透明时再用 `nativeImage.createThumbnailFromPath` 兜底（图标只在 `Assets.car` 里的新版系统应用）。Finder 替身形式的 `.app` 先按别名文件里的 `file://` 路径找到真正的 bundle 再取图。结果按 bundle 修改时间缓存在 `userData/app-icons`，取不到图标时渲染层回退到首字母徽标。
 
 ### 3.3 插件进入 / 退出动画
 

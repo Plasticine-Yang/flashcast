@@ -187,10 +187,15 @@ export class WindowManager extends EventEmitter {
       this.closeTimer = null
     }
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-    window.setBounds(display.workArea)
+    const workArea = display.workArea
+    window.setBounds(workArea)
     this.showGuardUntil = Date.now() + 300
     window.setAlwaysOnTop(true, 'screen-saver')
     window.show()
+    // macOS 在 show() 时会把铺满工作区的窗口整体平移（实测 x 从 0 变成 218），
+    // 而面板是相对窗口视口居中的，窗口一歪面板就跟着歪。show 之后必须再对齐一次，
+    // 否则每次呼出都会偏移。
+    window.setBounds(workArea)
     window.focus()
     window.webContents.send(IPC.shown)
     if (pluginId) {

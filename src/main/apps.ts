@@ -1,12 +1,15 @@
-import { app, shell } from 'electron'
-import { spawn } from 'node:child_process'
+import { app, nativeImage, shell, type NativeImage } from 'electron'
+import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readdir, readFile, stat } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { basename, delimiter, extname, isAbsolute, join } from 'node:path'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { basename, delimiter, dirname, extname, isAbsolute, join } from 'node:path'
+import { promisify } from 'node:util'
 import type { AppEntry, PlatformId } from '@shared/types'
 import { log } from './logger'
+import { aliasTargetsFromBytes } from './mac-alias'
+import { userDataDir } from './paths'
 
 interface LaunchDescriptor {
   type: 'desktop' | 'bundle' | 'shortcut'
@@ -291,9 +294,199 @@ const MAC_APP_DIRS = [
   join(homedir(), 'Applications')
 ]
 
+/** 应用行里的图标按 32pt 展示，64px 足够覆盖 2x 屏。 */
+const MAC_ICON_MAX_PX = 64
+/** 转换逻辑或取图方式变化时改这里，旧的缓存文件自然失效。 */
+const MAC_ICON_CACHE_VERSION = 'v1'
+/** QuickLook 缩略图偶尔会卡住（实测 CLI 版会挂起），兜底路径必须设上限。 */
+const MAC_THUMBNAIL_TIMEOUT_MS = 4000
+
+/** sips 的临时输出文件名序号，同一次运行里自增避免撞名。 */
+let tempIconSeq = 0
+
+const execFileAsync = promisify(execFile)
+
+/** 以固定并发度执行异步任务，结果保持输入顺序。 */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  task: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let cursor = 0
+  const worker = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const index = cursor++
+      results[index] = await task(items[index])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), ms).unref()
+    })
+  ])
+}
+
+/**
+ * Finder 里“制作替身”得到的 .app 只是几百字节的别名文件，真正的 bundle 在别处。
+ * 启动不受影响（open 会自己解析替身），但取图标必须跟过去。
+ */
+async function resolveMacAppPath(appPath: string): Promise<string> {
+  try {
+    const info = await stat(appPath)
+    // bundle 本身是目录；别名是普通文件，读字节就能拿到目标路径。
+    if (!info.isFile() || info.size > 64 * 1024) return appPath
+    const targets = aliasTargetsFromBytes(await readFile(appPath))
+    return targets.find((target) => existsSync(target)) ?? appPath
+  } catch {
+    return appPath
+  }
+}
+
+/**
+ * Info.plist 里声明的 bundle 图标名。Info.plist 通常是 binary plist，
+ * 交给系统自带的 plutil 转成 XML 再取字段，比在 Node 里解析 binary 格式稳。
+ */
+async function macBundleInfo(appPath: string): Promise<{ iconName: string; bundleName: string }> {
+  try {
+    const { stdout } = await execFileAsync(
+      '/usr/bin/plutil',
+      ['-convert', 'xml1', '-o', '-', join(appPath, 'Contents/Info.plist')],
+      { timeout: 3000, maxBuffer: 8 * 1024 * 1024 }
+    )
+    const pick = (key: string): string => {
+      const match = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(stdout)
+      return match?.[1].trim() ?? ''
+    }
+    return { iconName: pick('CFBundleIconFile'), bundleName: pick('CFBundleName') }
+  } catch {
+    return { iconName: '', bundleName: '' }
+  }
+}
+
+/** .app 的图标是 Contents/Resources 下的 .icns 文件。 */
+async function macIconFile(appPath: string): Promise<string | null> {
+  const resources = join(appPath, 'Contents/Resources')
+  const { iconName, bundleName } = await macBundleInfo(appPath)
+  const declared = [iconName, bundleName, basename(appPath, '.app')]
+    .filter(Boolean)
+    .map((name) => join(resources, name.endsWith('.icns') ? name : `${name}.icns`))
+  const conventional = ['icon.icns', 'app.icns', 'AppIcon.icns'].map((name) => join(resources, name))
+  for (const candidate of [...declared, ...conventional]) {
+    if (existsSync(candidate)) return candidate
+  }
+  // 少数应用没在 Info.plist 里声明图标名，退化成 Resources 里的第一个 icns。
+  try {
+    const entries = await readdir(resources)
+    const found = entries.find((entry) => entry.toLowerCase().endsWith('.icns'))
+    return found ? join(resources, found) : null
+  } catch {
+    return null
+  }
+}
+
+/** 部分 icns（如 Books 的）解出来是全透明的，这种要当作没有图标。 */
+function hasVisiblePixels(image: NativeImage): boolean {
+  const bitmap = image.toBitmap()
+  for (let index = 3; index < bitmap.length; index += 4) {
+    if (bitmap[index] > 8) return true
+  }
+  return false
+}
+
+/** .icns 转 64px PNG。Electron 的 nativeImage 读不了 icns，交给系统自带的 sips。 */
+async function convertMacIcon(appPath: string): Promise<Buffer | null> {
+  const iconFile = await macIconFile(appPath)
+  if (!iconFile) return null
+  const temp = join(tmpdir(), `flashcast-icon-${process.pid}-${(tempIconSeq += 1)}.png`)
+  try {
+    await execFileAsync(
+      '/usr/bin/sips',
+      [
+        '-s',
+        'format',
+        'png',
+        '--resampleHeightWidthMax',
+        String(MAC_ICON_MAX_PX),
+        iconFile,
+        '--out',
+        temp
+      ],
+      { timeout: 5000 }
+    )
+    const buffer = await readFile(temp)
+    const image = nativeImage.createFromBuffer(buffer)
+    return !image.isEmpty() && hasVisiblePixels(image) ? buffer : null
+  } catch {
+    return null
+  } finally {
+    await rm(temp, { force: true })
+  }
+}
+
+/**
+ * QuickLook 缩略图兜底：新版系统应用（图标只在 Assets.car 里，如 Books）
+ * 和一些没有 icns 的 bundle 只能靠它。失败或超时都当作没有图标。
+ */
+async function thumbnailMacIcon(appPath: string): Promise<Buffer | null> {
+  try {
+    const image = await withTimeout(
+      nativeImage.createThumbnailFromPath(appPath, {
+        width: MAC_ICON_MAX_PX,
+        height: MAC_ICON_MAX_PX
+      }),
+      MAC_THUMBNAIL_TIMEOUT_MS
+    )
+    if (!image || image.isEmpty() || !hasVisiblePixels(image)) return null
+    return image.toPNG()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * macOS 的 app.getFileIcon 只会返回通用的空白应用图（实测 32x32 纯白占位），
+ * 所以这里自己取图：优先 bundle 自带的 icns，其次 QuickLook 缩略图。
+ * 结果按应用 + bundle 修改时间缓存在 userData 下，避免每次启动重复转换。
+ */
+async function macAppIcon(appPath: string): Promise<string | undefined> {
+  try {
+    const target = await resolveMacAppPath(appPath)
+    const info = await stat(target)
+    const key = createHash('sha1')
+      .update(`${MAC_ICON_CACHE_VERSION}:${target}:${info.mtimeMs}`)
+      .digest('hex')
+      .slice(0, 20)
+    const cacheFile = join(userDataDir(), 'app-icons', `${key}.png`)
+    try {
+      const cached = await readFile(cacheFile)
+      if (cached.length) return dataUrlFor(cached, '.png')
+    } catch {
+      // 首次运行还没有缓存，继续转换。
+    }
+    const buffer = (await convertMacIcon(target)) ?? (await thumbnailMacIcon(target))
+    if (!buffer) return undefined
+    await mkdir(dirname(cacheFile), { recursive: true })
+    const temp = `${cacheFile}.${process.pid}.tmp`
+    await writeFile(temp, buffer)
+    // 先写临时文件再改名：并发转换或中断都不会留下半个 PNG 被后续命中。
+    await rename(temp, cacheFile)
+    return dataUrlFor(buffer, '.png')
+  } catch (error) {
+    log.warn('mac app icon failed:', basename(appPath), (error as Error).message)
+    return undefined
+  }
+}
+
 async function listMacApps(): Promise<AppRecord[]> {
+  const paths: string[] = []
   const seen = new Set<string>()
-  const records: AppRecord[] = []
   for (const dir of MAC_APP_DIRS) {
     if (!existsSync(dir)) continue
     let entries
@@ -307,20 +500,23 @@ async function listMacApps(): Promise<AppRecord[]> {
       const path = join(dir, entry.name)
       if (seen.has(path)) continue
       seen.add(path)
-      const name = basename(entry.name, '.app')
-      const icon = await app.getFileIcon(path, { size: 'normal' }).catch(() => null)
-      records.push({
-        id: stableId(path),
-        name,
-        subtitle: '应用',
-        keywords: [],
-        icon: icon ? `data:image/png;base64,${icon.toPNG().toString('base64')}` : undefined,
-        iconKey: 'app',
-        launch: { type: 'bundle', path }
-      })
+      paths.push(path)
     }
   }
-  return records
+
+  // 每个图标都要拉起一次 sips，限制并发避免一次创建上百个进程。
+  const icons = await mapLimit(paths, 6, macAppIcon)
+  return paths.map((path, index): AppRecord => {
+    return {
+      id: stableId(path),
+      name: basename(path, '.app'),
+      subtitle: '应用',
+      keywords: [],
+      icon: icons[index],
+      iconKey: 'app',
+      launch: { type: 'bundle', path }
+    }
+  })
 }
 
 function startMenuDirs(): string[] {
