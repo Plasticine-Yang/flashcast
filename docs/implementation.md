@@ -28,6 +28,7 @@ src/main/
   paths.ts                 工作区布局、userData、资源与版本
   apps.ts                  Linux .desktop / macOS .app / Windows 快捷方式发现与启动
   mac-alias.ts             Finder 替身（别名）文件的字节解析
+  windows-shortcuts.ts     Windows 快捷方式（.lnk / .url）解析与图标来源
   clipboard-service.ts     剪贴板历史轮询、媒体落盘、预览数据、激活/清理
   chrome-bookmarks.ts      Chrome Profile 探测、书签解析、在 Chrome 打开
   favicons.ts              favicon 拉取与磁盘缓存
@@ -96,6 +97,8 @@ kualanqi → 夸 + 览器  kllq      → 夸克浏览器（首字母）
 插件、应用、命令都在 renderer 内基于同一算法排序；书签和剪切板在各自页面内过滤。书签超过 60 行时切到固定行高虚拟列表。
 
 macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占位图）：先解析 bundle 的 `Contents/Resources/*.icns`，交给系统自带的 `sips` 转成 64px PNG，失败或全透明时再用 `nativeImage.createThumbnailFromPath` 兜底（图标只在 `Assets.car` 里的新版系统应用）。Finder 替身形式的 `.app` 先按别名文件里的 `file://` 路径找到真正的 bundle 再取图。结果按 bundle 修改时间缓存在 `userData/app-icons`，取不到图标时渲染层回退到首字母徽标。
+
+Windows 的 `app.getFileIcon()` 对 `.lnk` 按扩展名取图，只会返回“带箭头的空白页”，应用网格里所有快捷方式图标一模一样。`windows-shortcuts.ts` 直接解析 Shell Link（MS-SHLLINK）与 `.url` 的 INI，取出 `TargetPath`、`IconLocation` 以及 EnvironmentVariableDataBlock 里的路径（展开 `%VAR%` 后），再优先从目标 exe 取 96px 缩略图，失败退到 `app.getFileIcon(target, 'large')`。`IconLocation` 指向 `.dll` 时要按资源序号定位，默认图标基本不对，所以排在目标 exe 之后；解析不到目标的 `.lnk` 返回空图标，由渲染层回退到统一的应用图标。结果按快捷方式与图标来源的修改时间缓存在 `userData/app-icons`。
 
 ### 3.3 插件进入 / 退出动画
 
@@ -220,7 +223,8 @@ SQLite 走 Electron 45 内置的 `node:sqlite`（只读打开）；被占用时�
 
 ## 6. 已验证范围
 
-- `pnpm typecheck` 通过；`pnpm test` 70 个用例通过（模糊匹配、快捷键、Chrome 书签扁平化与账户书签选择、`.desktop`/Exec 解析、更新版本比较/选包/校验、假网络栈驱动的检查→下载→校验状态机，以及配置读写与旧键清理）。
+- `pnpm typecheck` 通过；`pnpm test` 全部用例通过（模糊匹配、快捷键、Chrome 书签扁平化与账户书签选择、`.desktop`/Exec 解析、更新版本比较/选包/校验、假网络栈驱动的检查→下载→校验状态机，以及配置读写与旧键清理）。
+- Windows 快捷方式解析（`.lnk` 的 Unicode/ANSI 路径、LinkInfo、IconLocation、环境变量数据块与 `.url`）用 pylnk3 生成的真实结构样本固定；图标取图依赖 Windows shell，需在 Windows 机器上验证实际显示。
 - 用本机真实 Chrome（153，登录 Google 账户，Profile 内只有 `AccountBookmarks`）验证：能读出 18 条书签及其文件夹路径，`bookmarkSource` 为 `account`。
 - `pnpm build` 通过；`electron-builder --dir --linux` 生成可运行的 unpacked 应用，asar 与 `resources/build` 图标/封面资源路径验证通过。
 - 在 Ubuntu 26.04 / GNOME 50 Wayland 会话启动真实 Electron 应用：渲染正常、无崩溃。此前记录的“全局快捷键注册成功”只反映 `globalShortcut.register()` 的返回值；Wayland 下实际绑定由 portal 完成，需要应用身份能解析到已安装的 `.desktop` 文件（见 3.8）。

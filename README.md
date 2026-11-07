@@ -272,7 +272,7 @@ module.exports = {
 - **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限）；Windows 使用 PowerShell SendKeys；Linux 依赖 `wtype`/`xdotool`/`ydotool`。失败时保留系统剪贴板内容并发送系统通知。
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。
 - **视频封面**：若系统安装 `ffmpeg`，截取首帧作为封面；否则使用内置设计封面。视频不播放。
-- **应用发现**：Linux 读取 `.desktop`；macOS 扫描 `/Applications` 等；Windows 扫描开始菜单快捷方式。部分 UWP/特殊打包应用可能不出现。
+- **应用发现**：Linux 读取 `.desktop`；macOS 扫描 `/Applications` 等；Windows 扫描开始菜单快捷方式，并从快捷方式的 `TargetPath` / `IconLocation` 取应用图标（`.lnk` 本身只有通用图标）。部分 UWP/特殊打包应用可能不出现。
 - **自动更新**：只支持 GitHub Release 中列出的产物。macOS 用 zip 原地替换 `.app`（替换前备份、启动失败自动回滚），Windows 静默运行 NSIS 安装器，Linux AppImage 原地替换并重启；`.dmg` / `.deb` 因为需要系统安装器，下载后交给系统打开。产物只带 ad-hoc 签名、未做公证，首次启动仍需 Gatekeeper / SmartScreen 确认；开发构建不提供就地安装。
 - **菜单栏图标**：macOS 使用 18pt 模板图（`@2x` 36px），与系统状态栏图标等高；Linux/Windows 继续使用 64px 彩色托盘图。
 - **结果分组**：所有分组结果均可滚动访问，不做隐藏式分页，以保证键盘可达性。

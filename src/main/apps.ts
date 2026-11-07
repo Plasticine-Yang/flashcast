@@ -10,6 +10,7 @@ import type { AppEntry, PlatformId } from '@shared/types'
 import { log } from './logger'
 import { aliasTargetsFromBytes } from './mac-alias'
 import { userDataDir } from './paths'
+import { parseInternetShortcut, parseShellLink, shortcutIconCandidates } from './windows-shortcuts'
 
 interface LaunchDescriptor {
   type: 'desktop' | 'bundle' | 'shortcut'
@@ -544,32 +545,143 @@ async function walkShortcuts(dir: string, out: string[] = []): Promise<string[]>
   return out
 }
 
+/** 应用行里的图标按 32pt 展示：96px 覆盖 3x 屏，同时避免 100 个应用撑大 IPC 载荷。 */
+const WIN_ICON_MAX_PX = 96
+/** 解析/取图逻辑变化时改这里，旧的缓存文件自然失效。 */
+const WIN_ICON_CACHE_VERSION = 'v1'
+const WIN_ICON_TIMEOUT_MS = 4000
+
+function decodeShortcutText(raw: Buffer): string {
+  // 少数 .url 是 UTF-16LE（带 BOM），其余按 UTF-8/ANSI 读；ASCII 部分两种编码一致。
+  if (raw[0] === 0xff && raw[1] === 0xfe) return raw.subarray(2).toString('utf16le')
+  return raw.toString('utf8').replace(/^\uFEFF/, '')
+}
+
+/**
+ * 读快捷方式拿图标来源。`.lnk` 走 Shell Link 字节解析，`.url` 读 INI，
+ * 都不启动子进程，也不会触发系统对脚本/COM 的拦截。
+ */
+async function readWindowsShortcut(file: string) {
+  try {
+    const info = await stat(file)
+    if (!info.isFile() || info.size > 1024 * 1024) return null
+    const raw = await readFile(file)
+    return /\.url$/i.test(file) ? parseInternetShortcut(decodeShortcutText(raw)) : parseShellLink(raw)
+  } catch {
+    return null
+  }
+}
+
+/** 取 exe/dll/ico 里的图标：优先 96px 缩略图，失败再退到 shell 的 32px 图标。 */
+async function extractWindowsIcon(source: string): Promise<Buffer | null> {
+  if (/\.(png|jpe?g|webp)$/i.test(source)) {
+    try {
+      const image = nativeImage.createFromBuffer(await readFile(source))
+      if (!image.isEmpty() && hasVisiblePixels(image)) return image.toPNG()
+    } catch {
+      // 读不出图片时继续尝试 shell 图标。
+    }
+  }
+  try {
+    const thumbnail = await withTimeout(
+      nativeImage.createThumbnailFromPath(source, {
+        width: WIN_ICON_MAX_PX,
+        height: WIN_ICON_MAX_PX
+      }),
+      WIN_ICON_TIMEOUT_MS
+    )
+    if (thumbnail && !thumbnail.isEmpty() && hasVisiblePixels(thumbnail)) return thumbnail.toPNG()
+  } catch {
+    // 有些文件类型没有缩略图提供者，交给 getFileIcon。
+  }
+  try {
+    const icon = await app.getFileIcon(source, { size: 'large' })
+    if (!icon.isEmpty() && hasVisiblePixels(icon)) return icon.toPNG()
+  } catch {
+    // ignored
+  }
+  return null
+}
+
+/**
+ * Windows 开始菜单的 `.lnk` 本身没有应用图标，`app.getFileIcon(shortcut)` 只会返回
+ * “带箭头的空白页”。这里解析出快捷方式的目标 exe / IconLocation，从那里取图并按
+ * 快捷方式与图标来源的修改时间缓存，避免每次启动重复调用 shell。
+ */
+async function windowsAppIcon(shortcutPath: string): Promise<string | undefined> {
+  try {
+    const shortcutInfo = await stat(shortcutPath)
+    const shortcut = await readWindowsShortcut(shortcutPath)
+    let source: { path: string; mtimeMs: number } | undefined
+    for (const candidate of shortcut ? shortcutIconCandidates(shortcut) : []) {
+      try {
+        const info = await stat(candidate)
+        if (info.isFile()) {
+          source = { path: candidate, mtimeMs: info.mtimeMs }
+          break
+        }
+      } catch {
+        // 目标已卸载或移动，换下一个候选。
+      }
+    }
+
+    const key = createHash('sha1')
+      .update(
+        `${WIN_ICON_CACHE_VERSION}:${shortcutPath}:${shortcutInfo.mtimeMs}:${source?.path ?? ''}:${source?.mtimeMs ?? 0}:${shortcut?.iconIndex ?? 0}`
+      )
+      .digest('hex')
+      .slice(0, 20)
+    const cacheFile = join(userDataDir(), 'app-icons', `win-${key}.png`)
+    try {
+      const cached = await readFile(cacheFile)
+      if (cached.length) return dataUrlFor(cached, '.png')
+    } catch {
+      // 首次运行还没有缓存。
+    }
+
+    let buffer = source ? await extractWindowsIcon(source.path) : null
+    // 解析不到目标时，.url 还能用系统给的网址图标；.lnk 的空白页图标还不如
+    // 让渲染层回退到统一的应用图标。
+    if (!buffer && /\.url$/i.test(shortcutPath)) {
+      try {
+        const icon = await app.getFileIcon(shortcutPath, { size: 'normal' })
+        if (!icon.isEmpty() && hasVisiblePixels(icon)) buffer = icon.toPNG()
+      } catch {
+        // ignored
+      }
+    }
+    if (!buffer) return undefined
+
+    await mkdir(dirname(cacheFile), { recursive: true })
+    const temp = `${cacheFile}.${process.pid}.tmp`
+    await writeFile(temp, buffer)
+    await rename(temp, cacheFile)
+    return dataUrlFor(buffer, '.png')
+  } catch (error) {
+    log.warn('windows app icon failed:', basename(shortcutPath), (error as Error).message)
+    return undefined
+  }
+}
+
 async function listWindowsApps(): Promise<AppRecord[]> {
   const files = (
     await Promise.all(startMenuDirs().map((dir) => walkShortcuts(dir)))
   ).flat()
-  const records: AppRecord[] = []
-  for (const file of files) {
+  const visible = files.filter((file) => {
     const name = basename(file).replace(/\.(lnk|url)$/i, '')
-    if (!name || /uninstall|readme/i.test(name)) continue
-    let icon: string | undefined
-    try {
-      const native = await app.getFileIcon(file, { size: 'normal' })
-      icon = `data:image/png;base64,${native.toPNG().toString('base64')}`
-    } catch {
-      icon = undefined
-    }
-    records.push({
-      id: stableId(file),
-      name,
-      subtitle: '应用',
-      keywords: [],
-      icon,
-      iconKey: 'app',
-      launch: { type: 'shortcut', path: file }
-    })
-  }
-  return records
+    return Boolean(name) && !/uninstall|readme/i.test(name)
+  })
+  // 每个图标都要读快捷方式并可能调用 shell，限制并发避免拖慢首次发现。
+  const icons = await mapLimit(visible, 6, windowsAppIcon)
+  return visible.map((file, index): AppRecord => ({
+    id: stableId(file),
+    name: basename(file).replace(/\.(lnk|url)$/i, ''),
+    subtitle: '应用',
+    keywords: [],
+    icon: icons[index],
+    iconKey: 'app',
+    launch: { type: 'shortcut', path: file }
+  }))
 }
 
 /* ------------------------------- discovery ------------------------------- */
