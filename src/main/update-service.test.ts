@@ -79,7 +79,11 @@ const { UpdateService } = await import('./update-service')
 
 const ASSET_BYTES = Buffer.from('flashcast-update-payload')
 const ASSET_SHA = createHash('sha256').update(ASSET_BYTES).digest('hex')
-const ASSET_URL = 'https://example.test/Flashcast-0.3.0-arm64-mac.zip'
+// The updater selects a macOS asset for the host architecture. Keep this test
+// runnable on both Apple Silicon and the x64 GitHub Actions runner.
+const ASSET_NAME =
+  process.arch === 'arm64' ? 'Flashcast-0.3.0-arm64-mac.zip' : 'Flashcast-0.3.0-mac.zip'
+const ASSET_URL = `https://example.test/${ASSET_NAME}`
 const SUMS_URL = 'https://example.test/SHA256SUMS.txt'
 
 function releaseJson(version = '0.3.0'): Buffer {
@@ -92,7 +96,7 @@ function releaseJson(version = '0.3.0'): Buffer {
       published_at: '2026-11-01T18:08:47Z',
       assets: [
         {
-          name: `Flashcast-${version}-arm64-mac.zip`,
+          name: ASSET_NAME,
           size: ASSET_BYTES.length,
           browser_download_url: ASSET_URL
         },
@@ -128,7 +132,7 @@ describe('UpdateService', () => {
 
     expect(result.phase).toBe('available')
     expect(result.latestVersion).toBe('0.3.0')
-    expect(result.assetName).toBe('Flashcast-0.3.0-arm64-mac.zip')
+    expect(result.assetName).toBe(ASSET_NAME)
     expect(result.assetSize).toBe(ASSET_BYTES.length)
     expect(result.installKind).toBe('relaunch')
     expect(result.canInstall).toBe(true)
@@ -155,7 +159,7 @@ describe('UpdateService', () => {
     state.routes.set(ASSET_URL, { status: 200, body: ASSET_BYTES })
     state.routes.set(SUMS_URL, {
       status: 200,
-      body: Buffer.from(`${ASSET_SHA}  Flashcast-0.3.0-arm64-mac.zip\n`)
+      body: Buffer.from(`${ASSET_SHA}  ${ASSET_NAME}\n`)
     })
 
     const service = create()
@@ -177,7 +181,7 @@ describe('UpdateService', () => {
     state.routes.set(ASSET_URL, { status: 200, body: ASSET_BYTES })
     state.routes.set(SUMS_URL, {
       status: 200,
-      body: Buffer.from(`${'0'.repeat(64)}  Flashcast-0.3.0-arm64-mac.zip\n`)
+      body: Buffer.from(`${'0'.repeat(64)}  ${ASSET_NAME}\n`)
     })
 
     const service = create()
