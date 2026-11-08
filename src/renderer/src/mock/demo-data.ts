@@ -497,7 +497,7 @@ export const mockChromeSettings: GenericPluginSettingsPage = {
 export const mockBootstrap: BootstrapData = {
   role: 'launcher',
   platform: 'linux',
-  version: '0.1.0',
+  version: __FLASHCAST_VERSION__,
   prefs: {
     theme: 'dark',
     themeId: 'blue-glass',

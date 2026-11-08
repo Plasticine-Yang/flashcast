@@ -20,7 +20,7 @@ import type { ConfigStore } from './config-store'
 import { BUILTIN_MANIFESTS } from './builtins/manifests'
 import { log } from './logger'
 import { sanitizeSource } from './source'
-import type { WorkspaceLayout } from './paths'
+import { appVersion, type WorkspaceLayout } from './paths'
 
 const execFileAsync = promisify(execFile)
 const nativeImport = new Function('specifier', 'return import(specifier)') as (
@@ -272,7 +272,7 @@ export class ExternalPluginManager {
       id: manifest.id,
       env: {
         platform: process.platform,
-        version: process.env.npm_package_version ?? '0.1.0',
+        version: appVersion(),
         workspace: layout.root
       },
       config: {

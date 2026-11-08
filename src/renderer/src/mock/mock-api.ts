@@ -128,10 +128,16 @@ export function createMockApi(): FlashcastApi {
   /* ------------------------------- updates ------------------------------- */
 
   const updateScenario = params.get('update') ?? ''
+  const nextMockVersion = (() => {
+    const [major = 0, minor = 0, patch = 0] = __FLASHCAST_VERSION__.split('.').map(
+      (part) => Number.parseInt(part, 10) || 0
+    )
+    return `${major}.${minor}.${patch + 1}`
+  })()
   const RELEASE_NOTES = [
-    '- 顶栏新增设置入口，⌘, / Ctrl+, 可直接打开设置',
-    '- 检查更新：发现新版本后可一键下载并重启安装',
-    '- 修复 macOS 菜单栏图标比系统图标偏大的问题'
+    '- 新增工作区主题包与外观设置（六套内置主题、深浅模式）',
+    '- VSCode-like Workspace 支持按编辑器维护触发词与清理历史',
+    '- 改进启动器列表动画与减少动效适配'
   ].join('\n')
 
   const updateBase = (): UpdateState => ({
@@ -158,23 +164,23 @@ export function createMockApi(): FlashcastApi {
   const availableState = (): UpdateState => ({
     ...updateBase(),
     phase: 'available',
-    latestVersion: '0.3.0',
-    releaseName: 'Flashcast 0.3.0',
+    latestVersion: nextMockVersion,
+    releaseName: `Flashcast ${nextMockVersion}`,
     releaseNotes: RELEASE_NOTES,
-    releaseUrl: 'https://github.com/Plasticine-Yang/flashcast/releases/tag/v0.3.0',
+    releaseUrl: `https://github.com/Plasticine-Yang/flashcast/releases/tag/v${nextMockVersion}`,
     publishedAt: Date.now() - 1000 * 60 * 60 * 26,
     assetName:
       platform === 'win32'
-        ? 'Flashcast.Setup.0.3.0.exe'
+        ? `Flashcast.Setup.${nextMockVersion}.exe`
         : platform === 'linux'
-          ? 'Flashcast-0.3.0.AppImage'
-          : 'Flashcast-0.3.0-arm64-mac.zip',
+          ? `Flashcast-${nextMockVersion}.AppImage`
+          : `Flashcast-${nextMockVersion}-arm64-mac.zip`,
     assetSize: 128_729_462,
     totalBytes: 128_729_462,
     installKind: 'relaunch',
     canInstall: true,
     checkedAt: Date.now() - 1000 * 120,
-    message: '发现新版本 v0.3.0'
+    message: `发现新版本 v${nextMockVersion}`
   })
 
   const latestState = (): UpdateState => ({
@@ -204,7 +210,7 @@ export function createMockApi(): FlashcastApi {
         phase: 'ready',
         downloadedBytes: 128_729_462,
         progress: 1,
-        downloadPath: '/Users/you/Library/Application Support/Flashcast/updates/Flashcast-0.3.0-arm64-mac.zip',
+        downloadPath: `/Users/you/Library/Application Support/Flashcast/updates/Flashcast-${nextMockVersion}-arm64-mac.zip`,
         message: '更新已就绪，重启后完成安装'
       }
     }
@@ -261,7 +267,7 @@ export function createMockApi(): FlashcastApi {
         totalBytes: total,
         progress: downloaded / total,
         downloadPath: done
-          ? '/Users/you/Library/Application Support/Flashcast/updates/Flashcast-0.3.0-arm64-mac.zip'
+          ? `/Users/you/Library/Application Support/Flashcast/updates/Flashcast-${nextMockVersion}-arm64-mac.zip`
           : null,
         installKind: 'relaunch',
         canInstall: true,

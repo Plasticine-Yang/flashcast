@@ -1226,7 +1226,7 @@ export function Launcher(): React.JSX.Element {
         return [
           { keys: ['↵'], label: '打开' },
           { keys: [platform === 'darwin' ? '⌥' : 'Alt', '↵'], label: '新窗口' },
-          { keys: [primaryActionModifier(platform), '↵'], label: '显示位置' },
+          { keys: [platform === 'darwin' ? '⌘' : 'Ctrl', '↵'], label: '显示位置' },
           { keys: ['esc'], label: activeScope ? '退出' : '返回编辑器' }
         ]
       }
