@@ -18,11 +18,14 @@
 .fc-panel-anchor {
   --fc-panel-height: min(480px, calc(100vh - 48px));
   position: absolute;
-  top: min(18vh, 160px);
+  /* The anchor is the full-size panel box (720×480); centering it centers the
+     open panel on the active display. The shell keeps growing from the anchor's
+     top edge, so the search bar does not move during the entrance animation. */
+  top: 50%;
   left: 50%;
   width: min(720px, calc(100vw - 40px));
   height: var(--fc-panel-height);
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
 }
 
 .fc-panel {
