@@ -239,8 +239,9 @@ SQLite 走 Electron 45 内置的 `node:sqlite`（只读打开）；被占用时�
 
 ### 3.9 发布流水线
 
-- 发布以 tag 为唯一事实来源：`scripts/release.mjs`（`pnpm release:minor` / `release:patch` / `release:major`，或直接传 `x.y.z`）升 `package.json` 版本、提交「chore(release): 发布 vX.Y.Z」、打附注 tag 并推送。
-- `.github/workflows/release.yml` 在 `v*` tag 上运行：先校验 tag 与 `package.json` 版本一致，再并行构建 Linux（AppImage/deb）、macOS（dmg/zip，x64 + arm64）、Windows（nsis）。各 job 先把产物上传为 workflow artifact，由独立的 `publish` job 汇总、生成 `SHA256SUMS.txt` 后用 `gh release create` 创建 Release（已存在时 `--clobber` 覆盖资产），避免多 job 并发写同一个 Release。
+- 发布以 tag 为唯一事实来源：`scripts/release.mjs`（`pnpm release:minor` / `release:patch` / `release:major`，或直接传 `x.y.z`）升 `package.json` 版本、提交「chore(release): 发布 vX.Y.Z」、打附注 tag 并推送。加 `-- --watch` 时脚本会轮询到 `headBranch` 为该 tag 的 run，用 `gh run watch --exit-status` 等到结束：成功打印 Release 地址，失败打印 `gh run view --log-failed` / `gh run rerun --failed` 两条命令。失败处置与已知坑见 `docs/release.md`。
+- `.github/workflows/release.yml` 在 `v*` tag 上运行：先校验 tag 与 `package.json` 版本一致，再并行构建 Linux（AppImage/deb）、macOS（dmg/zip，x64 + arm64）、Windows（nsis）。各 job 先把产物上传为 workflow artifact，由独立的 `publish` job 汇总、生成 `SHA256SUMS.txt` 后用 `gh release create` 创建 Release（已存在时 `--clobber` 覆盖资产），避免多 job 并发写同一个 Release。构建 job 对「安装依赖」和「打包」各做 3 次、每次 60s 的退避重试：GitHub 的 release 资产 CDN 会偶发局部 504（v0.4.4 发布时 `electron-v45.2.1-linux-x64.zip` 连续三次 504，第四次恢复），瞬时故障应该由流水线自愈而不是人工重跑。
+- CI 里 `pnpm install` 不下载 Electron 运行时：`postinstall` 走 `scripts/postinstall.mjs`，`CI=true` 时直接跳过。打包只需要 electron-builder（它自己下载对应平台的 Electron），本地 `pnpm dev` / `pnpm start` 才需要 `node_modules/electron/dist`。这去掉了每个 job 一次多余的 ~120MB 下载，也少一个 504 失败点。
 - 产物没有正式签名（仓库没有证书）：macOS 通过 `CSC_IDENTITY_AUTO_DISCOVERY=false` 跳过签名发现，再由 `scripts/after-pack.mjs`（`electron-builder.yml#afterPack`）补 ad-hoc 签名 —— Electron 预构建二进制只有 linker 签名、bundle 缺 `_CodeSignature`，arm64 上会被 amfid 拒绝加载 Framework、启动即退出；ad-hoc 签名不公证，首次打开仍需右键，Windows 会触发 SmartScreen。
 - `.github/workflows/ci.yml` 在 PR 与 `main` 推送时执行 `typecheck`、`test`、`build`。
 

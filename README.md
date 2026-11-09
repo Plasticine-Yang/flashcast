@@ -140,9 +140,10 @@ pnpm release:minor   # 0.1.0 → 0.2.0：升版本、提交、打 tag 并推送
 pnpm release:patch   # 0.1.0 → 0.1.1
 pnpm release:major   # 0.1.0 → 1.0.0
 node scripts/release.mjs 1.4.0   # 指定版本
+pnpm release:patch -- --watch    # 推完 tag 跟踪 Actions，成功打印 Release 地址
 ```
 
-脚本要求工作区干净且位于 `main` 分支。tag 必须与 `package.json` 版本一致，否则 release 流水线在第一步就会失败。仓库没有 Apple / Windows 开发者证书：macOS 产物由 `scripts/after-pack.mjs` 补 ad-hoc 签名（缺签名时 arm64 上无法启动），但不做公证，首次打开仍需右键「打开」；Windows SmartScreen 会提示「仍要运行」。PR / 合入 `main` 会触发 `.github/workflows/ci.yml` 跑类型检查、测试与构建。
+脚本要求工作区干净且位于 `main` 分支。tag 必须与 `package.json` 版本一致，否则 release 流水线在第一步就会失败。构建 job 对依赖安装与打包各带 3 次 60s 退避重试（GitHub 资产 CDN 偶发 504）；失败排查与重跑方式见 [docs/release.md](docs/release.md)。仓库没有 Apple / Windows 开发者证书：macOS 产物由 `scripts/after-pack.mjs` 补 ad-hoc 签名（缺签名时 arm64 上无法启动），但不做公证，首次打开仍需右键「打开」；Windows SmartScreen 会提示「仍要运行」。PR / 合入 `main` 会触发 `.github/workflows/ci.yml` 跑类型检查、测试与构建。
 
 ## 快捷键
 

@@ -10,16 +10,25 @@
  *   pnpm release:patch      # 0.1.0 → 0.1.1
  *   pnpm release:major      # 0.1.0 → 1.0.0
  *   node scripts/release.mjs 1.4.0   # 指定版本
+ *
+ * `--watch` 会在推送后跟踪对应的 Actions run，成功时打印 Release 地址，
+ * 失败时打印排查命令（需要已登录的 gh CLI）：
+ *   pnpm release:patch -- --watch
+ *
+ * 失败处置见 docs/release.md。
  */
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const packagePath = join(root, 'package.json')
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/
-const kind = (process.argv[2] ?? 'minor').trim()
+const cliArgs = process.argv.slice(2)
+const watch = cliArgs.includes('--watch')
+const kind = (cliArgs.find((arg) => arg !== '--watch') ?? 'minor').trim()
 
 function run(command, args, { quiet = false } = {}) {
   return execFileSync(command, args, {
@@ -27,6 +36,14 @@ function run(command, args, { quiet = false } = {}) {
     encoding: 'utf8',
     stdio: ['ignore', quiet ? 'pipe' : 'pipe', 'inherit']
   }).trim()
+}
+
+function runLive(command, args) {
+  execFileSync(command, args, { cwd: root, stdio: 'inherit' })
+}
+
+function ghJson(args) {
+  return JSON.parse(run('gh', args, { quiet: true }))
 }
 
 function fail(message) {
@@ -75,4 +92,74 @@ run('git', ['push', 'origin', 'main'])
 run('git', ['push', 'origin', tag])
 
 console.log(`\n已推送 ${tag}（${current} → ${next}）。`)
-console.log('GitHub Actions 正在构建三端产物并创建 Release，进度见仓库 Actions 页面。')
+
+if (!watch) {
+  console.log('GitHub Actions 正在构建三端产物并创建 Release，进度见仓库 Actions 页面。')
+  console.log('想在这里等到结果：pnpm release:patch -- --watch')
+  process.exit(0)
+}
+
+/** tag 推送后 run 会晚几秒出现，轮询到匹配 headBranch 的那条。 */
+async function findRun() {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      const runs = ghJson([
+        'run',
+        'list',
+        '--workflow',
+        'release.yml',
+        '--limit',
+        '20',
+        '--json',
+        'databaseId,headBranch'
+      ])
+      const found = runs.find((entry) => entry.headBranch === tag)
+      if (found) return found.databaseId
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        console.error('release: 未找到 gh CLI，--watch 需要先安装并登录 gh。')
+        process.exit(1)
+      }
+      // gh 未登录或接口抖动：继续等，超时后由调用方给出提示。
+    }
+    await sleep(2000)
+  }
+  return null
+}
+
+const runId = await findRun()
+if (!runId) {
+  console.error('release: 未找到对应的 Actions run。确认 gh 已登录后，到 Actions 页面手动查看。')
+  process.exit(1)
+}
+
+console.log(`\n跟踪 Release run ${runId}（Ctrl-C 只停止跟踪，不会中断流水线）…`)
+let watched = false
+try {
+  runLive('gh', ['run', 'watch', String(runId), '--exit-status', '--interval', '20'])
+  watched = true
+} catch {
+  watched = false
+}
+
+let conclusion = ''
+let runUrl = ''
+try {
+  const view = ghJson(['run', 'view', String(runId), '--json', 'conclusion,url'])
+  conclusion = String(view.conclusion ?? '')
+  runUrl = String(view.url ?? '')
+} catch {
+  // 拿不到详情时只保留下面的通用提示。
+}
+
+if (watched && conclusion === 'success') {
+  const url = run('gh', ['release', 'view', tag, '--json', 'url', '--jq', '.url'], { quiet: true })
+  console.log(`\nRelease 已发布：${url}`)
+  process.exit(0)
+}
+
+console.error(`\nrelease: 流水线未通过${conclusion ? `（${conclusion}）` : ''}${runUrl ? `：${runUrl}` : ''}`)
+console.error(`  查看失败日志：gh run view ${runId} --log-failed`)
+console.error(`  修复后重试：  gh run rerun ${runId} --failed`)
+console.error('  已知瞬时故障（GitHub 资产 CDN 504）等几分钟直接重跑即可；详见 docs/release.md')
+process.exit(1)

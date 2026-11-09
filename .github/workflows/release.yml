@@ -36,6 +36,8 @@ jobs:
     name: 打包 ${{ matrix.name }}
     needs: verify
     runs-on: ${{ matrix.os }}
+    # 打包 + 最多两轮 60s 退避重试，正常路径在 5 分钟内完成。
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -56,14 +58,39 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - name: 安装依赖
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GitHub 的 release 资产 CDN 偶发 504（v0.4.4 发布时 Linux job 连续命中）：
+          # 依赖安装与打包都按 60s 退避重试两次，让瞬时故障在一条流水线内自愈。
+          for attempt in 1 2 3; do
+            if pnpm install --frozen-lockfile; then
+              exit 0
+            fi
+            echo "::warning title=依赖安装失败::第 ${attempt}/3 次失败，60 秒后重试"
+            sleep 60
+          done
+          echo "::error title=依赖安装失败::连续 3 次失败"
+          exit 1
       - run: pnpm build
       - name: 打包（不直接发布）
-        run: pnpm exec electron-builder ${{ matrix.args }} --publish never
+        shell: bash
         env:
           # 仓库没有 macOS / Windows 开发者证书，显式跳过签名发现，避免打包失败。
           # macOS 产物随后由 afterPack 钩子补 ad-hoc 签名（否则 arm64 上启动即退出）。
           CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if pnpm exec electron-builder ${{ matrix.args }} --publish never; then
+              exit 0
+            fi
+            echo "::warning title=打包失败::第 ${attempt}/3 次失败，60 秒后重试"
+            sleep 60
+          done
+          echo "::error title=打包失败::连续 3 次失败"
+          exit 1
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}

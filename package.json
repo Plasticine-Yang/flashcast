@@ -10,7 +10,7 @@
   "devDesktopName": "com.flashcast.app.dev.desktop",
   "packageManager": "pnpm@12.5.1",
   "scripts": {
-    "postinstall": "install-electron",
+    "postinstall": "node scripts/postinstall.mjs",
     "dev": "node scripts/ensure-dev-desktop-entry.mjs && electron-vite dev --noSandbox",
     "start": "electron-vite preview",
     "build": "electron-vite build",
