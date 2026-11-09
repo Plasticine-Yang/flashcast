@@ -193,6 +193,57 @@ describe('UpdateService', () => {
     expect(result.downloadPath).toBeNull()
   })
 
+  it('falls back to the release pages when the API is rate limited', async () => {
+    state.routes.set('https://api.github.com/repos/Plasticine-Yang/flashcast/releases/latest', {
+      status: 403,
+      body: Buffer.from('{"message":"API rate limit exceeded"}')
+    })
+    state.routes.set('https://github.com/Plasticine-Yang/flashcast/releases.atom', {
+      status: 200,
+      body: Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:github.com,2008:Repository/123456/v0.3.0</id>
+    <updated>2026-11-01T18:08:47Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/Plasticine-Yang/flashcast/releases/tag/v0.3.0"/>
+    <title>Flashcast 0.3.0</title>
+    <content type="html">&lt;p&gt;顶栏新增设置入口&lt;/p&gt;</content>
+  </entry>
+</feed>`)
+    })
+    state.routes.set(
+      'https://github.com/Plasticine-Yang/flashcast/releases/expanded_assets/v0.3.0',
+      {
+        status: 200,
+        body: Buffer.from(
+          [
+            `<a href="/Plasticine-Yang/flashcast/releases/download/v0.3.0/${ASSET_NAME}" rel="nofollow">`,
+            `  <span class="text-bold">${ASSET_NAME}</span>`,
+            '</a>',
+            '<a href="/Plasticine-Yang/flashcast/releases/download/v0.3.0/Flashcast.Setup.0.3.0.exe" rel="nofollow">',
+            '  <span class="text-bold">Flashcast.Setup.0.3.0.exe</span>',
+            '</a>',
+            '<a href="/Plasticine-Yang/flashcast/releases/download/v0.3.0/SHA256SUMS.txt" rel="nofollow">',
+            '  <span class="text-bold">SHA256SUMS.txt</span>',
+            '</a>'
+          ].join('\n')
+        )
+      }
+    )
+
+    const service = create()
+    const result = await service.check({ force: true })
+
+    expect(result.phase).toBe('available')
+    expect(result.latestVersion).toBe('0.3.0')
+    expect(result.assetName).toBe(ASSET_NAME)
+    expect(result.assetSize).toBe(0)
+    expect(result.releaseNotes).toContain('顶栏新增设置入口')
+    expect(result.releaseUrl).toBe(
+      'https://github.com/Plasticine-Yang/flashcast/releases/tag/v0.3.0'
+    )
+  })
+
   it('surfaces feed failures instead of throwing', async () => {
     state.routes.set('https://api.github.com/repos/Plasticine-Yang/flashcast/releases/latest', {
       status: 500,

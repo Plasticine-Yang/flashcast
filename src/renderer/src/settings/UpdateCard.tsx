@@ -126,9 +126,12 @@ export function UpdateCard({
       return `当前 v${update.currentVersion}${published}`
     }
     if (update.phase === 'downloading') {
-      return `当前 v${update.currentVersion} · 更新包 ${formatBytes(
-        update.totalBytes || update.assetSize || 0
-      )}`
+      // The web fallback cannot know the asset size up front, so the total may
+      // still be 0 until the first Content-Length arrives.
+      const size = update.totalBytes || update.assetSize || 0
+      return size > 0
+        ? `当前 v${update.currentVersion} · 更新包 ${formatBytes(size)}`
+        : `当前 v${update.currentVersion}`
     }
     if (update.phase === 'ready' && update.downloadPath) {
       return update.installKind === 'manual'
@@ -224,9 +227,11 @@ export function UpdateCard({
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={percent}
-            aria-valuetext={`${percent}%，${formatBytes(update.downloadedBytes)} / ${formatBytes(
-              update.totalBytes || update.assetSize || 0
-            )}`}
+            aria-valuetext={`${percent}%，${formatBytes(update.downloadedBytes)}${
+              update.totalBytes || update.assetSize
+                ? ` / ${formatBytes(update.totalBytes || update.assetSize || 0)}`
+                : ''
+            }`}
             aria-label="更新下载进度"
           >
             <span
@@ -237,8 +242,10 @@ export function UpdateCard({
           <div className="settings-update-progress-meta">
             <span>{percent}%</span>
             <span>
-              {formatBytes(update.downloadedBytes)} /{' '}
-              {formatBytes(update.totalBytes || update.assetSize || 0)}
+              {formatBytes(update.downloadedBytes)}
+              {update.totalBytes || update.assetSize
+                ? ` / ${formatBytes(update.totalBytes || update.assetSize || 0)}`
+                : ''}
             </span>
           </div>
         </div>

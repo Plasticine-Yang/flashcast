@@ -348,7 +348,7 @@ Dracula 与 Tokyo Night 只提供深色变体：选中后生效模式锁定为�
 - `VSCode-like Workspace` 读取本地编辑器数据目录，不联网；启动的是检测到的编辑器可执行文件，参数以数组传递，不经过 shell。清理历史时只在编辑器关闭状态下改写其 `state.vscdb` / `storage.json`，并把对应的 `workspaceStorage` 目录移入工作区的 `state/editor-backups`。
 - Chrome 书签插件的 favicon 会向 `https://www.google.com/s2/favicons` 请求，结果缓存在 `state/favicons`；离线或企业网络阻断时自动使用本地 `globe` 图标。
 - 从 Git 地址安装或更新插件/主题时会访问你输入的 Git 地址；本地目录安装不联网。
-- 检查更新会访问 `https://api.github.com/repos/Plasticine-Yang/flashcast/releases/latest`（可用 `FLASHCAST_UPDATE_FEED` 或 `FLASHCAST_UPDATE_REPO` 覆盖），下载安装包走该 Release 的资产地址；除此之外应用自身不访问其他网络。
+- 检查更新会访问 `https://api.github.com/repos/Plasticine-Yang/flashcast/releases/latest`（可用 `FLASHCAST_UPDATE_FEED` 或 `FLASHCAST_UPDATE_REPO` 覆盖）。GitHub 的 REST API 对未认证调用按 IP 限流（每小时 60 次），共用出口 IP 时很容易被耗尽并返回 403；此时会回退到 `https://github.com/Plasticine-Yang/flashcast/releases.atom` 与 `releases/expanded_assets/<tag>` 读取版本和安装包列表，下载安装包仍走该 Release 的资产地址；除此之外应用自身不访问其他网络。
 
 ## 平台说明与已知限制
 

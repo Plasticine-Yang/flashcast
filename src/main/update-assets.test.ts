@@ -5,7 +5,10 @@ import {
   isNewerVersion,
   normalizeArtifactName,
   normalizeReleaseNotes,
+  htmlToPlainText,
   parseChecksums,
+  parseLatestReleaseEntry,
+  parseReleaseAssets,
   parseVersion,
   pickUpdateAsset,
   type ReleaseAsset
@@ -134,5 +137,70 @@ describe('release notes', () => {
     expect(normalizeReleaseNotes('   ')).toBeNull()
     expect(normalizeReleaseNotes(null)).toBeNull()
     expect(normalizeReleaseNotes('x'.repeat(50), 10)).toBe(`${'x'.repeat(10)}…`)
+  })
+})
+
+/** Trimmed copy of https://github.com/<repo>/releases.atom (newest entry only). */
+const ATOM = `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xml:lang="en-US">
+  <id>tag:github.com,2008:/Plasticine-Yang/flashcast/releases</id>
+  <entry>
+    <id>tag:github.com,2008:Repository/123456/v0.4.1</id>
+    <updated>2026-11-09T06:29:27Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/Plasticine-Yang/flashcast/releases/tag/v0.4.1"/>
+    <title>Flashcast 0.4.1</title>
+    <content type="html">&lt;p&gt;修复 &amp;quot;Option+Enter&amp;quot; 粘贴&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;交还焦点&lt;/li&gt;
+&lt;/ul&gt;</content>
+  </entry>
+</feed>`
+
+describe('atom release feed', () => {
+  it('reads the newest release without using the rate-limited API', () => {
+    const entry = parseLatestReleaseEntry(ATOM)
+    expect(entry?.tag).toBe('v0.4.1')
+    expect(entry?.title).toBe('Flashcast 0.4.1')
+    expect(entry?.publishedAt).toBe(Date.parse('2026-11-09T06:29:27Z'))
+    expect(entry?.notes).toContain('修复 "Option+Enter" 粘贴')
+    expect(entry?.notes).toContain('交还焦点')
+    expect(entry?.notes).not.toContain('<p>')
+  })
+
+  it('returns null for an empty or unrelated feed', () => {
+    expect(parseLatestReleaseEntry('<feed></feed>')).toBeNull()
+    expect(parseLatestReleaseEntry('not xml')).toBeNull()
+  })
+
+  it('flattens note HTML into readable text', () => {
+    expect(htmlToPlainText('&lt;p&gt;a&amp;b&lt;/p&gt;&lt;p&gt;c&lt;/p&gt;')).toBe('a&b\nc')
+    expect(htmlToPlainText('<p>plain</p><p>x</p>')).toBe('plain\nx')
+  })
+})
+
+describe('release asset page', () => {
+  const HTML = `
+    <a href="/o/r/releases/download/v0.4.1/Flashcast-0.4.1-arm64.dmg" rel="nofollow">
+      <span class="text-bold">Flashcast-0.4.1-arm64.dmg</span>
+    </a>
+    <a href="/o/r/releases/download/v0.4.1/Flashcast.Setup.0.4.1.exe" rel="nofollow">
+      <span class="text-bold">Flashcast.Setup.0.4.1.exe</span>
+    </a>
+    <a href="/other/repo/releases/download/v0.4.1/ignored.zip" rel="nofollow"></a>
+    <a href="/o/r/releases/download/v0.4.1/Flashcast.Setup.0.4.1.exe" rel="nofollow"></a>
+  `
+
+  it('keeps the canonical asset names from the asset list page', () => {
+    const assets = parseReleaseAssets(HTML, 'o/r', 'v0.4.1')
+    expect(assets.map((asset) => asset.name)).toEqual([
+      'Flashcast-0.4.1-arm64.dmg',
+      'Flashcast.Setup.0.4.1.exe'
+    ])
+    expect(assets[1].url).toBe('https://github.com/o/r/releases/download/v0.4.1/Flashcast.Setup.0.4.1.exe')
+    expect(pickUpdateAsset(assets, 'win32', 'x64')?.name).toBe('Flashcast.Setup.0.4.1.exe')
+  })
+
+  it('returns nothing for an unrelated page', () => {
+    expect(parseReleaseAssets('<html></html>', 'o/r', 'v0.4.1')).toEqual([])
   })
 })

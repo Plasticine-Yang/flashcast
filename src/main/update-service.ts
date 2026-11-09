@@ -13,6 +13,8 @@ import {
   installKindFor,
   isNewerVersion,
   normalizeReleaseNotes,
+  parseLatestReleaseEntry,
+  parseReleaseAssets,
   parseVersion,
   pickUpdateAsset,
   type ReleaseAsset
@@ -25,6 +27,7 @@ const START_DELAY_MS = 6000
 const PROGRESS_THROTTLE_MS = 120
 const MAX_JSON_BYTES = 4 * 1024 * 1024
 const MAX_CHECKSUMS_BYTES = 256 * 1024
+const MAX_FEED_BYTES = 512 * 1024
 
 interface ReleaseInfo {
   version: string
@@ -162,9 +165,7 @@ export class UpdateService {
 
   private async runCheck(silent: boolean): Promise<UpdateState> {
     try {
-      const payload = await this.fetchJson(releaseFeed())
-      const release = this.parseRelease(payload)
-      if (!release) throw new Error('更新源返回了无法识别的数据')
+      const release = await this.fetchRelease()
       this.release = release
 
       if (!isNewerVersion(release.version, this.state.currentVersion)) {
@@ -570,6 +571,57 @@ export class UpdateService {
     }
   }
 
+  /**
+   * Reads the newest release, falling back to the public release pages when
+   * the API is unavailable. The REST API allows 60 anonymous requests per hour
+   * *per IP*, so a shared office egress IP answers 403 (rate limited) long
+   * before anyone checks for updates; the Atom feed and release downloads have
+   * no such quota.
+   */
+  private async fetchRelease(): Promise<ReleaseInfo> {
+    try {
+      const payload = await this.fetchJson(releaseFeed())
+      const release = this.parseRelease(payload)
+      if (!release) throw new Error('更新源返回了无法识别的数据')
+      return release
+    } catch (error) {
+      // A custom feed is the caller's business; do not silently hit GitHub.
+      if (process.env.FLASHCAST_UPDATE_FEED?.trim()) throw error
+      const fallback = await this.releaseFromWeb().catch(() => null)
+      if (!fallback) throw error
+      log.info('更新检查回退到 Releases 页面：', describeError(error))
+      return fallback
+    }
+  }
+
+  /** Release metadata assembled from the Atom feed and the asset list page. */
+  private async releaseFromWeb(): Promise<ReleaseInfo> {
+    const slug = repoSlug()
+    const feed = await this.fetchText(`https://github.com/${slug}/releases.atom`, MAX_FEED_BYTES)
+    const entry = parseLatestReleaseEntry(feed)
+    if (!entry) throw new Error('无法从 Releases 页面读取最新版本')
+    const version = entry.tag.replace(/^v/i, '')
+    if (!parseVersion(version)) throw new Error('无法从 Releases 页面读取最新版本')
+
+    const expanded = await this.fetchText(
+      `https://github.com/${slug}/releases/expanded_assets/${entry.tag}`,
+      MAX_FEED_BYTES
+    )
+    const available = parseReleaseAssets(expanded, slug, entry.tag)
+    if (available.length === 0) throw new Error('无法从 Releases 页面读取安装包列表')
+
+    return {
+      version,
+      name: entry.title || `v${version}`,
+      notes: entry.notes,
+      url: `https://github.com/${slug}/releases/tag/${entry.tag}`,
+      publishedAt: entry.publishedAt,
+      // Sizes are unknown here; download progress uses Content-Length instead.
+      asset: pickUpdateAsset(available, this.platform, process.arch),
+      checksums: available.find((asset) => /^sha256sums\.txt$/i.test(asset.name)) ?? null
+    }
+  }
+
   private fetchJson(url: string): Promise<unknown> {
     return this.fetchText(url, MAX_JSON_BYTES).then((text) => JSON.parse(text) as unknown)
   }
@@ -612,7 +664,13 @@ export class UpdateService {
           if (status < 200 || status >= 300) {
             settle(() => {
               rejectPromise(
-                new Error(status === 404 ? '尚未发布任何版本' : `更新源响应异常（HTTP ${status}）`)
+                new Error(
+                  status === 404
+                    ? '尚未发布任何版本'
+                    : status === 403 || status === 429
+                      ? `更新源限流（HTTP ${status}），请稍后重试`
+                      : `更新源响应异常（HTTP ${status}）`
+                )
               )
             })
             return

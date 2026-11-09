@@ -148,3 +148,101 @@ export function normalizeReleaseNotes(body: string | null | undefined, limit = 1
   if (!text) return null
   return text.length > limit ? `${text.slice(0, limit).trimEnd()}…` : text
 }
+
+export interface ReleaseFeedEntry {
+  /** Release tag, including the `v` prefix when GitHub has one. */
+  tag: string
+  title: string
+  notes: string | null
+  publishedAt: number | null
+}
+
+const HTML_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' '
+}
+
+function decodeEntities(input: string): string {
+  return input.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (match, entity: string) => {
+    if (entity.startsWith('#x') || entity.startsWith('#X')) {
+      const code = Number.parseInt(entity.slice(2), 16)
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match
+    }
+    if (entity.startsWith('#')) {
+      const code = Number.parseInt(entity.slice(1), 10)
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match
+    }
+    return HTML_ENTITIES[entity.toLowerCase()] ?? match
+  })
+}
+
+/** Release-note HTML from the Atom feed reduced to the plain text we display. */
+export function htmlToPlainText(input: string): string {
+  // Atom escapes the note HTML once; decode before stripping the real tags,
+  // then decode again so `&amp;amp;`-style leftovers do not leak through.
+  return decodeEntities(
+    decodeEntities(input)
+      .replace(/<\/(p|li|h[1-6]|div|tr)>/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+  )
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/**
+ * Reads the newest release from `https://github.com/<owner>/<repo>/releases.atom`.
+ * The REST API is rate limited per IP (60/h for anonymous callers), which a
+ * shared office egress IP exhausts easily; the Atom feed has no such quota.
+ */
+export function parseLatestReleaseEntry(feed: string): ReleaseFeedEntry | null {
+  const entry = /<entry\b[^>]*>([\s\S]*?)<\/entry>/i.exec(feed)?.[1]
+  if (!entry) return null
+  const link = /<link\b[^>]*rel="alternate"[^>]*href="([^"]+)"[^>]*>/i.exec(entry)?.[1]
+  const id = /<id>\s*tag:github\.com[^/]*\/[^/]*\/([^<\s]+)\s*<\/id>/i.exec(entry)?.[1]
+  const tag = (link ? decodeURIComponent(link.split('/').pop() ?? '') : id) ?? ''
+  if (!tag) return null
+  const title = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(entry)?.[1]
+  const updated = /<updated>\s*([^<]+?)\s*<\/updated>/i.exec(entry)?.[1]
+  const content = /<content\b[^>]*>([\s\S]*?)<\/content>/i.exec(entry)?.[1]
+  const published = updated ? Date.parse(updated) : Number.NaN
+  return {
+    tag,
+    title: title ? decodeEntities(title).trim() : tag,
+    notes: content ? normalizeReleaseNotes(htmlToPlainText(content)) : null,
+    publishedAt: Number.isFinite(published) ? published : null
+  }
+}
+
+/**
+ * Asset list from `https://github.com/<owner>/<repo>/releases/expanded_assets/<tag>`.
+ * The REST API is the only place that returns sizes, but its names are the
+ * canonical ones — unlike `SHA256SUMS.txt`, which keeps the `sha256sum` output
+ * (`Flashcast Setup 0.4.1.exe`) instead of the asset name
+ * (`Flashcast.Setup.0.4.1.exe`).
+ */
+export function parseReleaseAssets(html: string, slug: string, tag: string): ReleaseAsset[] {
+  const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pattern = new RegExp(
+    `href="/${escape(slug)}/releases/download/${escape(tag)}/([^"?#]+)"`,
+    'g'
+  )
+  const seen = new Set<string>()
+  const assets: ReleaseAsset[] = []
+  for (const match of html.matchAll(pattern)) {
+    const name = decodeEntities(match[1])
+    if (seen.has(name)) continue
+    seen.add(name)
+    assets.push({
+      name,
+      size: 0,
+      url: `https://github.com/${slug}/releases/download/${tag}/${encodeURIComponent(name)}`
+    })
+  }
+  return assets
+}
