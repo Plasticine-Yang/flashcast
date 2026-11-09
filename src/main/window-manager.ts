@@ -6,10 +6,12 @@ import type { PlatformId, WindowRole } from '@shared/types'
 import { assetsDir, isDev } from './paths'
 import { log } from './logger'
 import { frontmostAppName } from './front-app'
-import type { PasteTarget } from './native-paste'
+import { MAC_SETTINGS_URL, type PasteSettingsPane, type PasteTarget } from './native-paste'
 
 interface WindowCallbacks {
-  onPasteAfterHide: (target: PasteTarget) => Promise<{ ok: boolean; error?: string }>
+  onPasteAfterHide: (
+    target: PasteTarget
+  ) => Promise<{ ok: boolean; error?: string; settings?: PasteSettingsPane }>
   theme: () => { themeId: string; mode: 'dark' | 'light'; background: string }
 }
 
@@ -276,7 +278,7 @@ export class WindowManager extends EventEmitter {
       setTimeout(async () => {
         try {
           const result = await this.callbacks.onPasteAfterHide(target)
-          if (!result.ok) this.notifyPasteFailure(result.error ?? '无法触发粘贴')
+          if (!result.ok) this.notifyPasteFailure(result.error ?? '无法触发粘贴', result.settings)
         } catch (error) {
           this.notifyPasteFailure((error as Error).message)
         }
@@ -320,13 +322,17 @@ export class WindowManager extends EventEmitter {
     return null
   }
 
-  notifyPasteFailure(error: string): void {
+  notifyPasteFailure(error: string, settings?: PasteSettingsPane): void {
     log.warn('paste after hide failed:', error)
     try {
-      new Notification({
+      const notification = new Notification({
         title: 'Flashcast 无法自动粘贴',
-        body: `${error}。内容已复制到剪贴板，可手动粘贴。`
-      }).show()
+        body: `${error}。内容已复制到剪贴板，可手动粘贴。`,
+        // Clicking the banner jumps straight to the pane that needs a toggle.
+        ...(settings ? { subtitle: '点击打开系统设置' } : {})
+      })
+      if (settings) notification.on('click', () => void shell.openExternal(MAC_SETTINGS_URL[settings]))
+      notification.show()
     } catch {
       // Notifications are best-effort.
     }

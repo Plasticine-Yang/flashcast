@@ -1,10 +1,19 @@
-import { describe, expect, it } from 'vitest'
-import {
-  MAC_PASTE_PERMISSION_HINT,
+import { describe, expect, it, vi } from 'vitest'
+
+const systemPreferences = vi.hoisted(() => ({
+  isTrustedAccessibilityClient: vi.fn(() => true)
+}))
+
+vi.mock('electron', () => ({ systemPreferences }))
+
+const {
+  MAC_ACCESSIBILITY_HINT,
+  MAC_AUTOMATION_HINT,
   appleScriptString,
   pasteFailureMessage,
+  pasteIntoActiveApp,
   pasteScript
-} from './native-paste'
+} = await import('./native-paste')
 
 describe('paste helpers', () => {
   it('escapes app names so they cannot break the AppleScript', () => {
@@ -29,13 +38,31 @@ describe('paste helpers', () => {
     expect(script.indexOf('set frontmost')).toBeLessThan(script.indexOf('keystroke "v"'))
   })
 
-  it('explains macOS permission errors instead of echoing them', () => {
-    expect(pasteFailureMessage('execution error: (-1743)', 'darwin')).toBe(MAC_PASTE_PERMISSION_HINT)
-    expect(pasteFailureMessage('not allowed assistive access (-25211)', 'darwin')).toBe(
-      MAC_PASTE_PERMISSION_HINT
-    )
-    expect(pasteFailureMessage('timed out', 'darwin')).toBe('timed out')
-    expect(pasteFailureMessage('-1743', 'linux')).toBe('-1743')
-    expect(pasteFailureMessage('', 'linux')).toBe('无法触发粘贴')
+  it('points at the automation pane for -1743', () => {
+    expect(pasteFailureMessage('execution error: (-1743)', 'darwin')).toEqual({
+      message: MAC_AUTOMATION_HINT,
+      settings: 'automation'
+    })
+  })
+
+  it('points at the accessibility pane for -25211', () => {
+    expect(pasteFailureMessage('not allowed assistive access (-25211)', 'darwin')).toEqual({
+      message: MAC_ACCESSIBILITY_HINT,
+      settings: 'accessibility'
+    })
+  })
+
+  it('keeps unknown errors as-is', () => {
+    expect(pasteFailureMessage('timed out', 'darwin')).toEqual({ message: 'timed out' })
+    expect(pasteFailureMessage('-1743', 'linux')).toEqual({ message: '-1743' })
+    expect(pasteFailureMessage('', 'linux')).toEqual({ message: '无法触发粘贴' })
+  })
+
+  it('refuses to paste while accessibility is not granted, and says so', async () => {
+    systemPreferences.isTrustedAccessibilityClient.mockReturnValue(false)
+    const result = await pasteIntoActiveApp('darwin', { appName: 'Safari' })
+    expect(result).toEqual({ ok: false, error: MAC_ACCESSIBILITY_HINT, settings: 'accessibility' })
+    // Registered the app in the pane so the user only has to flip the switch.
+    expect(systemPreferences.isTrustedAccessibilityClient).toHaveBeenCalledWith(true)
   })
 })

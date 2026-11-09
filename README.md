@@ -163,7 +163,7 @@ node scripts/release.mjs 1.4.0   # 指定版本
 
 `Esc` 在全局搜索页关闭启动器；从全局搜索页进入插件时退出插件；在插件设置页返回插件；通过剪切板全局快捷键直接进入剪切板时直接关闭启动器。
 
-全局快捷键可在 **设置 → 快捷键** 中录制与恢复默认；冲突会即时提示。macOS 的“自动粘贴”需要「辅助功能」权限，并在弹窗中允许 Flashcast 控制「System Events」（系统设置 → 隐私与安全性 → 自动化）；Linux 的自动粘贴需要系统存在 `wtype`（Wayland）、`xdotool`（X11）或 `ydotool`，否则内容仍会复制到剪贴板并给出系统通知。
+全局快捷键可在 **设置 → 快捷键** 中录制与恢复默认；冲突会即时提示。macOS 的“自动粘贴”需要「辅助功能」权限，并在弹窗中允许 Flashcast 控制「System Events」（系统设置 → 隐私与安全性 → 自动化）。产物是 ad-hoc 签名，**覆盖安装后系统会作废旧授权**：辅助功能里即使开关看着是开的，也要关掉再打开（或用「−」移除后重新添加），否则合成按键会被拒绝；失败通知会区分缺的是哪一项权限，点通知可直接跳转到对应设置页。Linux 的自动粘贴需要系统存在 `wtype`（Wayland）、`xdotool`（X11）或 `ydotool`，否则内容仍会复制到剪贴板并给出系统通知。
 
 > **Linux Wayland 下的全局快捷键**：Electron 通过 `xdg-desktop-portal` 的 `GlobalShortcuts` 接口绑定快捷键，应用身份取自 `package.json` 的 `desktopName`（`com.flashcast.app.desktop`），开发版由主进程的 `app.setDesktopName()` 换成 `com.flashcast.app.dev.desktop`。该身份必须能解析到已安装的同名 `.desktop` 文件，否则 xdg-desktop-portal 1.21+ / GNOME 50 会静默拒绝绑定（`globalShortcut.register()` 仍返回 `true`）。`pnpm dev` 会自动写入 `~/.local/share/applications/com.flashcast.app.dev.desktop`（应用网格里显示为「Flashcast (Dev)」，删除该文件即可移除；旧版本写成同名的开发条目会被自动清理）；首次绑定会弹出一次系统确认框，允许后快捷键才真正生效。
 
@@ -354,7 +354,7 @@ Dracula 与 Tokyo Night 只提供深色变体：选中后生效模式锁定为�
 
 - **透明与模糊**：启动器是透明窗口（面板 `720 × 480`，设置窗口默认 `920 × 640`），面板由半透明毛玻璃、内部光源与磨砂颗粒构成；默认 Blue Glass 主题呈现蓝色玻璃，其他主题会替换玻璃颜色与壁纸强度。GNOME 与 Windows 会读取当前桌面壁纸，重度模糊后以 `mix-blend-mode: color` 混入玻璃，形成真实的壁纸磨砂（macOS 无免授权接口，回退纯玻璃）。Chromium 透明窗口无法采样桌面，“能看见多少”由面板 alpha 决定：Blue Glass 的面板不透明度为 0.964（浅色 0.956）、blur 83px，桌面文字已经基本透不出来。桌面级实时模糊仍需系统材质（`NSVisualEffectView` / Mica），本期未启用。设置窗口内部绘制极光背景，侧栏与卡片在其上做真实模糊。
 - **Wayland 全局快捷键**：走 `xdg-desktop-portal` 的 `GlobalShortcuts`（Electron 45 默认启用，无需 feature flag）。应用身份来自 `package.json#desktopName`，必须与已安装的 `.desktop` 文件同名：生产版由 electron-builder 的 `syncDesktopName` 安装为 `com.flashcast.app.desktop`，开发版由 `pnpm dev` 写入 `~/.local/share/applications/com.flashcast.app.dev.desktop`。身份无法解析时系统会静默拒绝绑定，应用会在启动时写入设置页诊断并发系统通知；首次绑定需要用户在系统弹窗中确认。X11 会话直接抓键，不受影响。
-- **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限，以及允许控制 System Events 的自动化权限）；Windows 使用 PowerShell 调用 `WScript.Shell.SendKeys`；Linux 依赖 `wtype`（Wayland）、`xdotool`（X11）或 `ydotool`。成功粘贴前会先把焦点交还给呼出启动器前的应用——macOS 上隐藏唯一窗口不会让 LSUIElement 应用退到后台，否则合成的 `⌘V` 会落回自己。失败时保留系统剪贴板内容并发送系统通知。
+- **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限，以及允许控制 System Events 的自动化权限；覆盖安装会重置 ad-hoc 签名的授权，需要重新开启）；Windows 使用 PowerShell 调用 `WScript.Shell.SendKeys`；Linux 依赖 `wtype`（Wayland）、`xdotool`（X11）或 `ydotool`。成功粘贴前会先把焦点交还给呼出启动器前的应用——macOS 上隐藏唯一窗口不会让 LSUIElement 应用退到后台，否则合成的 `⌘V` 会落回自己。失败时保留系统剪贴板内容并发送系统通知。
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。
 - **视频封面**：若系统安装 `ffmpeg`，截取首帧作为封面；否则使用内置设计封面。视频不播放。
 - **应用发现**：Linux 读取 `.desktop`；macOS 扫描 `/Applications` 等目录，解析 bundle 的 `.icns`（必要时用系统 `sips` 转 PNG）；Windows 扫描开始菜单快捷方式，并从 `.lnk` / `.url` 的 `TargetPath` / `IconLocation` 取应用图标（`.lnk` 本身只有通用图标）。部分 UWP/特殊打包应用可能不出现。

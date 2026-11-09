@@ -1,3 +1,4 @@
+import { systemPreferences } from 'electron'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
@@ -58,20 +59,61 @@ export function pasteScript(appName?: string | null): string {
   ].join('\n')
 }
 
-export const MAC_PASTE_PERMISSION_HINT =
-  '请在「系统设置 → 隐私与安全性 → 辅助功能」中允许 Flashcast，并在「自动化」中允许它控制 System Events，然后重启 Flashcast'
+/** Which System Settings pane the user has to touch. */
+export type PasteSettingsPane = 'accessibility' | 'automation'
+
+export const MAC_ACCESSIBILITY_HINT =
+  '需要在「系统设置 → 隐私与安全性 → 辅助功能」里允许 Flashcast。更新后系统会作废旧授权，即使开关看起来是开的，也请关掉再打开（或用「−」移除后重新添加），然后重启 Flashcast'
+
+export const MAC_AUTOMATION_HINT =
+  '需要在「系统设置 → 隐私与安全性 → 自动化」里允许 Flashcast 控制 System Events，然后重启 Flashcast'
+
+/** System Settings deep links; clicking the failure notification opens them. */
+export const MAC_SETTINGS_URL: Record<PasteSettingsPane, string> = {
+  accessibility: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
+  automation: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation'
+}
 
 /**
  * Turns the raw osascript error into something the user can act on. macOS
- * reports missing Accessibility / Automation grants as -1743 and -25211.
+ * reports a missing Automation grant as -1743 and a missing Accessibility
+ * grant as -25211.
  */
-export function pasteFailureMessage(error: string, platform: PlatformId): string {
+export function pasteFailureMessage(
+  error: string,
+  platform: PlatformId
+): { message: string; settings?: PasteSettingsPane } {
   const raw = error.trim() || '无法触发粘贴'
-  if (platform !== 'darwin') return raw
-  if (/-1743|-25211|not authori[sz]ed|not allowed assistive access|不允许/i.test(raw)) {
-    return MAC_PASTE_PERMISSION_HINT
+  if (platform !== 'darwin') return { message: raw }
+  if (/-1743|not authori[sz]ed|未获得授权/i.test(raw)) {
+    return { message: MAC_AUTOMATION_HINT, settings: 'automation' }
   }
-  return raw
+  if (/-25211|assistive access|不允许|not allowed/i.test(raw)) {
+    return { message: MAC_ACCESSIBILITY_HINT, settings: 'accessibility' }
+  }
+  return { message: raw }
+}
+
+let accessibilityPrompted = false
+
+/**
+ * Posting synthetic keystrokes needs the Accessibility grant for the running
+ * build. The check is cheap and lets the UI point at the right pane instead of
+ * guessing; asking once per process also registers the app in the list, which
+ * is what the user needs after an update swapped the code signature.
+ */
+function accessibilityTrusted(): boolean {
+  try {
+    if (systemPreferences.isTrustedAccessibilityClient(false)) return true
+    if (!accessibilityPrompted) {
+      accessibilityPrompted = true
+      systemPreferences.isTrustedAccessibilityClient(true)
+    }
+    return false
+  } catch {
+    // Unknown: let the keystroke attempt decide.
+    return true
+  }
 }
 
 /**
@@ -82,11 +124,15 @@ export function pasteFailureMessage(error: string, platform: PlatformId): string
 export async function pasteIntoActiveApp(
   platform: PlatformId,
   target: PasteTarget = {}
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; settings?: PasteSettingsPane }> {
   await delay(SETTLE_MS)
 
   try {
     if (platform === 'darwin') {
+      if (!accessibilityTrusted()) {
+        log.warn('paste blocked: accessibility permission missing')
+        return { ok: false, error: MAC_ACCESSIBILITY_HINT, settings: 'accessibility' }
+      }
       await run('osascript', ['-e', pasteScript(target.appName)])
       return { ok: true }
     }
@@ -119,8 +165,8 @@ export async function pasteIntoActiveApp(
     log.warn(message)
     return { ok: false, error: message }
   } catch (error) {
-    const message = pasteFailureMessage((error as Error).message, platform)
+    const failure = pasteFailureMessage((error as Error).message, platform)
     log.warn('paste keystroke failed:', (error as Error).message)
-    return { ok: false, error: message }
+    return { ok: false, error: failure.message, settings: failure.settings }
   }
 }
