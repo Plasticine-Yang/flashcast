@@ -1,6 +1,6 @@
 {
   "name": "flashcast",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "A fast, keyboard-first, Raycast-like launcher for Linux, macOS and Windows.",
   "main": "out/main/index.js",
   "author": "Flashcast",
