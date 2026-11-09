@@ -44,7 +44,7 @@
 - **流体动画**：启动器先出现输入框、再像液体一样长出列表，不做全屏压暗遮罩；插件进入/退出、预览水珠展开、列表 FLIP 删除、窗口收回后粘贴；遵循 `prefers-reduced-motion`。
 - **内置插件**：
   - `剪切板`：文本 / 图片 / 视频 / 音乐；右侧预览常驻、切换选中原位更新；回车置顶并关闭；`Alt/Option+Enter` 粘贴；`Ctrl+Backspace` 删除；二次确认清空。历史容量默认 10 条，可在插件设置页调整。通过全局快捷键直接进入时，`Esc` 直接关闭启动器；从主页面进入时先返回主页面。
-  - `Chrome 书签`：自动发现 Chrome Profile、读取书签、favicon、文件夹 chip、在 Chrome 中打开；同时支持本地 `Bookmarks` 与登录 Google 账户后的 `AccountBookmarks`，即使 Profile 尚未生成书签文件也能识别；当前 Profile 可在插件设置页切换。
+  - `Chrome 书签`：自动发现 Chrome Profile、读取书签、favicon、文件夹 chip、在 Chrome 中打开；同时支持本地 `Bookmarks` 与登录 Google 账户后的 `AccountBookmarks`，即使 Profile 尚未生成书签文件也能识别；当前 Profile 可在插件设置页切换。macOS 会保护 Chrome 的数据目录，需要给 Flashcast 授予「完全磁盘访问权限」才能读取；没有授权时插件页会直接提示去授权，而不是误报「未安装 Chrome」。
   - `VSCode-like Workspace`：索引 VS Code、Trae、Cursor、Windsurf、VSCodium 等打开过的工作区；按 `product.json` 识别产品，读取 `state.vscdb` 最近列表、打开窗口与 `workspaceStorage` 合并去重；用该产品自己的 CLI 打开（不经过 `vscode://` 协议），支持远程工作区与「新窗口」打开。`Alt/Option+Enter` 新窗口打开，`Ctrl/⌘+Enter` 显示位置（远程工作区会复制 URI）。触发词在插件设置页按编辑器配置，默认留空；清理区支持多选删除历史、按「只看远程」筛选与一键删除路径已失效的记录，只动编辑器历史、不删项目目录，被移除的编辑器状态会移入备份目录。
 - **设置入口**：全局搜索页顶栏右侧的齿轮，或直接按 `⌘,` / `Ctrl+,`；插件页内同一位置的齿轮用于打开该插件的设置；全局搜索里的「打开设置」命令保留。
 - **设置窗口**：独立窗口，默认 `920 × 640`，包含通用（启动、语言）、外观（主题与主题包、深浅模式）、插件管理、工作区、快捷键录制、关于与许可。

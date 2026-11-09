@@ -400,6 +400,7 @@
 - 空查询展示全部书签，按 Chrome 书签栏顺序；搜索时子序列匹配标题、URL 与文件夹，命中高亮。
 - 回车在 Chrome 中打开（`open -a "Google Chrome"` / `chrome.exe` / `google-chrome`），不改变当前浏览器默认行为。底部提示明确"在 Chrome 打开"。
 - 未配置/找不到 profile：展示设置引导卡"未找到 Chrome Profile" + 主按钮"选择 Profile"（进入插件设置页）。
+- 系统拒绝读取 Chrome 数据目录（macOS 完全磁盘访问权限）：引导卡标题改为"无法读取 Chrome 数据目录"，说明里点名"系统设置 → 隐私与安全性 → 完全磁盘访问权限"并要求重启 Flashcast，主按钮"打开完全磁盘访问权限"直接深链到该面板（`x-apple.systempreferences:...?Privacy_AllFiles`）；不能复用"未安装 Chrome"文案，也不显示"0 个书签"这种看起来读成功了的计数。
 - 首次加载超过 150ms 才显示 3 行骨架屏（surface-2 微光，1.2s 循环）；解析失败展示"书签读取失败"+"重试"。
 
 ### 5.6 Flashcast 设置窗口

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -90,6 +90,30 @@ describe('Chrome profile discovery', () => {
     expect(result.bookmarks).toEqual([])
     expect(result.bookmarkSource).toBeNull()
     expect(result.bookmarkFile).toBe(join(root, 'Default', 'Bookmarks'))
+  })
+
+  it('reports a permission failure instead of "Chrome is not installed"', async () => {
+    const root = await createChromeFixture(undefined, { Default: { Preferences: '{}' } })
+    // macOS protects Chrome's data directory the same way: the directory still
+    // exists, but listing it fails with EACCES/EPERM.
+    await chmod(root, 0o000)
+    try {
+      const result = await readChromeBookmarks('linux', null)
+      expect(result.errorCode).toBe('permission-denied')
+      expect(result.error).toBe('无法读取 Chrome 数据目录')
+      expect(result.profiles).toEqual([])
+    } finally {
+      await chmod(root, 0o755)
+    }
+  })
+
+  it('reports no-profile when Chrome has no user data directory at all', async () => {
+    vi.stubEnv('FLASHCAST_CHROME_USER_DATA', join(tmpdir(), `flashcast-absent-${Date.now()}`))
+
+    const result = await readChromeBookmarks('linux', null)
+
+    expect(result.errorCode).toBe('no-profile')
+    expect(result.error).toBe('未找到 Chrome Profile')
   })
 
   it('detects profiles that only contain account bookmarks', async () => {

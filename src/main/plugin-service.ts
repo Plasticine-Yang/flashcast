@@ -21,7 +21,14 @@ import {
   CLIPBOARD_MANIFEST,
   VSCODE_LIKE_WORKSPACE_MANIFEST
 } from './builtins/manifests'
-import { discoverChromeProfiles, findBookmarksFile, readChromeBookmarks } from './chrome-bookmarks'
+import {
+  CHROME_NO_PROFILE_ERROR,
+  CHROME_PERMISSION_ERROR,
+  discoverChromeProfiles,
+  findBookmarksFile,
+  readChromeBookmarks
+} from './chrome-bookmarks'
+import { MAC_FULL_DISK_ACCESS_HINT } from './native-paste'
 import type { VscodeLikeWorkspaceService } from './vscode-like-workspace/service'
 
 export class PluginService {
@@ -84,7 +91,8 @@ export class PluginService {
       bookmarkFile: result.bookmarkFile,
       bookmarkSource: result.bookmarkSource,
       bookmarks: result.bookmarks,
-      error: result.error
+      error: result.error,
+      errorCode: result.errorCode
     }
   }
 
@@ -129,7 +137,9 @@ export class PluginService {
 
   private async chromeSettings(): Promise<PluginSettingsPage> {
     const config = await this.config.getPluginConfig('chrome-bookmarks', CHROME_DEFAULTS)
-    const { profiles, userDataDir } = await discoverChromeProfiles(this.platform)
+    const { profiles, userDataDir, permissionDenied } = await discoverChromeProfiles(
+      this.platform
+    )
     const selected =
       profiles.find((profile) => profile.dir === config.profile) ??
       profiles.find((profile) => profile.dir === 'Default') ??
@@ -183,11 +193,18 @@ export class PluginService {
       placeholder: 'Chrome 书签设置…',
       searchable: false,
       fields,
-      error: profiles.length === 0 ? '未找到 Chrome Profile' : null,
+      error:
+        profiles.length === 0
+          ? permissionDenied
+            ? CHROME_PERMISSION_ERROR
+            : CHROME_NO_PROFILE_ERROR
+          : null,
       notice:
         profiles.length > 0
           ? null
-          : '请先安装 Google Chrome，并至少打开一次以创建 Profile。你也可以设置环境变量 FLASHCAST_CHROME_USER_DATA 指向自定义目录。',
+          : permissionDenied
+            ? MAC_FULL_DISK_ACCESS_HINT
+            : '请先安装 Google Chrome，并至少打开一次以创建 Profile。你也可以设置环境变量 FLASHCAST_CHROME_USER_DATA 指向自定义目录。',
       savedAt: 0
     }
   }

@@ -55,4 +55,5 @@ curl -sIL -o /dev/null -w '%{http_code}\n' <asset-url>       # 关键资产应�
 
 - **Electron 下载与 Release 资产共用 GitHub 的 CDN**：`@electron/get`、electron-builder 和用户的自动更新都从 `github.com/.../releases/download/...` 取文件。该 CDN 偶发局部 504（v0.4.4 发布时 `electron-v45.2.1-linux-x64.zip` 连续 3 次 504，第 4 次恢复）。CI 已通过 `scripts/postinstall.mjs` 跳过 `pnpm install` 里那份用不到的 Electron 运行时，但 electron-builder 打包时仍会下载。
 - **没有签名证书**：macOS 只补 ad-hoc 签名（不公证，首次打开要右键），Windows 会触发 SmartScreen。
+- **ad-hoc 签名会让 macOS 授权每次覆盖安装后失效**：ad-hoc 的 designated requirement 就是 `cdhash H"..."`（`codesign -d -r- Flashcast.app` 可见），二进制一变，之前给的「完全磁盘访问权限」「辅助功能」「屏幕录制」等授权全部对不上。用户表现为书签插件提示"无法读取 Chrome 数据目录"、自动粘贴失灵。要么每次升级后重新授权（系统设置里把 Flashcast 移除再加回来），要么换成固定身份的签名（Developer ID 或长期复用的自签名证书，`CSC_LINK` / `CSC_NAME` 走 electron-builder，`scripts/after-pack.mjs` 检测到有效签名会自动跳过）。
 - **新 Release 的资产有复制延迟**：刚创建就点更新可能拿到 404/504，等几分钟重试即可。

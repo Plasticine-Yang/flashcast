@@ -7,6 +7,7 @@ import { delimiter, dirname, join } from 'node:path'
 import type {
   ChromeBookmark,
   ChromeBookmarkSource,
+  ChromeBookmarksError,
   ChromeProfile,
   PlatformId
 } from '@shared/types'
@@ -99,16 +100,30 @@ function looksLikeProfileDir(name: string, dir: string): boolean {
   )
 }
 
-export async function discoverChromeProfiles(platform: PlatformId): Promise<{
+function isPermissionError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === 'EPERM' || code === 'EACCES'
+}
+
+export interface ChromeDiscoveryResult {
   profiles: ChromeProfile[]
   userDataDir: string
-}> {
+  /**
+   * The OS refused to list the user data directory. macOS protects Chrome's
+   * profile directory (Full Disk Access), and `existsSync()` still answers
+   * `true` for it, so only `readdir` surfaces the refusal.
+   */
+  permissionDenied: boolean
+}
+
+export async function discoverChromeProfiles(platform: PlatformId): Promise<ChromeDiscoveryResult> {
+  let permissionDenied = false
   for (const dir of chromeUserDataDirs(platform)) {
-    if (!existsSync(dir)) continue
     let entries
     try {
       entries = await readdir(dir, { withFileTypes: true })
-    } catch {
+    } catch (error) {
+      if (isPermissionError(error)) permissionDenied = true
       continue
     }
 
@@ -159,10 +174,10 @@ export async function discoverChromeProfiles(platform: PlatformId): Promise<{
         if (b.dir === 'Default') return 1
         return a.dir.localeCompare(b.dir)
       })
-      return { profiles, userDataDir: dir }
+      return { profiles, userDataDir: dir, permissionDenied: false }
     }
   }
-  return { profiles: [], userDataDir: chromeUserDataDirs(platform)[0] }
+  return { profiles: [], userDataDir: chromeUserDataDirs(platform)[0], permissionDenied }
 }
 
 export function flattenBookmarks(data: BookmarksFile): ChromeBookmark[] {
@@ -217,6 +232,14 @@ function safeProtocol(url: string): string | null {
   }
 }
 
+/**
+ * Shown when macOS blocks Chrome's data directory. Kept separate from
+ * `CHROME_NO_PROFILE_ERROR` so the UI can point at Full Disk Access instead of
+ * telling the user to install a browser they already have.
+ */
+export const CHROME_PERMISSION_ERROR = '无法读取 Chrome 数据目录'
+export const CHROME_NO_PROFILE_ERROR = '未找到 Chrome Profile'
+
 export interface ChromeBookmarksResult {
   profiles: ChromeProfile[]
   selectedProfile: string | null
@@ -225,6 +248,7 @@ export interface ChromeBookmarksResult {
   bookmarkSource: ChromeBookmarkSource | null
   bookmarks: ChromeBookmark[]
   error: string | null
+  errorCode: ChromeBookmarksError | null
 }
 
 interface BookmarkCandidate {
@@ -267,7 +291,7 @@ export async function readChromeBookmarks(
   platform: PlatformId,
   selectedProfile: string | null
 ): Promise<ChromeBookmarksResult> {
-  const { profiles, userDataDir } = await discoverChromeProfiles(platform)
+  const { profiles, userDataDir, permissionDenied } = await discoverChromeProfiles(platform)
   if (profiles.length === 0) {
     return {
       profiles,
@@ -276,7 +300,8 @@ export async function readChromeBookmarks(
       bookmarkFile: null,
       bookmarkSource: null,
       bookmarks: [],
-      error: '未找到 Chrome Profile'
+      error: permissionDenied ? CHROME_PERMISSION_ERROR : CHROME_NO_PROFILE_ERROR,
+      errorCode: permissionDenied ? 'permission-denied' : 'no-profile'
     }
   }
 
@@ -296,7 +321,8 @@ export async function readChromeBookmarks(
       bookmarkFile: profile.bookmarksPath,
       bookmarkSource: null,
       bookmarks: [],
-      error: null
+      error: null,
+      errorCode: null
     }
   }
 
@@ -317,7 +343,8 @@ export async function readChromeBookmarks(
         bookmarkFile: candidate.path,
         bookmarkSource: candidate.source,
         bookmarks: flattenBookmarks(data),
-        error: null
+        error: null,
+        errorCode: null
       }
     } catch (error) {
       parseFailed = true
@@ -332,7 +359,8 @@ export async function readChromeBookmarks(
     bookmarkFile: candidates[0].path,
     bookmarkSource: candidates[0].source,
     bookmarks: [],
-    error: oversized && !parseFailed ? '书签文件过大，无法读取' : '书签读取失败'
+    error: oversized && !parseFailed ? '书签文件过大，无法读取' : '书签读取失败',
+    errorCode: oversized && !parseFailed ? 'too-large' : 'parse-failed'
   }
 }
 

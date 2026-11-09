@@ -28,6 +28,7 @@ import type {
   PluginSummary,
   ShortcutError,
   ShortcutInfo,
+  SystemSettingsPane,
   ThemeInspection,
   ThemePackError,
   UpdateState,
@@ -43,7 +44,7 @@ import { ExternalPluginManager } from './external-plugins'
 import { FaviconService } from './favicons'
 import { desktopEntryDirs, findDesktopEntry, usesWayland } from './linux-portal'
 import { log } from './logger'
-import { pasteIntoActiveApp } from './native-paste'
+import { MAC_SETTINGS_URL, pasteIntoActiveApp } from './native-paste'
 import {
   appVersion,
   assetsDir,
@@ -782,6 +783,12 @@ export class FlashcastApplication {
 
   openSettings(): void {
     this.windows.openSettings()
+  }
+
+  /** Deep-links to a System Settings pane; a no-op on platforms without one. */
+  async openSystemSettings(pane: SystemSettingsPane): Promise<void> {
+    if (this.platform !== 'darwin') return
+    await shell.openExternal(MAC_SETTINGS_URL[pane])
   }
 
   hideLauncher(options?: { paste?: boolean }): void {

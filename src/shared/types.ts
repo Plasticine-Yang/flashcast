@@ -173,6 +173,17 @@ export interface ClipboardPluginPage {
   maxItems: number
 }
 
+/**
+ * Why the bookmarks page has nothing to show. `permission-denied` means the OS
+ * refused to read Chrome's data directory (macOS needs Full Disk Access) and
+ * must not be reported as "Chrome is not installed".
+ */
+export type ChromeBookmarksError =
+  | 'no-profile'
+  | 'permission-denied'
+  | 'parse-failed'
+  | 'too-large'
+
 export interface ChromeBookmarksPluginPage {
   kind: 'bookmarks'
   pluginId: string
@@ -186,7 +197,12 @@ export interface ChromeBookmarksPluginPage {
   bookmarkSource: ChromeBookmarkSource | null
   bookmarks: ChromeBookmark[]
   error: string | null
+  errorCode: ChromeBookmarksError | null
 }
+
+/** System Settings panes the app can deep-link to. */
+export const SYSTEM_SETTINGS_PANES = ['full-disk-access', 'accessibility', 'automation'] as const
+export type SystemSettingsPane = (typeof SYSTEM_SETTINGS_PANES)[number]
 
 export interface ExternalPluginItem {
   id: string
@@ -558,6 +574,7 @@ export interface FlashcastApi {
   getEditorWorkspaces(): Promise<EditorWorkspaceSnapshot[]>
   deleteEditorWorkspaces(variantId: string, ids: string[]): Promise<EditorCleanupResult>
   getFavicons(domains: string[]): Promise<Record<string, string>>
+  openSystemSettings(pane: SystemSettingsPane): Promise<void>
   openSettings(): Promise<void>
   hideLauncher(options?: { paste?: boolean }): void
 

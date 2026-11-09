@@ -83,6 +83,7 @@ const api: FlashcastApi = {
   deleteEditorWorkspaces: (variantId, ids) =>
     invoke<EditorCleanupResult>(IPC.deleteEditorWorkspaces, variantId, ids),
   getFavicons: (domains) => invoke<Record<string, string>>(IPC.getFavicons, domains),
+  openSystemSettings: (pane) => invoke<void>(IPC.openSystemSettings, pane),
   openSettings: () => invoke<void>(IPC.openSettings),
   hideLauncher: (options) => ipcRenderer.send(IPC.hideLauncher, options),
 

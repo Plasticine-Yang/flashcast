@@ -1,5 +1,6 @@
 import { app, ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
+import { SYSTEM_SETTINGS_PANES } from '@shared/types'
 import type { AppPrefs, CommandEntry, GlobalHotkeys, WindowRole } from '@shared/types'
 import type { FlashcastApplication } from './application'
 import { log } from './logger'
@@ -115,6 +116,11 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
 
   ipcMain.handle(IPC.openSettings, async () => {
     application.openSettings()
+  })
+  ipcMain.handle(IPC.openSystemSettings, async (_event, pane: unknown) => {
+    const match = SYSTEM_SETTINGS_PANES.find((candidate) => candidate === pane)
+    if (!match) throw new Error('未知的系统设置面板')
+    await application.openSystemSettings(match)
   })
   ipcMain.on(IPC.hideLauncher, (_event, options: unknown) => {
     const record = options && typeof options === 'object' ? (options as Record<string, unknown>) : {}

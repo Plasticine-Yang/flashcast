@@ -26,6 +26,7 @@ export const IPC = {
   deleteEditorWorkspaces: 'editor:delete-workspaces',
 
   openSettings: 'launcher:open-settings',
+  openSystemSettings: 'app:open-system-settings',
   hideLauncher: 'launcher:hide',
   shown: 'launcher:shown',
   closeRequest: 'launcher:close-request',

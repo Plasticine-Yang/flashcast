@@ -342,20 +342,44 @@ export function createMockApi(): FlashcastApi {
     maxItems: clipboardMax
   })
 
-  const chromePage = (): ChromeBookmarksPluginPage => ({
-    kind: 'bookmarks',
-    pluginId: 'chrome-bookmarks',
-    title: 'Chrome 书签',
-    placeholder: '搜索书签…',
-    searchable: true,
-    profiles: mockChromeProfiles,
-    selectedProfile: chromeProfile,
-    userDataDir: '/home/you/.config/google-chrome',
-    bookmarkFile: '/home/you/.config/google-chrome/Default/AccountBookmarks',
-    bookmarkSource: 'account',
-    bookmarks: mockBookmarks,
-    error: null
-  })
+  // `?chrome=permission|none` previews the two failure cards without a Mac.
+  const chromeScenario = params.get('chrome') ?? ''
+
+  const chromePage = (): ChromeBookmarksPluginPage => {
+    if (chromeScenario === 'permission' || chromeScenario === 'none') {
+      const permissionDenied = chromeScenario === 'permission'
+      return {
+        kind: 'bookmarks',
+        pluginId: 'chrome-bookmarks',
+        title: 'Chrome 书签',
+        placeholder: '搜索书签…',
+        searchable: true,
+        profiles: [],
+        selectedProfile: null,
+        userDataDir: '/Users/you/Library/Application Support/Google/Chrome',
+        bookmarkFile: null,
+        bookmarkSource: null,
+        bookmarks: [],
+        error: permissionDenied ? '无法读取 Chrome 数据目录' : '未找到 Chrome Profile',
+        errorCode: permissionDenied ? 'permission-denied' : 'no-profile'
+      }
+    }
+    return {
+      kind: 'bookmarks',
+      pluginId: 'chrome-bookmarks',
+      title: 'Chrome 书签',
+      placeholder: '搜索书签…',
+      searchable: true,
+      profiles: mockChromeProfiles,
+      selectedProfile: chromeProfile,
+      userDataDir: '/home/you/.config/google-chrome',
+      bookmarkFile: '/home/you/.config/google-chrome/Default/AccountBookmarks',
+      bookmarkSource: 'account',
+      bookmarks: mockBookmarks,
+      error: null,
+      errorCode: null
+    }
+  }
 
   const enabledEditorIds = (): Set<string> =>
     new Set(editorVariants.filter((variant) => variant.enabled).map((variant) => variant.id))
@@ -447,6 +471,7 @@ export function createMockApi(): FlashcastApi {
   }
 
   const noop: FlashcastApi['openSettings'] = async () => {}
+  const noopWithPane: FlashcastApi['openSystemSettings'] = async () => {}
 
   return {
     platform,
@@ -606,6 +631,7 @@ export function createMockApi(): FlashcastApi {
       }
     },
     getFavicons: async (domains) => mockFavicons(domains),
+    openSystemSettings: noopWithPane,
     openSettings: noop,
     hideLauncher: () => {
       // Preview harness: keep the panel mounted so screenshots stay stable.

@@ -51,6 +51,10 @@ export function BookmarksView({
     if (node) node.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [selectedIndex, rows.length])
 
+  const errorCode = page?.errorCode ?? null
+  const missingProfile = errorCode === 'no-profile'
+  const permissionDenied = errorCode === 'permission-denied'
+
   const showVirtual = rows.length > 60
   const profile = page?.profiles.find((item) => item.dir === page.selectedProfile)
 
@@ -59,7 +63,7 @@ export function BookmarksView({
       <div className="fc-plugin-head">
         <h1 className="fc-plugin-title">Chrome 书签</h1>
         <span className="fc-plugin-head-meta">
-          {page ? `${page.bookmarks.length} 个书签` : null}
+          {page && !page.errorCode ? `${page.bookmarks.length} 个书签` : null}
           {page?.bookmarkSource === 'account' ? ' · 账户书签' : ''}
           {profile ? ` · ${profile.name}` : ''}
         </span>
@@ -69,14 +73,31 @@ export function BookmarksView({
           <SkeletonRows count={4} />
         ) : page?.error ? (
           <ErrorCard
-            title={page.error === '未找到 Chrome Profile' ? '未找到 Chrome Profile' : page.error}
+            title={
+              missingProfile
+                ? '未找到 Chrome Profile'
+                : permissionDenied
+                  ? '无法读取 Chrome 数据目录'
+                  : page.error
+            }
             description={
-              page.error === '未找到 Chrome Profile'
+              missingProfile
                 ? '请先安装 Google Chrome 并至少打开一次，或在插件设置中选择已存在的 Profile。'
-                : '可能是书签文件被占用或格式异常，请稍后重试。'
+                : permissionDenied
+                  ? 'macOS 没有允许 Flashcast 读取 Chrome 的 Profile 目录。请在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里勾选 Flashcast，然后重启 Flashcast。'
+                  : '可能是书签文件被占用或格式异常，请稍后重试。'
             }
           >
-            {page.error === '未找到 Chrome Profile' ? (
+            {permissionDenied ? (
+              <button
+                type="button"
+                className="fc-btn fc-btn--primary"
+                onClick={() => void api.openSystemSettings('full-disk-access')}
+              >
+                打开完全磁盘访问权限
+              </button>
+            ) : null}
+            {missingProfile ? (
               <button type="button" className="fc-btn fc-btn--primary" onClick={onSettings}>
                 选择 Profile
               </button>

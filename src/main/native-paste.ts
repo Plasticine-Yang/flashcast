@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { promisify } from 'node:util'
-import type { PlatformId } from '@shared/types'
+import type { PlatformId, SystemSettingsPane } from '@shared/types'
 import { log } from './logger'
 
 const execFileAsync = promisify(execFile)
@@ -67,7 +67,7 @@ export function pasteScript(appName?: string | null): string {
 }
 
 /** Which System Settings pane the user has to touch. */
-export type PasteSettingsPane = 'accessibility' | 'automation'
+export type PasteSettingsPane = Exclude<SystemSettingsPane, 'full-disk-access'>
 
 export const MAC_ACCESSIBILITY_HINT =
   '需要在「系统设置 → 隐私与安全性 → 辅助功能」里允许 Flashcast。覆盖安装会让旧条目与新签名对不上（开关看着是开的也不生效）：请选中 Flashcast 用「−」移除，再按 ⌥↵ 让系统重新登记并打开开关，然后重启 Flashcast'
@@ -75,8 +75,13 @@ export const MAC_ACCESSIBILITY_HINT =
 export const MAC_AUTOMATION_HINT =
   '需要在「系统设置 → 隐私与安全性 → 自动化」里允许 Flashcast 控制 System Events，然后重启 Flashcast'
 
+export const MAC_FULL_DISK_ACCESS_HINT =
+  'macOS 不允许 Flashcast 读取 Chrome 的数据目录。请在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里勾选 Flashcast，然后重启 Flashcast。覆盖安装后系统会按新签名重新校验，开关看着是开的也可能需要先移除再加回来'
+
 /** System Settings deep links; clicking the failure notification opens them. */
-export const MAC_SETTINGS_URL: Record<PasteSettingsPane, string> = {
+export const MAC_SETTINGS_URL: Record<SystemSettingsPane, string> = {
+  'full-disk-access':
+    'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
   accessibility: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
   automation: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation'
 }
