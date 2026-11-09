@@ -48,11 +48,18 @@ export function appleScriptString(value: string): string {
 export function pasteScript(appName?: string | null): string {
   const keystroke = 'keystroke "v" using command down'
   if (!appName) return `tell application "System Events" to ${keystroke}`
+  // Activation is asynchronous: `set frontmost` returns before the window
+  // server actually moves focus, and the keystroke follows immediately. Wait
+  // until the target reports itself frontmost so ⌘V cannot land on us.
   return [
     'tell application "System Events"',
     '  try',
-    `    set frontmost of (first process whose name is ${appleScriptString(appName)}) to true`,
-    '    delay 0.12',
+    `    set target to first process whose name is ${appleScriptString(appName)}`,
+    '    set frontmost of target to true',
+    '    repeat 12 times',
+    '      if frontmost of target then exit repeat',
+    '      delay 0.05',
+    '    end repeat',
     '  end try',
     `  ${keystroke}`,
     'end tell'
@@ -133,6 +140,7 @@ export async function pasteIntoActiveApp(
         log.warn('paste blocked: accessibility permission missing')
         return { ok: false, error: MAC_ACCESSIBILITY_HINT, settings: 'accessibility' }
       }
+      log.info('pasting into:', target.appName ?? '(unspecified)')
       await run('osascript', ['-e', pasteScript(target.appName)])
       return { ok: true }
     }

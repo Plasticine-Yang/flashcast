@@ -29,13 +29,13 @@ describe('paste helpers', () => {
     )
   })
 
-  it('hands focus back before the keystroke and survives a missing app', () => {
+  it('waits for the target to become frontmost before pressing cmd+V', () => {
     const script = pasteScript('Visual Studio Code')
-    expect(script).toContain(
-      'set frontmost of (first process whose name is "Visual Studio Code") to true'
-    )
+    expect(script).toContain('set frontmost of target to true')
+    expect(script).toContain('set target to first process whose name is "Visual Studio Code"')
+    expect(script).toContain('if frontmost of target then exit repeat')
     expect(script).toContain('try')
-    expect(script.indexOf('set frontmost')).toBeLessThan(script.indexOf('keystroke "v"'))
+    expect(script.indexOf('exit repeat')).toBeLessThan(script.indexOf('keystroke "v"'))
   })
 
   it('points at the automation pane for -1743', () => {
