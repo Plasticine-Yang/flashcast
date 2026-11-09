@@ -7,11 +7,16 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { UpdateState } from '@shared/types'
 
-const state = vi.hoisted(() => ({
-  userData: '',
-  /** Everything the fake network stack can answer, keyed by URL. */
-  routes: new Map<string, { status: number; body: Buffer }>()
-}))
+const state = vi.hoisted(() => {
+  type Route = { status: number; body: Buffer }
+  return {
+    userData: '',
+    /** Everything the fake network stack can answer, keyed by URL. */
+    routes: new Map<string, Route | Route[]>(),
+    /** URLs in request order, so retries are observable. */
+    requests: [] as string[]
+  }
+})
 
 function fakeResponse(status: number, body: Buffer): EventEmitter & {
   statusCode: number
@@ -45,11 +50,19 @@ vi.mock('electron', () => ({
       emitter.abort = () => emitter.emit('abort')
       emitter.end = () => {
         setImmediate(() => {
-          const route = state.routes.get(options.url)
+          const entry = state.routes.get(options.url)
+          // An array is a scripted sequence: consume it, but keep the last
+          // response for any further attempts.
+          const route = Array.isArray(entry)
+            ? entry.length > 1
+              ? entry.shift()
+              : entry[0]
+            : entry
           if (!route) {
             emitter.emit('error', new Error(`unexpected request: ${options.url}`))
             return
           }
+          state.requests.push(options.url)
           const response = fakeResponse(route.status, route.body)
           emitter.emit('response', response)
           setImmediate(() => {
@@ -85,6 +98,15 @@ const ASSET_NAME =
   process.arch === 'arm64' ? 'Flashcast-0.3.0-arm64-mac.zip' : 'Flashcast-0.3.0-mac.zip'
 const ASSET_URL = `https://example.test/${ASSET_NAME}`
 const SUMS_URL = 'https://example.test/SHA256SUMS.txt'
+const API_URL = 'https://api.github.com/repos/Plasticine-Yang/flashcast/releases/latest'
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error('condition was not met in time')
+}
 
 function releaseJson(version = '0.3.0'): Buffer {
   return Buffer.from(
@@ -112,6 +134,7 @@ describe('UpdateService', () => {
   beforeEach(async () => {
     state.userData = await mkdtemp(join(tmpdir(), 'flashcast-update-'))
     state.routes.clear()
+    state.requests = []
     emitted = []
   })
 
@@ -119,8 +142,10 @@ describe('UpdateService', () => {
     await rm(state.userData, { recursive: true, force: true })
   })
 
-  const create = (): InstanceType<typeof UpdateService> =>
-    new UpdateService('darwin', (next) => emitted.push(next))
+  const create = (
+    options?: { downloadRetryDelayMs?: number }
+  ): InstanceType<typeof UpdateService> =>
+    new UpdateService('darwin', (next) => emitted.push(next), options)
 
   it('reports an available release with the matching asset', async () => {
     state.routes.set('https://api.github.com/repos/Plasticine-Yang/flashcast/releases/latest', {
@@ -171,6 +196,70 @@ describe('UpdateService', () => {
     expect(result.downloadPath && existsSync(result.downloadPath)).toBe(true)
     expect(readFileSync(result.downloadPath!, 'utf8')).toBe(ASSET_BYTES.toString('utf8'))
     expect(emitted.some((entry) => entry.phase === 'downloading')).toBe(true)
+  })
+
+  it('retries a transient 504 and then finishes the download', async () => {
+    state.routes.set(API_URL, { status: 200, body: releaseJson() })
+    state.routes.set(ASSET_URL, [
+      { status: 504, body: Buffer.from('gateway timeout') },
+      { status: 200, body: ASSET_BYTES }
+    ])
+    state.routes.set(SUMS_URL, {
+      status: 200,
+      body: Buffer.from(`${ASSET_SHA}  ${ASSET_NAME}\n`)
+    })
+
+    const service = create({ downloadRetryDelayMs: 1 })
+    await service.check({ force: true })
+    const result = await service.download()
+
+    expect(result.phase).toBe('ready')
+    expect(state.requests.filter((url) => url === ASSET_URL)).toHaveLength(2)
+    expect(emitted.some((entry) => entry.message.includes('正在重试'))).toBe(true)
+    expect(readFileSync(result.downloadPath!, 'utf8')).toBe(ASSET_BYTES.toString('utf8'))
+  })
+
+  it('does not retry a permanent 404', async () => {
+    state.routes.set(API_URL, { status: 200, body: releaseJson() })
+    state.routes.set(ASSET_URL, { status: 404, body: Buffer.from('not found') })
+
+    const service = create({ downloadRetryDelayMs: 1 })
+    await service.check({ force: true })
+    const result = await service.download()
+
+    expect(result.phase).toBe('error')
+    expect(result.error).toContain('HTTP 404')
+    expect(state.requests.filter((url) => url === ASSET_URL)).toHaveLength(1)
+  })
+
+  it('stops after three failed attempts', async () => {
+    state.routes.set(API_URL, { status: 200, body: releaseJson() })
+    state.routes.set(ASSET_URL, { status: 504, body: Buffer.from('gateway timeout') })
+
+    const service = create({ downloadRetryDelayMs: 1 })
+    await service.check({ force: true })
+    const result = await service.download()
+
+    expect(result.phase).toBe('error')
+    expect(result.error).toContain('HTTP 504')
+    expect(state.requests.filter((url) => url === ASSET_URL)).toHaveLength(3)
+  })
+
+  it('cancels while waiting to retry', async () => {
+    state.routes.set(API_URL, { status: 200, body: releaseJson() })
+    state.routes.set(ASSET_URL, { status: 504, body: Buffer.from('gateway timeout') })
+
+    const service = create({ downloadRetryDelayMs: 200 })
+    await service.check({ force: true })
+    const pending = service.download()
+    await waitFor(() => emitted.some((entry) => entry.message.includes('正在重试')))
+
+    await service.cancel()
+    const result = await pending
+
+    expect(result.phase).toBe('available')
+    expect(result.message).toBe('已取消下载')
+    expect(state.requests.filter((url) => url === ASSET_URL)).toHaveLength(1)
   })
 
   it('rejects a download whose checksum does not match', async () => {

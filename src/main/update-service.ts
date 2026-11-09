@@ -28,6 +28,25 @@ const PROGRESS_THROTTLE_MS = 120
 const MAX_JSON_BYTES = 4 * 1024 * 1024
 const MAX_CHECKSUMS_BYTES = 256 * 1024
 const MAX_FEED_BYTES = 512 * 1024
+/** GitHub 的资产 CDN 偶发 5xx（v0.4.4 发布时就出现过 504）；下载失败先退避重试。 */
+const DOWNLOAD_ATTEMPTS = 3
+const DOWNLOAD_RETRY_BASE_MS = 1500
+
+/** Carries the HTTP status so a retry can tell 504 (retry) from 404 (give up). */
+class DownloadHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`下载更新失败（HTTP ${status}）`)
+    this.name = 'DownloadHttpError'
+  }
+}
+
+function isRetryableDownloadError(error: unknown): boolean {
+  if (error instanceof DownloadHttpError) {
+    return error.status >= 500 || error.status === 408 || error.status === 429
+  }
+  // 网络层错误（DNS、连接重置、超时）没有状态码，同样值得再试一次。
+  return error instanceof Error
+}
 
 interface ReleaseInfo {
   version: string
@@ -88,11 +107,16 @@ export class UpdateService {
   private cancelled = false
   private startTimer: NodeJS.Timeout | null = null
   private intervalTimer: NodeJS.Timeout | null = null
+  private retryTimer: NodeJS.Timeout | null = null
+  private retryResolve: (() => void) | null = null
+  private readonly retryDelayMs: number
 
   constructor(
     private readonly platform: PlatformId,
-    private readonly emit: (state: UpdateState) => void
+    private readonly emit: (state: UpdateState) => void,
+    options: { downloadRetryDelayMs?: number } = {}
   ) {
+    this.retryDelayMs = options.downloadRetryDelayMs ?? DOWNLOAD_RETRY_BASE_MS
     this.state = {
       phase: 'idle',
       currentVersion: appVersion(),
@@ -135,8 +159,11 @@ export class UpdateService {
     if (this.intervalTimer) clearInterval(this.intervalTimer)
     this.startTimer = null
     this.intervalTimer = null
+    // 退出时不再排队重试：abort 触发的那次失败会按「已取消」收尾。
+    this.cancelled = true
     this.activeRequest?.abort()
     this.activeRequest = null
+    this.clearRetryWait()
   }
 
   /* ------------------------------- checking ------------------------------ */
@@ -256,7 +283,7 @@ export class UpdateService {
     try {
       await mkdir(directory, { recursive: true })
       await rm(partial, { force: true })
-      await this.downloadTo(asset.url, partial, asset.size)
+      await this.downloadWithRetry(asset.url, partial, asset.size)
       const verified = await this.verifyChecksum(asset.name, partial)
       if (!verified) throw new Error('安装包校验失败，请稍后重试')
       await rm(target, { force: true })
@@ -308,7 +335,66 @@ export class UpdateService {
     this.cancelled = true
     this.activeRequest?.abort()
     this.activeRequest = null
+    this.clearRetryWait()
     return this.state
+  }
+
+  /**
+   * One failed response is not worth a red error state: GitHub's asset CDN
+   * returns 5xx while a release replicates or an edge node hiccups. Retry the
+   * whole download with linear backoff, then surface the real error.
+   */
+  private async downloadWithRetry(
+    url: string,
+    path: string,
+    expectedSize: number
+  ): Promise<void> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await this.downloadTo(url, path, expectedSize)
+        return
+      } catch (error) {
+        if (this.cancelled) throw error
+        if (attempt >= DOWNLOAD_ATTEMPTS || !isRetryableDownloadError(error)) throw error
+        const wait = this.retryDelayMs * attempt
+        log.warn(
+          `update download failed (attempt ${attempt}/${DOWNLOAD_ATTEMPTS}), retrying in ${wait}ms:`,
+          describeError(error)
+        )
+        this.activeRequest = null
+        await rm(path, { force: true }).catch(() => undefined)
+        this.setState({
+          phase: 'downloading',
+          downloadedBytes: 0,
+          totalBytes: expectedSize,
+          progress: 0,
+          message: `下载中断，正在重试（${attempt + 1}/${DOWNLOAD_ATTEMPTS}）…`,
+          error: null
+        })
+        await this.waitForRetry(wait)
+        if (this.cancelled) throw new Error('下载已取消')
+      }
+    }
+  }
+
+  /** Cancellable sleep: `cancel()` resolves it immediately instead of waiting. */
+  private waitForRetry(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.retryResolve = resolve
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null
+        this.retryResolve = null
+        resolve()
+      }, ms)
+    })
+  }
+
+  private clearRetryWait(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer)
+    this.retryTimer = null
+    const resolve = this.retryResolve
+    this.retryResolve = null
+    resolve?.()
   }
 
   private downloadTo(url: string, path: string, expectedSize: number): Promise<void> {
@@ -317,15 +403,23 @@ export class UpdateService {
       let received = 0
       let lastEmit = 0
       let settled = false
+      let failure: Error | null = null
 
       const fail = (error: Error): void => {
         if (settled) return
         settled = true
+        failure = error
         output.destroy()
-        rejectPromise(error)
       }
 
       output.on('error', (error: Error) => fail(error))
+      // 只有流关闭后才 reject：重试会重新打开（截断）同一个 .part 文件，
+      // 句柄没关干净时在 Windows 上会抢锁。
+      output.on('close', () => {
+        if (!failure) return
+        this.activeRequest = null
+        rejectPromise(failure)
+      })
       output.on('finish', () => {
         if (settled) return
         settled = true
@@ -342,7 +436,7 @@ export class UpdateService {
         const status = response.statusCode ?? 0
         if (status !== 200) {
           response.on('data', () => undefined)
-          response.on('end', () => fail(new Error(`下载更新失败（HTTP ${status}）`)))
+          response.on('end', () => fail(new DownloadHttpError(status)))
           response.on('error', (error: Error) => fail(error))
           return
         }
