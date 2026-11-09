@@ -63,7 +63,7 @@ export function pasteScript(appName?: string | null): string {
 export type PasteSettingsPane = 'accessibility' | 'automation'
 
 export const MAC_ACCESSIBILITY_HINT =
-  '需要在「系统设置 → 隐私与安全性 → 辅助功能」里允许 Flashcast。更新后系统会作废旧授权，即使开关看起来是开的，也请关掉再打开（或用「−」移除后重新添加），然后重启 Flashcast'
+  '需要在「系统设置 → 隐私与安全性 → 辅助功能」里允许 Flashcast。覆盖安装会让旧条目与新签名对不上（开关看着是开的也不生效）：请选中 Flashcast 用「−」移除，再按 ⌥↵ 让系统重新登记并打开开关，然后重启 Flashcast'
 
 export const MAC_AUTOMATION_HINT =
   '需要在「系统设置 → 隐私与安全性 → 自动化」里允许 Flashcast 控制 System Events，然后重启 Flashcast'
