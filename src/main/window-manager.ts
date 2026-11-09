@@ -1,13 +1,15 @@
-import { BrowserWindow, Notification, screen, shell } from 'electron'
+import { app, BrowserWindow, Notification, screen, shell } from 'electron'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { IPC } from '@shared/ipc'
 import type { PlatformId, WindowRole } from '@shared/types'
 import { assetsDir, isDev } from './paths'
 import { log } from './logger'
+import { frontmostAppName } from './front-app'
+import type { PasteTarget } from './native-paste'
 
 interface WindowCallbacks {
-  onPasteAfterHide: () => Promise<{ ok: boolean; error?: string }>
+  onPasteAfterHide: (target: PasteTarget) => Promise<{ ok: boolean; error?: string }>
   theme: () => { themeId: string; mode: 'dark' | 'light'; background: string }
 }
 
@@ -21,6 +23,8 @@ export class WindowManager extends EventEmitter {
   private closeTimer: NodeJS.Timeout | null = null
   private showGuardUntil = 0
   private pasteAfterHide = false
+  /** App the launcher was opened from; used to restore focus before pasting. */
+  private previousAppName: string | null = null
 
   constructor(
     private readonly platform: PlatformId,
@@ -198,6 +202,9 @@ export class WindowManager extends EventEmitter {
       clearTimeout(this.closeTimer)
       this.closeTimer = null
     }
+    // 必须在 show() 之前采样：等窗口拿到焦点后，前台应用就变成我们自己了。
+    this.capturePreviousApp()
+    if (this.platform === 'darwin' && app.isHidden()) app.show()
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
     const workArea = display.workArea
     window.setBounds(workArea)
@@ -262,9 +269,13 @@ export class WindowManager extends EventEmitter {
       this.launcher.hide()
     }
     if (shouldPaste) {
+      // macOS 下 LSUIElement 应用在隐藏唯一窗口后仍占据前台：不主动退到后台，
+      // 合成的 ⌘V 会落回我们自己的隐藏窗口，目标应用收不到粘贴。
+      if (this.platform === 'darwin') app.hide()
+      const target: PasteTarget = { appName: this.previousAppName }
       setTimeout(async () => {
         try {
-          const result = await this.callbacks.onPasteAfterHide()
+          const result = await this.callbacks.onPasteAfterHide(target)
           if (!result.ok) this.notifyPasteFailure(result.error ?? '无法触发粘贴')
         } catch (error) {
           this.notifyPasteFailure((error as Error).message)
@@ -273,7 +284,21 @@ export class WindowManager extends EventEmitter {
     }
   }
 
+  /**
+   * Records which app the launcher was opened from so the paste helper can
+   * hand focus back before pressing ⌘V. When we are already frontmost (palette
+   * opened from the settings window) the target is unknown and macOS' own
+   * focus restoration is the better answer.
+   */
+  private capturePreviousApp(): void {
+    if (this.platform !== 'darwin') return
+    const name = frontmostAppName()
+    this.previousAppName = name && name !== app.getName() ? name : null
+  }
+
   openSettings(): void {
+    // 粘贴后应用处于隐藏状态，直接从托盘打开设置窗口会看不见。
+    if (this.platform === 'darwin' && app.isHidden()) app.show()
     const existing = this.settings && !this.settings.isDestroyed() ? this.settings : null
     if (existing) {
       existing.show()

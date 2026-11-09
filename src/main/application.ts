@@ -154,7 +154,7 @@ export class FlashcastApplication {
     await this.applyLaunchAtLogin(this.config.getPrefs().launchAtLogin)
 
     this.windows = new WindowManager(this.platform, {
-      onPasteAfterHide: () => pasteIntoActiveApp(this.platform),
+      onPasteAfterHide: (target) => pasteIntoActiveApp(this.platform, target),
       theme: () => this.themeForWindow()
     })
     this.shortcuts = new ShortcutManager(this.platform, {
