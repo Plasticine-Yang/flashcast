@@ -358,7 +358,7 @@ Dracula 与 Tokyo Night 只提供深色变体：选中后生效模式锁定为�
 - **自动粘贴**：macOS 使用 AppleScript（需辅助功能权限，以及允许控制 System Events 的自动化权限；覆盖安装会重置 ad-hoc 签名的授权，需要重新开启）；Windows 使用 PowerShell 调用 `WScript.Shell.SendKeys`；Linux 依赖 `wtype`（Wayland）、`xdotool`（X11）或 `ydotool`。成功粘贴前会先把焦点交还给呼出启动器前的应用——macOS 上隐藏唯一窗口不会让 LSUIElement 应用退到后台，否则合成的 `⌘V` 会落回自己。失败时保留系统剪贴板内容并发送系统通知。
 - **剪切板文件类型**：图片会保存为本地媒体；视频/音乐读取文件 URI，恢复时写入 `text/uri-list` + 文本路径，部分文件管理器可能需要再复制一次才能得到原生文件对象。
 - **视频封面**：若系统安装 `ffmpeg`，截取首帧作为封面；否则使用内置设计封面。视频不播放。
-- **应用发现**：Linux 读取 `.desktop`；macOS 扫描 `/Applications` 等目录，解析 bundle 的 `.icns`（必要时用系统 `sips` 转 PNG）；Windows 扫描开始菜单快捷方式，并从 `.lnk` / `.url` 的 `TargetPath` / `IconLocation` 取应用图标（`.lnk` 本身只有通用图标）。部分 UWP/特殊打包应用可能不出现。
+- **应用发现**：Linux 读取 `.desktop`；macOS 扫描 `/Applications` 等目录并补上 CoreServices 里的 Finder，应用名优先取 bundle 的中文本地化名（取不到才用英文文件名，`finder` 与 `访达` 都可搜），图标解析 bundle 的 `.icns`（必要时用系统 `sips` 转 PNG）；Windows 扫描开始菜单快捷方式，并从 `.lnk` / `.url` 的 `TargetPath` / `IconLocation` 取应用图标（`.lnk` 本身只有通用图标）。部分 UWP/特殊打包应用可能不出现。
 - **编辑器历史清理**：只在编辑器未运行时执行；写入前备份 `state.vscdb`、`storage.json`，并把 `workspaceStorage/<hash>` 移到备份目录，编辑器运行中会拒绝操作。远程工作区同样可以多选清理，但不会删除远端目录。
 - **自动更新**：只支持 GitHub Release 中列出的产物。macOS 用 zip 原地替换 `.app`（替换前备份、启动失败自动回滚），Windows 静默运行 NSIS 安装器，Linux AppImage 原地替换并重启；`.dmg` / `.deb` 因为需要系统安装器，下载后交给系统打开。产物只带 ad-hoc 签名、未做公证，首次启动仍需 Gatekeeper / SmartScreen 确认；开发构建不提供就地安装。
 - **菜单栏图标**：macOS 使用 18pt 模板图（`@2x` 36px），与系统状态栏图标等高；Linux/Windows 继续使用 64px 彩色托盘图。

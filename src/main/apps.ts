@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import type { AppEntry, PlatformId } from '@shared/types'
 import { log } from './logger'
 import { aliasTargetsFromBytes } from './mac-alias'
+import { resolveMacAppName } from './mac-app-name'
 import { userDataDir } from './paths'
 import { parseInternetShortcut, parseShellLink, shortcutIconCandidates } from './windows-shortcuts'
 
@@ -295,6 +296,13 @@ const MAC_APP_DIRS = [
   join(homedir(), 'Applications')
 ]
 
+/**
+ * Finder 跟着系统外壳放在 CoreServices 下，不在上面几个应用目录里。其余 CoreServices
+ * 应用是系统面板和后台代理（AirDropUI、ControlCenter…），不该出现在应用列表里，
+ * 所以只补 Finder，不扫整个目录。
+ */
+const MAC_EXTRA_APPS = ['/System/Library/CoreServices/Finder.app']
+
 /** 应用行里的图标按 32pt 展示，64px 足够覆盖 2x 屏。 */
 const MAC_ICON_MAX_PX = 64
 /** 转换逻辑或取图方式变化时改这里，旧的缓存文件自然失效。 */
@@ -488,6 +496,11 @@ async function macAppIcon(appPath: string): Promise<string | undefined> {
 async function listMacApps(): Promise<AppRecord[]> {
   const paths: string[] = []
   const seen = new Set<string>()
+  const add = (path: string): void => {
+    if (seen.has(path)) return
+    seen.add(path)
+    paths.push(path)
+  }
   for (const dir of MAC_APP_DIRS) {
     if (!existsSync(dir)) continue
     let entries
@@ -497,22 +510,24 @@ async function listMacApps(): Promise<AppRecord[]> {
       continue
     }
     for (const entry of entries) {
-      if (!entry.name.endsWith('.app')) continue
-      const path = join(dir, entry.name)
-      if (seen.has(path)) continue
-      seen.add(path)
-      paths.push(path)
+      if (entry.name.endsWith('.app')) add(join(dir, entry.name))
     }
   }
+  for (const path of MAC_EXTRA_APPS) {
+    if (existsSync(path)) add(path)
+  }
 
-  // 每个图标都要拉起一次 sips，限制并发避免一次创建上百个进程。
-  const icons = await mapLimit(paths, 6, macAppIcon)
+  // 名字要读本地化资源，图标要拉起 sips；两边都限并发，避免一次创建上百个进程。
+  const [names, icons] = await Promise.all([
+    mapLimit(paths, 6, resolveMacAppName),
+    mapLimit(paths, 6, macAppIcon)
+  ])
   return paths.map((path, index): AppRecord => {
     return {
       id: stableId(path),
-      name: basename(path, '.app'),
+      name: names[index].name,
       subtitle: '应用',
-      keywords: [],
+      keywords: names[index].keywords,
       icon: icons[index],
       iconKey: 'app',
       launch: { type: 'bundle', path }
