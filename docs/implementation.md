@@ -127,8 +127,10 @@ Windows 的 `app.getFileIcon()` 对 `.lnk` 按扩展名取图，只会返回“�
 - 预览出场由 `ClipboardView` 在挂载时测量选中行与预览的 rect，生成贴着预览左缘、对齐选中行的 12×8px 水珠，再用 WAAPI 展开 `clip-path`（圆角 6 → 14）、`translateX(16 → 0)` 与 opacity，总长 420ms；预览不再播放收起动画。旧版的 2px 停留进度线已移除。
 - 列表 FLIP 只在条目集合/顺序变化时测量 `offsetTop`；悬停、预览内容更新等普通渲染不会重启动画，避免行在鼠标移动时抖动。
 - 快捷键路径的 `esc`：通过全局剪切板快捷键直接进入时，`esc` 直接关闭启动器；从全局搜索页主动进入剪切板时，`esc` 仍退出插件回到全局页。设置页内 `esc` 先返回插件主页。
-- 回车：写回系统剪贴板 → 置顶 → 关闭动画 → 隐藏窗口，不粘贴。
-- `Alt/Option+Enter`：同上，并在窗口隐藏后由主进程调用平台粘贴助手。macOS 下隐藏唯一窗口不会让 LSUIElement 应用退到后台，`⌘V` 会落回自己的隐藏窗口，因此主进程在呼出时用 `lsappinfo` 记下前台应用，粘贴前先把它设回前台再按键（`app.hide()` 作为兜底）。按键前用 `systemPreferences.isTrustedAccessibilityClient()` 预检辅助功能授权：未授权时直接给出针对性的提示并调用一次 `prompt=true` 把应用登记到列表里；`-1743`（自动化被拒）与 `-25211`（辅助功能被拒）分别映射到不同文案，失败通知可点击跳转系统设置对应面板。
+- 回车：写回系统剪贴板 → 置顶 → 关闭动画 → 隐藏窗口，不粘贴；隐藏后显式把焦点交还给呼出前的应用。
+- `Alt/Option+Enter`：同上，并在窗口隐藏后由主进程调用平台粘贴助手。macOS 下隐藏唯一窗口不会让 LSUIElement 应用退到后台，`⌘V` 会落回自己的隐藏窗口，因此主进程在呼出前记录前台应用（原生插件返回 pid，插件缺失时用 `lsappinfo` 兜底），粘贴前先激活它再按键。
+- macOS 粘贴优先走 `native/paste` 的 N-API 插件：`NSRunningApplication.activate` + `CGEvent`（keycode 9、command flag、session tap、suppression filter），在 Electron 主进程内完成，TCC 记在 Flashcast 的辅助功能（PostEvent）名下，不需要 System Events 与自动化权限；插件缺失或加载失败时回退 AppleScript（`set frontmost` + 轮询 + `keystroke`），此时才需要自动化权限。按键前用 `systemPreferences.isTrustedAccessibilityClient()` 预检辅助功能授权：未授权时直接给出针对性的提示并调用一次 `prompt=true` 把应用登记到列表里；`-1743`（自动化被拒）与 `-25211`（辅助功能被拒）分别映射到不同文案，失败通知可点击跳转系统设置对应面板。
+- macOS 关闭路径区分“显式关闭”和“点击外部失焦”：回车/Esc/粘贴会 `restoreFocus`，点击外部交给系统；不再有 100ms/120ms 的固定等待，粘贴链路只剩关闭动画（约 180ms）加一次激活。
 - `Ctrl+Backspace`：行先 120ms 淡出，随后删除；剩余行通过 `useFlipAnimation` 做 220ms FLIP。
 - 清空：组合键第一次进入危险确认条，3s 内再按执行；Esc 或其他键取消。
 

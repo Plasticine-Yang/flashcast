@@ -6,7 +6,18 @@ import type { PlatformId, WindowRole } from '@shared/types'
 import { assetsDir, isDev } from './paths'
 import { log } from './logger'
 import { frontmostAppName } from './front-app'
-import { MAC_SETTINGS_URL, type PasteSettingsPane, type PasteTarget } from './native-paste'
+import {
+  activatePreviousApp,
+  frontmostApplication,
+  MAC_SETTINGS_URL,
+  nativePaste,
+  type PasteSettingsPane,
+  type PasteTarget
+} from './native-paste'
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 interface WindowCallbacks {
   onPasteAfterHide: (
@@ -25,8 +36,10 @@ export class WindowManager extends EventEmitter {
   private closeTimer: NodeJS.Timeout | null = null
   private showGuardUntil = 0
   private pasteAfterHide = false
+  private restoreFocusAfterHide = false
   /** App the launcher was opened from; used to restore focus before pasting. */
   private previousAppName: string | null = null
+  private previousAppPid: number | null = null
 
   constructor(
     private readonly platform: PlatformId,
@@ -234,7 +247,7 @@ export class WindowManager extends EventEmitter {
       return
     }
     if (this.launcher.isVisible() && !this.closing) {
-      this.requestClose()
+      this.requestClose(false, true)
     } else {
       this.showLauncher()
     }
@@ -248,41 +261,74 @@ export class WindowManager extends EventEmitter {
     this.showLauncher('clipboard')
   }
 
-  requestClose(paste = false): void {
+  requestClose(paste = false, restoreFocus = false): void {
     if (!this.launcher || !this.launcher.isVisible() || this.closing) {
-      if (paste) this.hideImmediately(true)
+      if (paste) this.hideImmediately(true, restoreFocus)
       return
     }
     this.pasteAfterHide = this.pasteAfterHide || paste
+    this.restoreFocusAfterHide = this.restoreFocusAfterHide || restoreFocus
     this.closing = true
-    this.launcher.webContents.send(IPC.closeRequest)
+    this.launcher.webContents.send(IPC.closeRequest, { restoreFocus: this.restoreFocusAfterHide })
     this.closeTimer = setTimeout(() => {
-      this.hideImmediately(this.pasteAfterHide)
+      this.hideImmediately(this.pasteAfterHide, this.restoreFocusAfterHide)
     }, 420)
   }
 
-  hideImmediately(paste = false): void {
+  hideImmediately(paste = false, restoreFocus = false): void {
     if (this.closeTimer) clearTimeout(this.closeTimer)
     this.closeTimer = null
     this.closing = false
     const shouldPaste = paste || this.pasteAfterHide
+    const shouldRestore = restoreFocus || this.restoreFocusAfterHide || shouldPaste
     this.pasteAfterHide = false
+    this.restoreFocusAfterHide = false
     if (this.launcher && !this.launcher.isDestroyed()) {
       this.launcher.hide()
     }
+    const target: PasteTarget = { appName: this.previousAppName, pid: this.previousAppPid }
     if (shouldPaste) {
-      // macOS 下 LSUIElement 应用在隐藏唯一窗口后仍占据前台：不主动退到后台，
-      // 合成的 ⌘V 会落回我们自己的隐藏窗口，目标应用收不到粘贴。
-      if (this.platform === 'darwin') app.hide()
-      const target: PasteTarget = { appName: this.previousAppName }
-      setTimeout(async () => {
-        try {
-          const result = await this.callbacks.onPasteAfterHide(target)
-          if (!result.ok) this.notifyPasteFailure(result.error ?? '无法触发粘贴', result.settings)
-        } catch (error) {
-          this.notifyPasteFailure((error as Error).message)
-        }
-      }, 100)
+      void this.runPasteAfterHide(target)
+      return
+    }
+    if (shouldRestore) this.restoreFocus(target)
+  }
+
+  /**
+   * macOS keeps an LSUIElement app frontmost after its only window hides, so a
+   * normal close has to hand focus back explicitly. The native backend does it
+   * with NSRunningApplication; app.hide() is the fallback for builds without
+   * the addon. Windows/Linux restore focus through their window manager.
+   */
+  private restoreFocus(target: PasteTarget): void {
+    if (this.platform !== 'darwin' || !this.previousAppName) return
+    if (activatePreviousApp('darwin', target)) return
+    app.hide()
+  }
+
+  private async runPasteAfterHide(target: PasteTarget): Promise<void> {
+    // The native backend activates the target itself. The AppleScript fallback
+    // cannot move focus reliably while Flashcast is still the active app, so
+    // step aside first and give the window server a moment.
+    const addon = nativePaste()
+    if (this.platform === 'darwin' && !(addon && target.pid) && this.previousAppName) {
+      app.hide()
+      await delay(50)
+    } else if (this.platform !== 'darwin') {
+      // Windows/Linux have no in-process query: give the window manager a beat
+      // to hand focus back before the platform helper sends its keystroke.
+      await delay(40)
+    }
+    try {
+      const result = await this.callbacks.onPasteAfterHide(target)
+      if (!result.ok) {
+        this.notifyPasteFailure(result.error ?? '无法触发粘贴', result.settings)
+        // Keep the failure usable: hand focus back so the user can press ⌘V.
+        this.restoreFocus(target)
+      }
+    } catch (error) {
+      this.notifyPasteFailure((error as Error).message)
+      this.restoreFocus(target)
     }
   }
 
@@ -294,8 +340,13 @@ export class WindowManager extends EventEmitter {
    */
   private capturePreviousApp(): void {
     if (this.platform !== 'darwin') return
-    const name = frontmostAppName()
-    this.previousAppName = name && name !== app.getName() ? name : null
+    const native = frontmostApplication()
+    // Keep the process name (what System Events matches) for the AppleScript
+    // fallback; the native backend only needs the pid.
+    const name = frontmostAppName() ?? native?.name ?? null
+    const isSelf = name === app.getName() || native?.name === app.getName()
+    this.previousAppName = name && !isSelf ? name : null
+    this.previousAppPid = name && !isSelf ? (native?.pid ?? null) : null
   }
 
   openSettings(): void {

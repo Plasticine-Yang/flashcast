@@ -1,6 +1,7 @@
 import { systemPreferences } from 'electron'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { delimiter, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { PlatformId, SystemSettingsPane } from '@shared/types'
@@ -8,12 +9,113 @@ import { log } from './logger'
 
 const execFileAsync = promisify(execFile)
 
-/** Give the window server a moment to finish hiding the launcher. */
-const SETTLE_MS = 120
-
 export interface PasteTarget {
   /** macOS process name of the app that was frontmost before the launcher. */
   appName?: string | null
+  /** Process id captured before the launcher stole focus; enables the native backend. */
+  pid?: number | null
+}
+
+/**
+ * The macOS fast path. It lives in the Electron main process so TCC attributes
+ * the synthetic ⌘V to Flashcast itself (Accessibility/PostEvent), exactly like
+ * a native clipboard manager; no System Events or Automation grant involved.
+ */
+export interface NativePasteAddon {
+  frontmost(): { pid: number; name: string } | null
+  activate(pid: number): boolean
+  paste(pid: number): boolean
+}
+
+export interface FrontmostApplication {
+  pid: number
+  name: string
+}
+
+let nativeAddon: NativePasteAddon | null | undefined
+
+function nativeCandidates(): string[] {
+  const file = `paste-${process.arch}.node`
+  const candidates: string[] = []
+  if (process.resourcesPath) candidates.push(join(process.resourcesPath, 'native', file))
+  candidates.push(join(__dirname, '../../native/dist', file))
+  candidates.push(join(__dirname, '../../native/paste/build/Release/paste.node'))
+  return candidates
+}
+
+/**
+ * Loads the optional macOS addon. Tests must never post real keystrokes, and
+ * `FLASHCAST_DISABLE_NATIVE_PASTE=1` keeps a pure-AppleScript path available
+ * for debugging or for users who want to compare both backends.
+ */
+export function nativePaste(): NativePasteAddon | null {
+  if (nativeAddon !== undefined) return nativeAddon
+  nativeAddon = null
+  if (
+    process.platform !== 'darwin' ||
+    process.env.VITEST ||
+    process.env.FLASHCAST_DISABLE_NATIVE_PASTE === '1'
+  ) {
+    return null
+  }
+
+  let requireNative: NodeJS.Require
+  try {
+    requireNative = createRequire(join(process.cwd(), 'package.json'))
+  } catch {
+    return null
+  }
+
+  for (const file of nativeCandidates()) {
+    if (!existsSync(file)) continue
+    try {
+      const loaded = requireNative(file) as Partial<NativePasteAddon>
+      if (
+        typeof loaded.frontmost === 'function' &&
+        typeof loaded.activate === 'function' &&
+        typeof loaded.paste === 'function'
+      ) {
+        nativeAddon = loaded as NativePasteAddon
+        log.info('native paste backend:', file)
+        return nativeAddon
+      }
+    } catch (error) {
+      log.warn('native paste backend failed:', file, (error as Error).message)
+    }
+  }
+  log.warn('native paste backend unavailable; using AppleScript fallback')
+  return null
+}
+
+/** Frontmost app via the addon, or null when the native backend is unavailable. */
+export function frontmostApplication(): FrontmostApplication | null {
+  const addon = nativePaste()
+  if (!addon) return null
+  try {
+    const result = addon.frontmost()
+    return result && result.pid > 0 ? result : null
+  } catch (error) {
+    log.warn('native frontmost failed:', (error as Error).message)
+    return null
+  }
+}
+
+/**
+ * Hands focus back to the app the palette was opened from. Windows/Linux let
+ * the window manager restore focus when the launcher hides, so only macOS
+ * needs an explicit activation; false means the caller should fall back to
+ * `app.hide()`.
+ */
+export function activatePreviousApp(platform: PlatformId, target: PasteTarget): boolean {
+  if (platform !== 'darwin') return true
+  const addon = nativePaste()
+  if (!addon || !target.pid) return false
+  try {
+    return addon.activate(target.pid)
+  } catch (error) {
+    log.warn('native activate failed:', (error as Error).message)
+    return false
+  }
 }
 
 function commandExists(command: string): boolean {
@@ -26,10 +128,6 @@ function commandExists(command: string): boolean {
 
 async function run(command: string, args: string[]): Promise<void> {
   await execFileAsync(command, args, { timeout: 4000 })
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /** Quotes a value for AppleScript so an app name cannot break the script. */
@@ -131,19 +229,30 @@ function accessibilityTrusted(): boolean {
 /**
  * Synthesises a paste keystroke in the previously focused app. There is no
  * portable Electron API for this, so the host relies on small platform helpers:
- * wtype/xdotool/ydotool on Linux, AppleScript on macOS, PowerShell on Windows.
+ * wtype/xdotool/ydotool on Linux, the native CGEvent addon on macOS, and
+ * AppleScript as the macOS fallback; PowerShell on Windows.
  */
 export async function pasteIntoActiveApp(
   platform: PlatformId,
   target: PasteTarget = {}
 ): Promise<{ ok: boolean; error?: string; settings?: PasteSettingsPane }> {
-  await delay(SETTLE_MS)
-
   try {
     if (platform === 'darwin') {
       if (!accessibilityTrusted()) {
         log.warn('paste blocked: accessibility permission missing')
         return { ok: false, error: MAC_ACCESSIBILITY_HINT, settings: 'accessibility' }
+      }
+      const addon = nativePaste()
+      if (addon && target.pid) {
+        try {
+          if (addon.paste(target.pid)) {
+            log.info('pasted via native backend:', target.appName ?? target.pid)
+            return { ok: true }
+          }
+          log.warn('native paste returned false; falling back to AppleScript')
+        } catch (error) {
+          log.warn('native paste failed:', (error as Error).message)
+        }
       }
       log.info('pasting into:', target.appName ?? '(unspecified)')
       await run('osascript', ['-e', pasteScript(target.appName)])

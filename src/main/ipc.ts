@@ -125,7 +125,10 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
   })
   ipcMain.on(IPC.hideLauncher, (_event, options: unknown) => {
     const record = options && typeof options === 'object' ? (options as Record<string, unknown>) : {}
-    application.hideLauncher({ paste: record.paste === true })
+    application.hideLauncher({
+      paste: record.paste === true,
+      restoreFocus: record.restoreFocus === true
+    })
   })
 
   ipcMain.handle(IPC.updatePrefs, async (_event, patch: unknown) =>

@@ -455,7 +455,8 @@ export function Launcher(): React.JSX.Element {
       showToast({ message: result.error ?? '无法打开书签', tone: 'danger' })
       return
     }
-    await closeLauncher(false)
+    // Chrome takes focus; don't pull it back to the previous app.
+    await closeLauncher(false, false)
   }
 
   const runWorkspaceActivation = async (
@@ -468,7 +469,8 @@ export function Launcher(): React.JSX.Element {
       return
     }
     if (result.toast) showToast(result.toast)
-    await closeLauncher(false)
+    // The editor is taking focus; don't restore the previous app over it.
+    await closeLauncher(false, false)
   }
 
   const runWorkspaceReveal = async (workspace: EditorWorkspace): Promise<void> => {
@@ -507,7 +509,7 @@ export function Launcher(): React.JSX.Element {
         void api.launchApp(item.refId).then(async (result) => {
           if (!result.ok) showToast({ message: result.error ?? '启动应用失败', tone: 'danger' })
           else if (result.toast) showToast(result.toast)
-          else await closeLauncher(false)
+          else await closeLauncher(false, false)
         })
         return
       }
@@ -711,7 +713,7 @@ export function Launcher(): React.JSX.Element {
     }, 20)
   }
 
-  const closeLauncher = async (paste = false): Promise<void> => {
+  const closeLauncher = async (paste = false, restoreFocus = true): Promise<void> => {
     if (closingRef.current) return
     closingRef.current = true
     const closeToken = ++closeTokenRef.current
@@ -759,7 +761,7 @@ export function Launcher(): React.JSX.Element {
     window.setTimeout(() => {
       if (closeToken !== closeTokenRef.current) return
       setIdlePanelSurface()
-      api.hideLauncher({ paste })
+      api.hideLauncher({ paste, restoreFocus })
       closingRef.current = false
       setClosing(false)
     }, reduced ? 120 : ANIMATION.closeHide)
@@ -773,7 +775,7 @@ export function Launcher(): React.JSX.Element {
   // Open the settings window from inside the launcher: retract the panel first
   // so the always-on-top launcher never covers the window that takes focus.
   const openSettingsWindow = (): void => {
-    void closeLauncher(false)
+    void closeLauncher(false, false)
     window.setTimeout(() => {
       void api.openSettings()
     }, 140)
@@ -912,7 +914,11 @@ export function Launcher(): React.JSX.Element {
       })
     )
     offs.push(api.on('apps:changed', (entries) => setApps(entries)))
-    offs.push(api.on('launcher:close-request', () => void closeLauncherRef.current(false)))
+    offs.push(
+      api.on('launcher:close-request', ({ restoreFocus }) =>
+        void closeLauncherRef.current(false, restoreFocus)
+      )
+    )
     offs.push(
       api.on('launcher:open-plugin', ({ pluginId }) => {
         // Only the global clipboard hotkey enters through this channel. Mark it
@@ -1572,7 +1578,7 @@ export function Launcher(): React.JSX.Element {
                       else if (item.kind === 'app') {
                         void api.launchApp(item.refId).then(async (result) => {
                           if (!result.ok) showToast({ message: result.error ?? '启动应用失败', tone: 'danger' })
-                          else await closeLauncher(false)
+                          else await closeLauncher(false, false)
                         })
                       } else {
                         void api.runCommand(item.refId as 'settings' | 'check-updates' | 'refresh-apps' | 'quit').then(async (result) => {

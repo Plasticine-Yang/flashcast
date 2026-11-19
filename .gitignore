@@ -11,3 +11,6 @@ extensions/
 .worktrees/
 .agent-tmp/
 __pycache__/
+
+native/dist/
+native/paste/build/

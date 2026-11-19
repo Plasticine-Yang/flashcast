@@ -803,8 +803,8 @@ export class FlashcastApplication {
     await shell.openExternal(MAC_SETTINGS_URL[pane])
   }
 
-  hideLauncher(options?: { paste?: boolean }): void {
-    this.windows.hideImmediately(options?.paste === true)
+  hideLauncher(options?: { paste?: boolean; restoreFocus?: boolean }): void {
+    this.windows.hideImmediately(options?.paste === true, options?.restoreFocus === true)
   }
 
   toast(message: string, tone: 'default' | 'success' | 'warning' | 'danger' = 'default'): void {

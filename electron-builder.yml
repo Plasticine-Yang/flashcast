@@ -24,6 +24,10 @@ afterPack: scripts/after-pack.mjs
 mac:
   category: public.app-category.productivity
   icon: build/icon.png
+  # 主进程内加载的原生粘贴插件；只进 macOS 产物，缺失时运行时会回退 AppleScript。
+  extraResources:
+    - from: native/dist
+      to: native
   target:
     - dmg
     - zip

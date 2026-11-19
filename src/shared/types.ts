@@ -512,7 +512,7 @@ export interface GitDiffResult {
 
 export interface FlashcastEvents {
   'launcher:shown': undefined
-  'launcher:close-request': undefined
+  'launcher:close-request': { restoreFocus: boolean }
   'launcher:open-plugin': { pluginId: string }
   'apps:changed': AppEntry[]
   'clipboard:changed': ClipboardItem[]
@@ -578,7 +578,7 @@ export interface FlashcastApi {
   getFavicons(domains: string[]): Promise<Record<string, string>>
   openSystemSettings(pane: SystemSettingsPane): Promise<void>
   openSettings(): Promise<void>
-  hideLauncher(options?: { paste?: boolean }): void
+  hideLauncher(options?: { paste?: boolean; restoreFocus?: boolean }): void
 
   launchApp(appId: string): Promise<ActionResult>
   runCommand(commandId: CommandEntry['id']): Promise<ActionResult>

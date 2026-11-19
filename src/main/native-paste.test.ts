@@ -9,7 +9,9 @@ vi.mock('electron', () => ({ systemPreferences }))
 const {
   MAC_ACCESSIBILITY_HINT,
   MAC_AUTOMATION_HINT,
+  activatePreviousApp,
   appleScriptString,
+  nativePaste,
   pasteFailureMessage,
   pasteIntoActiveApp,
   pasteScript
@@ -56,6 +58,13 @@ describe('paste helpers', () => {
     expect(pasteFailureMessage('timed out', 'darwin')).toEqual({ message: 'timed out' })
     expect(pasteFailureMessage('-1743', 'linux')).toEqual({ message: '-1743' })
     expect(pasteFailureMessage('', 'linux')).toEqual({ message: '无法触发粘贴' })
+  })
+
+  it('never loads the native addon in unit tests', () => {
+    // A real addon would post ⌘V into whatever app is frontmost on the test machine.
+    expect(nativePaste()).toBeNull()
+    expect(activatePreviousApp('darwin', { pid: 1 })).toBe(false)
+    expect(activatePreviousApp('win32', {})).toBe(true)
   })
 
   it('refuses to paste while accessibility is not granted, and says so', async () => {
