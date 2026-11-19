@@ -901,8 +901,17 @@ export function Launcher(): React.JSX.Element {
     offs.push(
       api.on('launcher:shown', () => {
         resetForShow()
+        // 启动器常驻，应用是在它运行期间安装/更新的话，内存里的列表已经过期。
+        // 主进程只 stat 一遍应用目录，没变化时返回 null，不产生额外传输。
+        void api
+          .syncApps()
+          .then((entries) => {
+            if (entries) setApps(entries)
+          })
+          .catch(() => {})
       })
     )
+    offs.push(api.on('apps:changed', (entries) => setApps(entries)))
     offs.push(api.on('launcher:close-request', () => void closeLauncherRef.current(false)))
     offs.push(
       api.on('launcher:open-plugin', ({ pluginId }) => {

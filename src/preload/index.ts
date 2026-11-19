@@ -40,6 +40,7 @@ const eventNames = new Set<EventName>([
   'launcher:shown',
   'launcher:close-request',
   'launcher:open-plugin',
+  'apps:changed',
   'clipboard:changed',
   'plugins:changed',
   'theme:changed',
@@ -56,6 +57,7 @@ const api: FlashcastApi = {
 
   getBootstrap: () => invoke<BootstrapData>(IPC.bootstrap),
   getApps: () => invoke<AppEntry[]>(IPC.getApps),
+  syncApps: () => invoke<AppEntry[] | null>(IPC.syncApps),
   refreshApps: () => invoke<AppEntry[]>(IPC.refreshApps),
 
   getPluginPage: (pluginId) => invoke<PluginPage>(IPC.getPluginPage, pluginId),

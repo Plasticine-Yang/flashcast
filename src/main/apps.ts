@@ -13,14 +13,21 @@ import { resolveMacAppName } from './mac-app-name'
 import { userDataDir } from './paths'
 import { parseInternetShortcut, parseShellLink, shortcutIconCandidates } from './windows-shortcuts'
 
-interface LaunchDescriptor {
+export interface LaunchDescriptor {
   type: 'desktop' | 'bundle' | 'shortcut'
   path: string
   exec?: string
 }
 
-interface AppRecord extends AppEntry {
+export interface AppRecord extends AppEntry {
   launch: LaunchDescriptor
+}
+
+export interface AppDiscoveryOptions {
+  /** Injection point for tests: replaces the platform scan. */
+  discover?: () => Promise<AppRecord[]>
+  /** Injection point for tests: files whose presence/mtime identify the installed app set. */
+  touchPoints?: () => Promise<string[]>
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -701,23 +708,56 @@ async function listWindowsApps(): Promise<AppRecord[]> {
 
 /* ------------------------------- discovery ------------------------------- */
 
+/**
+ * 应用集合的「触摸点」：每个可安装单元的路径。指纹还会叠加它们的 mtime，
+ * 所以新增、删除、替换 bundle 都会改变指纹，而成本只有一次 readdir 加若干次 stat。
+ */
+async function defaultTouchPoints(platform: PlatformId): Promise<string[]> {
+  if (platform === 'darwin') {
+    const lists = await Promise.all(
+      MAC_APP_DIRS.map(async (dir) => {
+        try {
+          const entries = await readdir(dir, { withFileTypes: true })
+          return entries
+            .filter((entry) => entry.name.endsWith('.app'))
+            .map((entry) => join(dir, entry.name))
+        } catch {
+          return []
+        }
+      })
+    )
+    const paths = lists.flat()
+    for (const path of MAC_EXTRA_APPS) {
+      if (existsSync(path)) paths.push(path)
+    }
+    return paths
+  }
+  if (platform === 'win32') {
+    return (await Promise.all(startMenuDirs().map((dir) => walkShortcuts(dir)))).flat()
+  }
+  return (await Promise.all(desktopDirs().map((dir) => listDesktopFiles(dir)))).flat()
+}
+
 export class AppDiscovery {
   private cache: AppRecord[] | null = null
   private records = new Map<string, AppRecord>()
   private iconCache = new Map<string, string | null>()
   private loading: Promise<AppEntry[]> | null = null
+  /** 建索引时算出的集合指纹，用来判断当前列表是否已经过期。 */
+  private fingerprint: string | null = null
 
-  constructor(private readonly platform: PlatformId) {}
+  constructor(
+    private readonly platform: PlatformId,
+    private readonly options: AppDiscoveryOptions = {}
+  ) {}
 
   async list(): Promise<AppEntry[]> {
     if (this.cache) return this.cache.map(stripRecord)
     if (this.loading) return this.loading
-    this.loading = this.discover()
-      .then((records) => {
-        this.cache = records
-        this.records = new Map(records.map((record) => [record.id, record]))
+    this.loading = this.load()
+      .then((entries) => {
         this.loading = null
-        return records.map(stripRecord)
+        return entries
       })
       .catch((error) => {
         this.loading = null
@@ -727,9 +767,21 @@ export class AppDiscovery {
     return this.loading
   }
 
+  /**
+   * 呼出启动器时的轻量校验：应用目录没变就直接返回 null，变了才重扫。
+   * 重扫是异步的，渲染层拿到新列表后原地替换，不影响面板动画。
+   */
+  async sync(): Promise<AppEntry[] | null> {
+    if (this.loading) return null
+    if (!this.cache) return this.list()
+    if ((await this.computeFingerprint()) === this.fingerprint) return null
+    return this.refresh()
+  }
+
   async refresh(): Promise<AppEntry[]> {
     this.cache = null
     this.records.clear()
+    this.fingerprint = null
     return this.list()
   }
 
@@ -752,6 +804,34 @@ export class AppDiscovery {
       log.warn('launch app failed:', record.name, error)
       return { ok: false, error: (error as Error).message }
     }
+  }
+
+  private async load(): Promise<AppEntry[]> {
+    // 先取指纹再扫描：扫描期间新装的应用会让指纹对不上，下一次 sync 会补扫，
+    // 不会出现「扫描结束后指纹已包含它、缓存里却没有它」的漏网情况。
+    const fingerprint = await this.computeFingerprint()
+    const records = await this.discover()
+    this.cache = records
+    this.records = new Map(records.map((record) => [record.id, record]))
+    this.fingerprint = fingerprint
+    return records.map(stripRecord)
+  }
+
+  private async computeFingerprint(): Promise<string> {
+    const paths = await (this.options.touchPoints
+      ? this.options.touchPoints()
+      : defaultTouchPoints(this.platform))
+    const stamps = await Promise.all(
+      paths.map(async (path) => {
+        try {
+          const info = await stat(path)
+          return `${path}\t${info.mtimeMs}`
+        } catch {
+          return `${path}\t-`
+        }
+      })
+    )
+    return stamps.sort().join('\n')
   }
 
   private launchDesktopFile(launch: LaunchDescriptor): Promise<void> {
@@ -787,6 +867,7 @@ export class AppDiscovery {
   }
 
   private async discover(): Promise<AppRecord[]> {
+    if (this.options.discover) return this.options.discover()
     if (this.platform === 'darwin') return listMacApps()
     if (this.platform === 'win32') return listWindowsApps()
 

@@ -514,6 +514,7 @@ export interface FlashcastEvents {
   'launcher:shown': undefined
   'launcher:close-request': undefined
   'launcher:open-plugin': { pluginId: string }
+  'apps:changed': AppEntry[]
   'clipboard:changed': ClipboardItem[]
   'plugins:changed': PluginSummary[]
   'theme:changed': {
@@ -540,6 +541,7 @@ export interface FlashcastApi {
   readonly platform: PlatformId
   getBootstrap(): Promise<BootstrapData>
   getApps(): Promise<AppEntry[]>
+  syncApps(): Promise<AppEntry[] | null>
   refreshApps(): Promise<AppEntry[]>
 
   getPluginPage(pluginId: string): Promise<PluginPage>

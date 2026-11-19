@@ -30,6 +30,7 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
   )
 
   ipcMain.handle(IPC.getApps, async () => application.getApps())
+  ipcMain.handle(IPC.syncApps, async () => application.syncApps())
   ipcMain.handle(IPC.refreshApps, async () => application.refreshApps())
   ipcMain.handle(IPC.launchApp, async (_event, appId: unknown) =>
     application.launchApp(requireString(appId, '应用 id'))

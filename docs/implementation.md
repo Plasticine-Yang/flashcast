@@ -105,6 +105,8 @@ macOS 应用图标不走 `app.getFileIcon`（实测只返回 32×32 的纯白占
 
 macOS 应用发现扫描 `/Applications`、`/System/Applications` 及其 `Utilities`、`~/Applications`，再单独补上 `/System/Library/CoreServices/Finder.app`：访达跟着系统外壳放在 CoreServices 下，不在应用目录里，而同一目录的其余条目都是系统面板与后台代理，所以只补这一个。应用名取 bundle 的中文本地化名——第三方应用读 `zh_CN`/`zh-Hans`/`zh.lproj/InfoPlist.strings`，系统应用读 `InfoPlist.loctable` 里对应的语言层（`plutil` 转 JSON）——取不到时才退回英文文件名。展示名变成「访达」「系统设置」后，英文文件名仍作为搜索关键字保留，因此 `finder` 与 `访达` 都能命中。
 
+应用列表首次发现后缓存在主进程，启动器每次呼出时只做一次轻量校验：枚举各平台的应用目录，按「路径 + mtime」算指纹（约 100 次 stat，1–2ms），指纹没变就不重扫，变了才重新发现并把结果推给渲染层。这样运行期间新装、更新或删除的应用在下一次呼出即可搜到，不必重启；「重新加载应用」命令走同一条重扫路径，并通过 `apps:changed` 事件替换渲染层手里的旧数组。指纹在扫描前采样，扫描期间发生的安装会留到下一次校验补上。
+
 Windows 的 `app.getFileIcon()` 对 `.lnk` 按扩展名取图，只会返回“带箭头的空白页”，应用网格里所有快捷方式图标一模一样。`windows-shortcuts.ts` 直接解析 Shell Link（MS-SHLLINK）与 `.url` 的 INI，取出 `TargetPath`、`IconLocation` 以及 EnvironmentVariableDataBlock 里的路径（展开 `%VAR%` 后），再优先从目标 exe 取 96px 缩略图，失败退到 `app.getFileIcon(target, 'large')`。`IconLocation` 指向 `.dll` 时要按资源序号定位，默认图标基本不对，所以排在目标 exe 之后；解析不到目标的 `.lnk` 返回空图标，由渲染层回退到统一的应用图标。结果按快捷方式与图标来源的修改时间缓存在 `userData/app-icons`。
 
 ### 3.3 插件进入 / 退出动画

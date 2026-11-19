@@ -14,6 +14,7 @@ import {
 } from '@shared/theme'
 import type {
   ActionResult,
+  AppEntry,
   AppPrefs,
   BootstrapData,
   CommandEntry,
@@ -353,8 +354,19 @@ export class FlashcastApplication {
     return this.apps.list()
   }
 
+  async syncApps() {
+    return this.apps.sync()
+  }
+
   async refreshApps() {
-    return this.apps.refresh()
+    return this.reloadApps()
+  }
+
+  /** 重扫应用列表，并把结果推给所有窗口，避免渲染层继续用旧数组。 */
+  private async reloadApps(): Promise<AppEntry[]> {
+    const entries = await this.apps.refresh()
+    this.broadcast(IPC.appsChanged, entries)
+    return entries
   }
 
   async launchApp(appId: string): Promise<ActionResult> {
@@ -389,7 +401,7 @@ export class FlashcastApplication {
       return { ok: false, error: state.error ?? state.message }
     }
     if (commandId === 'refresh-apps') {
-      await this.apps.refresh()
+      await this.reloadApps()
       return { ok: true, toast: { message: '已重新加载应用列表', tone: 'success' } }
     }
     if (commandId === 'quit') {

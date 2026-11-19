@@ -2,7 +2,9 @@
 export const IPC = {
   bootstrap: 'app:bootstrap',
   getApps: 'apps:list',
+  syncApps: 'apps:sync',
   refreshApps: 'apps:refresh',
+  appsChanged: 'apps:changed',
   launchApp: 'apps:launch',
 
   getPluginPage: 'plugins:page',

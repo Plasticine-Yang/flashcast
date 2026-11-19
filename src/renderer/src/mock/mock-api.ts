@@ -477,6 +477,7 @@ export function createMockApi(): FlashcastApi {
     platform,
     getBootstrap: async () => bootstrap(),
     getApps: async () => mockApps,
+    syncApps: async () => null,
     refreshApps: async () => mockApps,
 
     getPluginPage: async (pluginId): Promise<PluginPage> => {
