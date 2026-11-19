@@ -167,7 +167,7 @@ pnpm release:patch -- --watch    # 推完 tag 跟踪 Actions，成功打印 Rele
 
 `Esc` 在全局搜索页关闭启动器；从全局搜索页进入插件时退出插件；在插件设置页返回插件；通过剪切板全局快捷键直接进入剪切板时直接关闭启动器。
 
-全局快捷键可在 **设置 → 快捷键** 中录制与恢复默认；冲突会即时提示。macOS 的“自动粘贴”默认走主进程内的原生 CGEvent（`pnpm build:native` 编译的插件），只需要「辅助功能」权限；插件缺失或加载失败时回退 AppleScript，此时还需要在弹窗中允许 Flashcast 控制「System Events」（系统设置 → 隐私与安全性 → 自动化）。产物是 ad-hoc 签名，**覆盖安装后系统会作废旧授权**：辅助功能里即使开关看着是开的，也要关掉再打开（或用「−」移除后重新添加），否则合成按键会被拒绝；失败通知会区分缺的是哪一项权限，点通知可直接跳转到对应设置页。Linux 的自动粘贴需要系统存在 `wtype`（Wayland）、`xdotool`（X11）或 `ydotool`，否则内容仍会复制到剪贴板并给出系统通知。
+全局快捷键可在 **设置 → 快捷键** 中录制与恢复默认；冲突会即时提示。macOS 的“自动粘贴”默认走主进程内的原生 CGEvent（`pnpm build:native` 编译的插件），只需要「辅助功能」权限；插件缺失或加载失败时回退 AppleScript，此时还需要在弹窗中允许 Flashcast 控制「System Events」（系统设置 → 隐私与安全性 → 自动化）。产物是 ad-hoc 签名，**覆盖安装后系统会作废旧授权**：辅助功能里即使开关看着是开的，也要关掉再打开（或用「−」移除后重新添加），否则合成按键会被拒绝。升级后首次呼出、或按 Option+Enter 时检测到授权失效，启动器会直接弹出修复向导：可打开对应的系统设置面板、用 `tccutil reset` 清掉旧记录、重新检查或重启应用；失败通知会区分缺的是哪一项权限，点通知也可跳转到对应设置页。Linux 的自动粘贴需要系统存在 `wtype`（Wayland）、`xdotool`（X11）或 `ydotool`，否则内容仍会复制到剪贴板并给出系统通知。
 
 > **Linux Wayland 下的全局快捷键**：Electron 通过 `xdg-desktop-portal` 的 `GlobalShortcuts` 接口绑定快捷键，应用身份取自 `package.json` 的 `desktopName`（`com.flashcast.app.desktop`），开发版由主进程的 `app.setDesktopName()` 换成 `com.flashcast.app.dev.desktop`。该身份必须能解析到已安装的同名 `.desktop` 文件，否则 xdg-desktop-portal 1.21+ / GNOME 50 会静默拒绝绑定（`globalShortcut.register()` 仍返回 `true`）。`pnpm dev` 会自动写入 `~/.local/share/applications/com.flashcast.app.dev.desktop`（应用网格里显示为「Flashcast (Dev)」，删除该文件即可移除；旧版本写成同名的开发条目会被自动清理）；首次绑定会弹出一次系统确认框，允许后快捷键才真正生效。
 

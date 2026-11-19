@@ -50,6 +50,23 @@ napi_value Frontmost(napi_env env, napi_callback_info /*info*/) {
   }
 }
 
+napi_value BundleId(napi_env env, napi_callback_info /*info*/) {
+  @autoreleasepool {
+    NSString* identifier = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+    napi_value result = nullptr;
+    napi_create_string_utf8(env, identifier.UTF8String, NAPI_AUTO_LENGTH, &result);
+    return result;
+  }
+}
+
+napi_value AccessibilityTrusted(napi_env env, napi_callback_info /*info*/) {
+  return BoolValue(env, AXIsProcessTrusted());
+}
+
+napi_value PostEventTrusted(napi_env env, napi_callback_info /*info*/) {
+  return BoolValue(env, CGPreflightPostEventAccess());
+}
+
 bool ActivatePid(pid_t pid) {
   if (pid <= 0) return false;
   NSRunningApplication* application =
@@ -136,11 +153,22 @@ NAPI_MODULE_INIT(/* napi_env env, napi_value exports */) {
   napi_value frontmost = nullptr;
   napi_value activate = nullptr;
   napi_value paste = nullptr;
+  napi_value bundleId = nullptr;
+  napi_value accessibilityTrusted = nullptr;
+  napi_value postEventTrusted = nullptr;
   napi_create_function(env, "frontmost", NAPI_AUTO_LENGTH, Frontmost, nullptr, &frontmost);
   napi_create_function(env, "activate", NAPI_AUTO_LENGTH, Activate, nullptr, &activate);
   napi_create_function(env, "paste", NAPI_AUTO_LENGTH, Paste, nullptr, &paste);
+  napi_create_function(env, "bundleId", NAPI_AUTO_LENGTH, BundleId, nullptr, &bundleId);
+  napi_create_function(env, "accessibilityTrusted", NAPI_AUTO_LENGTH, AccessibilityTrusted,
+                       nullptr, &accessibilityTrusted);
+  napi_create_function(env, "postEventTrusted", NAPI_AUTO_LENGTH, PostEventTrusted, nullptr,
+                       &postEventTrusted);
   napi_set_named_property(env, exports, "frontmost", frontmost);
   napi_set_named_property(env, exports, "activate", activate);
   napi_set_named_property(env, exports, "paste", paste);
+  napi_set_named_property(env, exports, "bundleId", bundleId);
+  napi_set_named_property(env, exports, "accessibilityTrusted", accessibilityTrusted);
+  napi_set_named_property(env, exports, "postEventTrusted", postEventTrusted);
   return exports;
 }

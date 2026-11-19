@@ -25,6 +25,9 @@ export interface NativePasteAddon {
   frontmost(): { pid: number; name: string } | null
   activate(pid: number): boolean
   paste(pid: number): boolean
+  bundleId(): string
+  accessibilityTrusted(): boolean
+  postEventTrusted(): boolean
 }
 
 export interface FrontmostApplication {
@@ -73,7 +76,10 @@ export function nativePaste(): NativePasteAddon | null {
       if (
         typeof loaded.frontmost === 'function' &&
         typeof loaded.activate === 'function' &&
-        typeof loaded.paste === 'function'
+        typeof loaded.paste === 'function' &&
+        typeof loaded.bundleId === 'function' &&
+        typeof loaded.accessibilityTrusted === 'function' &&
+        typeof loaded.postEventTrusted === 'function'
       ) {
         nativeAddon = loaded as NativePasteAddon
         log.info('native paste backend:', file)

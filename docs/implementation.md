@@ -131,6 +131,7 @@ Windows 的 `app.getFileIcon()` 对 `.lnk` 按扩展名取图，只会返回“�
 - `Alt/Option+Enter`：同上，并在窗口隐藏后由主进程调用平台粘贴助手。macOS 下隐藏唯一窗口不会让 LSUIElement 应用退到后台，`⌘V` 会落回自己的隐藏窗口，因此主进程在呼出前记录前台应用（原生插件返回 pid，插件缺失时用 `lsappinfo` 兜底），粘贴前先激活它再按键。
 - macOS 粘贴优先走 `native/paste` 的 N-API 插件：`NSRunningApplication.activate` + `CGEvent`（keycode 9、command flag、session tap、suppression filter），在 Electron 主进程内完成，TCC 记在 Flashcast 的辅助功能（PostEvent）名下，不需要 System Events 与自动化权限；插件缺失或加载失败时回退 AppleScript（`set frontmost` + 轮询 + `keystroke`），此时才需要自动化权限。按键前用 `systemPreferences.isTrustedAccessibilityClient()` 预检辅助功能授权：未授权时直接给出针对性的提示并调用一次 `prompt=true` 把应用登记到列表里；`-1743`（自动化被拒）与 `-25211`（辅助功能被拒）分别映射到不同文案，失败通知可点击跳转系统设置对应面板。
 - macOS 关闭路径区分“显式关闭”和“点击外部失焦”：回车/Esc/粘贴会 `restoreFocus`，点击外部交给系统；不再有 100ms/120ms 的固定等待，粘贴链路只剩关闭动画（约 180ms）加一次激活。
+- macOS 授权修复：`PermissionService` 在每次呼出和粘贴前检查 Accessibility/PostEvent，并用 `permissions.json` 记录最后一次成功的版本；如果版本变了而权限不可用，启动器弹出 `PermissionGuide`，提供打开对应面板、`tccutil reset` 清旧记录、重新检查和重启。Chrome 书签的完全磁盘访问权限仍走插件错误卡片里的直达按钮。
 - `Ctrl+Backspace`：行先 120ms 淡出，随后删除；剩余行通过 `useFlipAnimation` 做 220ms FLIP。
 - 清空：组合键第一次进入危险确认条，3s 内再按执行；Esc 或其他键取消。
 

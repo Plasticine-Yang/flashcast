@@ -29,6 +29,9 @@ export const IPC = {
 
   openSettings: 'launcher:open-settings',
   openSystemSettings: 'app:open-system-settings',
+  permissionStatus: 'permissions:status',
+  permissionReset: 'permissions:reset',
+  permissionRestart: 'permissions:restart',
   hideLauncher: 'launcher:hide',
   shown: 'launcher:shown',
   closeRequest: 'launcher:close-request',

@@ -14,6 +14,8 @@ import type {
   PluginInspection,
   PluginPage,
   PluginSettingsPage,
+  PermissionResetResult,
+  PermissionStatus,
   PluginSummary,
   PlatformId,
   ShortcutError,
@@ -86,6 +88,9 @@ const api: FlashcastApi = {
     invoke<EditorCleanupResult>(IPC.deleteEditorWorkspaces, variantId, ids),
   getFavicons: (domains) => invoke<Record<string, string>>(IPC.getFavicons, domains),
   openSystemSettings: (pane) => invoke<void>(IPC.openSystemSettings, pane),
+  getPermissionStatus: () => invoke<PermissionStatus>(IPC.permissionStatus),
+  resetPermission: (pane) => invoke<PermissionResetResult>(IPC.permissionReset, pane),
+  restartApp: () => ipcRenderer.send(IPC.permissionRestart),
   openSettings: () => invoke<void>(IPC.openSettings),
   hideLauncher: (options) => ipcRenderer.send(IPC.hideLauncher, options),
 

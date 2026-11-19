@@ -633,6 +633,30 @@ export function createMockApi(): FlashcastApi {
     },
     getFavicons: async (domains) => mockFavicons(domains),
     openSystemSettings: noopWithPane,
+    getPermissionStatus: async () => ({
+      platform,
+      accessibility: true,
+      postEvent: true,
+      needsAttention: false,
+      stale: false,
+      previouslyGranted: true,
+      version: bootstrap().version,
+      lastGrantedVersion: bootstrap().version
+    }),
+    resetPermission: async () => ({
+      ok: true,
+      status: {
+        platform,
+        accessibility: true,
+        postEvent: true,
+        needsAttention: false,
+        stale: false,
+        previouslyGranted: true,
+        version: bootstrap().version,
+        lastGrantedVersion: bootstrap().version
+      }
+    }),
+    restartApp: () => {},
     openSettings: noop,
     hideLauncher: () => {
       // Preview harness: keep the panel mounted so screenshots stay stable.

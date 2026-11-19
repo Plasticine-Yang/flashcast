@@ -123,6 +123,13 @@ export function registerIpcHandlers(application: FlashcastApplication): void {
     if (!match) throw new Error('未知的系统设置面板')
     await application.openSystemSettings(match)
   })
+  ipcMain.handle(IPC.permissionStatus, async () => application.getPermissionStatus())
+  ipcMain.handle(IPC.permissionReset, async (_event, pane: unknown) => {
+    const match = SYSTEM_SETTINGS_PANES.find((candidate) => candidate === pane)
+    if (!match) throw new Error('未知的系统设置面板')
+    return application.resetPermission(match)
+  })
+  ipcMain.on(IPC.permissionRestart, () => application.restartApp())
   ipcMain.on(IPC.hideLauncher, (_event, options: unknown) => {
     const record = options && typeof options === 'object' ? (options as Record<string, unknown>) : {}
     application.hideLauncher({

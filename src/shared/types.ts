@@ -204,6 +204,26 @@ export interface ChromeBookmarksPluginPage {
 export const SYSTEM_SETTINGS_PANES = ['full-disk-access', 'accessibility', 'automation'] as const
 export type SystemSettingsPane = (typeof SYSTEM_SETTINGS_PANES)[number]
 
+/** macOS TCC state relevant to automatic paste. */
+export interface PermissionStatus {
+  platform: PlatformId
+  accessibility: boolean
+  /** CGEventPost permission; separate from Accessibility on macOS. */
+  postEvent: boolean
+  needsAttention: boolean
+  /** The previous build had permission but this one no longer matches it. */
+  stale: boolean
+  previouslyGranted: boolean
+  version: string
+  lastGrantedVersion: string | null
+}
+
+export interface PermissionResetResult {
+  ok: boolean
+  error?: string
+  status: PermissionStatus
+}
+
 export interface ExternalPluginItem {
   id: string
   title: string
@@ -577,6 +597,9 @@ export interface FlashcastApi {
   deleteEditorWorkspaces(variantId: string, ids: string[]): Promise<EditorCleanupResult>
   getFavicons(domains: string[]): Promise<Record<string, string>>
   openSystemSettings(pane: SystemSettingsPane): Promise<void>
+  getPermissionStatus(): Promise<PermissionStatus>
+  resetPermission(pane: SystemSettingsPane): Promise<PermissionResetResult>
+  restartApp(): void
   openSettings(): Promise<void>
   hideLauncher(options?: { paste?: boolean; restoreFocus?: boolean }): void
 

@@ -84,7 +84,7 @@ export function BookmarksView({
               missingProfile
                 ? '请先安装 Google Chrome 并至少打开一次，或在插件设置中选择已存在的 Profile。'
                 : permissionDenied
-                  ? 'macOS 没有允许 Flashcast 读取 Chrome 的 Profile 目录。请在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里勾选 Flashcast，然后重启 Flashcast。'
+                  ? 'macOS 没有允许 Flashcast 读取 Chrome 的 Profile 目录。请在「系统设置 → 隐私与安全性 → 完全磁盘访问权限」里勾选 Flashcast；如果开关已经开着，先移除旧条目再重新添加，然后重启 Flashcast。'
                   : '可能是书签文件被占用或格式异常，请稍后重试。'
             }
           >

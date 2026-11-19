@@ -999,3 +999,97 @@
     transform: none;
   }
 }
+
+/* --------------------------- permission repair --------------------------- */
+
+.fc-permission-panel {
+  width: min(560px, 100%);
+}
+
+.fc-permission-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fc-permission-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--fc-accent-line);
+  border-radius: 10px;
+  background: var(--fc-accent-soft);
+  color: var(--fc-accent);
+}
+
+.fc-permission-heading .fc-help-subtitle {
+  margin-left: 0;
+}
+
+.fc-permission-body {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  padding: 4px 16px 16px;
+  overflow-y: auto;
+}
+
+.fc-permission-lead {
+  margin: 0;
+  color: var(--fc-text-secondary);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.fc-permission-steps {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--fc-text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.fc-permission-steps li + li {
+  margin-top: 2px;
+}
+
+.fc-permission-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--fc-border-subtle);
+  border-radius: 10px;
+  color: var(--fc-text-secondary);
+  font-size: 11.5px;
+}
+
+.fc-permission-status .is-ok {
+  color: var(--fc-success);
+}
+
+.fc-permission-status .is-bad {
+  color: var(--fc-danger);
+}
+
+.fc-permission-version {
+  margin-left: auto;
+  color: var(--fc-text-tertiary);
+}
+
+.fc-permission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fc-permission-note {
+  margin: 0;
+  color: var(--fc-text-tertiary);
+  font-size: 10.5px;
+  line-height: 1.55;
+}

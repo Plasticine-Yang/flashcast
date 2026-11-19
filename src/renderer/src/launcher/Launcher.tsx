@@ -9,6 +9,7 @@ import {
   type ExternalPluginItem,
   type ExternalPluginPage,
   type PluginPage,
+  type PermissionStatus,
   type PluginSettingsPage,
   type PluginSummary,
   type PluginTrigger,
@@ -30,6 +31,7 @@ import { ExternalPluginView } from './ExternalPluginView'
 import { Footer, type FooterHint } from './Footer'
 import { GlobalSearchView } from './GlobalSearchView'
 import { HelpOverlay } from './HelpOverlay'
+import { PermissionGuide } from './PermissionGuide'
 import { PluginSettingsView } from './PluginSettingsView'
 import { SearchBar } from './SearchBar'
 import { VscodeLikeWorkspaceSettingsView } from './VscodeLikeWorkspaceSettingsView'
@@ -86,6 +88,9 @@ export function Launcher(): React.JSX.Element {
   const [clipboardItems, setClipboardItems] = useState<ClipboardItem[]>([])
   const [clipboardMax, setClipboardMax] = useState(10)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [permissionStatus, setPermissionStatus] = useState<PermissionStatus | null>(null)
+  const [permissionOpen, setPermissionOpen] = useState(false)
+  const [permissionBusy, setPermissionBusy] = useState(false)
   const [closing, setClosing] = useState(false)
   const [showNonce, setShowNonce] = useState(0)
   const [clearArmed, setClearArmed] = useState(false)
@@ -112,6 +117,8 @@ export function Launcher(): React.JSX.Element {
   const autoScenarioRef = useRef(false)
   const autoSettingsRef = useRef(false)
   const lastEntranceRef = useRef(0)
+  const permissionPromptedRef = useRef(false)
+  const pendingPasteRef = useRef<string | null>(null)
 
   activePluginIdRef.current = activePluginId
   bootstrapRef.current = bootstrap
@@ -437,12 +444,84 @@ export function Launcher(): React.JSX.Element {
   /* ------------------------------- actions ------------------------------- */
 
   const runClipboardActivation = async (itemId: string, paste: boolean): Promise<void> => {
+    if (paste) {
+      // Fail before closing: an ad-hoc update orphans the old Accessibility
+      // grant, and the user should see the repair UI while the palette is up.
+      const status = await api.getPermissionStatus().catch(() => null)
+      if (status) {
+        setPermissionStatus(status)
+        // PostEvent can fall back to AppleScript; only a missing Accessibility
+        // grant makes the paste impossible.
+        if (!status.accessibility) {
+          pendingPasteRef.current = itemId
+          const copied = await api.activateClipboard(itemId, { paste: false })
+          if (!copied.ok) {
+            showToast({ message: copied.error ?? '无法活跃剪切板项', tone: 'danger' })
+            return
+          }
+          setPermissionOpen(true)
+          return
+        }
+      }
+    }
     const result = await api.activateClipboard(itemId, { paste })
     if (!result.ok) {
       showToast({ message: result.error ?? '无法活跃剪切板项', tone: 'danger' })
       return
     }
     await closeLauncher(paste)
+  }
+
+  const dismissPermission = (): void => {
+    if (permissionStatus) {
+      window.localStorage.setItem('flashcast.permission-dismissed', permissionStatus.version)
+    }
+    setPermissionOpen(false)
+  }
+
+  const shouldPromptPermission = (status: PermissionStatus): boolean => {
+    if (!status.needsAttention || !status.previouslyGranted) return false
+    return window.localStorage.getItem('flashcast.permission-dismissed') !== status.version
+  }
+
+  const handlePermissionRecheck = async (): Promise<void> => {
+    setPermissionBusy(true)
+    try {
+      const status = await api.getPermissionStatus()
+      setPermissionStatus(status)
+      if (!status.needsAttention) {
+        setPermissionOpen(false)
+        const pending = pendingPasteRef.current
+        pendingPasteRef.current = null
+        if (pending) {
+          void runClipboardActivation(pending, true)
+        } else {
+          showToast({ message: '已授权，自动粘贴可以使用了', tone: 'success' })
+        }
+      }
+    } catch (error) {
+      showToast({ message: (error as Error).message, tone: 'danger' })
+    } finally {
+      setPermissionBusy(false)
+    }
+  }
+
+  const handlePermissionReset = async (): Promise<void> => {
+    setPermissionBusy(true)
+    try {
+      const result = await api.resetPermission('accessibility')
+      setPermissionStatus(result.status)
+      if (!result.ok) {
+        showToast({
+          message: result.error ?? '重置失败，请在系统设置里手动移除后重新添加',
+          tone: 'danger'
+        })
+      }
+    } catch (error) {
+      showToast({ message: (error as Error).message, tone: 'danger' })
+    } finally {
+      setPermissionBusy(false)
+    }
   }
 
   const runBookmarkActivation = async (row: BookmarkRowModel): Promise<void> => {
@@ -855,6 +934,25 @@ export function Launcher(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    if (!bootstrap || bootstrap.platform !== 'darwin') return
+    let cancelled = false
+    void api
+      .getPermissionStatus()
+      .then((status) => {
+        if (cancelled) return
+        setPermissionStatus(status)
+        if (!permissionPromptedRef.current && shouldPromptPermission(status)) {
+          permissionPromptedRef.current = true
+          setPermissionOpen(true)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [bootstrap])
+
+  useEffect(() => {
     if (!bootstrap) return
     bootstrapRef.current = bootstrap
     applyTheme(themeById(bootstrap.themes, bootstrap.themeId), bootstrap.theme, bootstrap.platform)
@@ -909,6 +1007,16 @@ export function Launcher(): React.JSX.Element {
           .syncApps()
           .then((entries) => {
             if (entries) setApps(entries)
+          })
+          .catch(() => {})
+        void api
+          .getPermissionStatus()
+          .then((status) => {
+            setPermissionStatus(status)
+            if (!permissionPromptedRef.current && shouldPromptPermission(status)) {
+              permissionPromptedRef.current = true
+              setPermissionOpen(true)
+            }
           })
           .catch(() => {})
       })
@@ -1052,6 +1160,14 @@ export function Launcher(): React.JSX.Element {
     const inButton = Boolean(target?.closest('button, a, [role="button"]'))
 
     if (toast) dismissToast()
+
+    if (permissionOpen) {
+      if (key === 'Escape') {
+        event.preventDefault()
+        dismissPermission()
+      }
+      return
+    }
 
     if (helpOpen) {
       if (key === 'Escape' || key === '?') {
@@ -1613,6 +1729,19 @@ export function Launcher(): React.JSX.Element {
               activePluginId={activePluginId}
               settingsActive={settingsOpen}
             />
+
+            {permissionOpen && permissionStatus ? (
+              <PermissionGuide
+                open={permissionOpen}
+                status={permissionStatus}
+                busy={permissionBusy}
+                onClose={dismissPermission}
+                onOpenSettings={() => void api.openSystemSettings('accessibility')}
+                onReset={() => void handlePermissionReset()}
+                onRecheck={() => void handlePermissionRecheck()}
+                onRestart={() => api.restartApp()}
+              />
+            ) : null}
 
             <Toast toast={toast} />
           </div>

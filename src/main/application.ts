@@ -46,6 +46,7 @@ import { FaviconService } from './favicons'
 import { desktopEntryDirs, findDesktopEntry, usesWayland } from './linux-portal'
 import { log } from './logger'
 import { MAC_SETTINGS_URL, pasteIntoActiveApp } from './native-paste'
+import { PermissionService } from './permissions'
 import {
   appVersion,
   assetsDir,
@@ -96,6 +97,7 @@ export class FlashcastApplication {
   private editors!: VscodeLikeWorkspaceService
   private favicons!: FaviconService
   private apps!: AppDiscovery
+  private permissions!: PermissionService
   private shortcuts!: ShortcutManager
   private windows!: WindowManager
   private updates!: UpdateService
@@ -151,6 +153,7 @@ export class FlashcastApplication {
       this.platform
     )
     this.apps = new AppDiscovery(this.platform)
+    this.permissions = new PermissionService(this.platform)
 
     this.setupTheme()
     await this.applyLaunchAtLogin(this.config.getPrefs().launchAtLogin)
@@ -801,6 +804,23 @@ export class FlashcastApplication {
   async openSystemSettings(pane: SystemSettingsPane): Promise<void> {
     if (this.platform !== 'darwin') return
     await shell.openExternal(MAC_SETTINGS_URL[pane])
+  }
+
+  async getPermissionStatus() {
+    return this.permissions.status()
+  }
+
+  async resetPermission(pane: SystemSettingsPane) {
+    const result = await this.permissions.reset(pane)
+    // The reset only clears the stale decision; the user still has to flip the
+    // switch, so take them straight to the right pane.
+    await this.openSystemSettings(pane)
+    return result
+  }
+
+  restartApp(): void {
+    app.relaunch()
+    app.exit(0)
   }
 
   hideLauncher(options?: { paste?: boolean; restoreFocus?: boolean }): void {
